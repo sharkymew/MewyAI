@@ -16,6 +16,7 @@ struct AIConfigurationView: View {
     private enum ConfigurationField: Hashable {
         case name
         case baseURL
+        case endpoint
         case apiKey
         case customHeaders
         case newModel
@@ -41,11 +42,6 @@ struct AIConfigurationView: View {
                 modelsSection
             }
             .scrollDismissesKeyboard(.interactively)
-            .simultaneousGesture(
-                TapGesture().onEnded {
-                    focusedField = nil
-                }
-            )
             .navigationTitle("AI 配置")
             .onAppear {
                 ensureSelection()
@@ -71,12 +67,14 @@ struct AIConfigurationView: View {
             }
             
             Button {
+                focusedField = nil
                 addConfiguration()
             } label: {
                 Label("新增配置", systemImage: "plus")
             }
             
             Button(role: .destructive) {
+                focusedField = nil
                 deleteCurrentConfiguration()
             } label: {
                 Label("删除当前配置", systemImage: "trash")
@@ -96,8 +94,14 @@ struct AIConfigurationView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
+            TextField("Endpoint", text: selectedEndpointBinding)
+                .focused($focusedField, equals: .endpoint)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
         } header: {
             Text("请求地址")
+        } footer: {
+            Text("Endpoint 默认是 chat/completions，会与 Base URL 拼成最终请求地址。")
         }
     }
     
@@ -140,12 +144,6 @@ struct AIConfigurationView: View {
     
     private var modelsSection: some View {
         Section {
-            Picker("当前模型", selection: selectedModelBinding) {
-                ForEach(selectedConfiguration?.models ?? [], id: \.self) { model in
-                    Text(model).tag(model)
-                }
-            }
-            
             HStack {
                 TextField("添加模型", text: $newModelName)
                     .focused($focusedField, equals: .newModel)
@@ -178,14 +176,7 @@ struct AIConfigurationView: View {
             }
             
             ForEach(selectedConfiguration?.models ?? [], id: \.self) { model in
-                HStack {
-                    Text(model)
-                    Spacer()
-                    if model == selectedConfiguration?.selectedModel {
-                        Image(systemName: "checkmark")
-                            .foregroundStyle(Color.accentColor)
-                    }
-                }
+                Text(model)
             }
             .onDelete(perform: deleteModels)
         } header: {
@@ -215,6 +206,10 @@ struct AIConfigurationView: View {
     
     private var selectedBaseURLBinding: Binding<String> {
         binding(\.baseURL)
+    }
+    
+    private var selectedEndpointBinding: Binding<String> {
+        binding(\.endpoint)
     }
     
     private var selectedAPIKeyBinding: Binding<String> {

@@ -476,7 +476,8 @@ class AIService {
         } else if path.hasSuffix("/responses") {
             components.path = String(path.dropLast("/responses".count)) + "/models"
         } else {
-            components.path = "/models"
+            let basePath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            components.path = basePath.isEmpty ? "/models" : "/" + basePath + "/models"
         }
         components.query = nil
         

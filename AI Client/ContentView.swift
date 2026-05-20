@@ -306,13 +306,15 @@ struct ContentView: View {
         let hasCustomHeaders = !configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let authSummary = hasAPIKey ? "API Key" : (hasCustomHeaders ? "自定义请求头" : "未配置认证")
         
-        return "\(configuration.name) · \(configuration.selectedModel) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(authSummary)"
+        let endpoint = configuration.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpointSummary = endpoint.isEmpty ? "未配置 Endpoint" : endpoint
+        return "\(configuration.name) · \(configuration.selectedModel) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(endpointSummary) · \(authSummary)"
     }
     
     func sendMessage() {
         let userText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let configuration = currentConfiguration
-        let trimmedBaseURL = configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBaseURL = configuration.requestURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedAPIKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCustomHeaders = configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -713,7 +715,7 @@ struct ContentView: View {
         
         let titleMessages = conversations[index].messages
         let configuration = currentConfiguration
-        let trimmedBaseURL = configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBaseURL = configuration.requestURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedAPIKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCustomHeaders = configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
