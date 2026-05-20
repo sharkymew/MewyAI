@@ -1,5 +1,5 @@
 //
-//  OpenAIService.swift
+//  AIService.swift
 //  AI Client
 //
 //  Created by SharkyMew on 2026/5/20.
@@ -43,7 +43,7 @@ struct StreamDelta: Codable {
     }
 }
 
-class OpenAIService {
+class AIService {
     private var conversationHistory: [Message] = [
         Message(
             role: "system",
@@ -60,13 +60,13 @@ class OpenAIService {
     
     func sendMessage(
         message: String,
+        baseURL: String,
         apiKey: String,
+        customHeaders: String,
         completion: @escaping (String) -> Void
     ) {
-        
-        guard let url = URL(
-            string: "https://api.deepseek.com/chat/completions"
-        ) else {
+        guard let url = URL(string: baseURL) else {
+            completion("Base URL 无效")
             return
         }
         
@@ -84,30 +84,19 @@ class OpenAIService {
         )
         
         guard let jsonData = try? JSONEncoder().encode(requestBody) else {
+            completion("请求体编码失败")
             return
         }
         
-        var request = URLRequest(url: url)
-        
-        request.httpMethod = "POST"
-        
-        request.setValue(
-            "application/json",
-            forHTTPHeaderField: "Content-Type"
+        var request = makeRequest(
+            url: url,
+            apiKey: apiKey,
+            customHeaders: customHeaders,
+            acceptsEventStream: false
         )
-        
-        request.setValue(
-            "Bearer \(apiKey)",
-            forHTTPHeaderField: "Authorization"
-        )
-        
         request.httpBody = jsonData
         
-        URLSession.shared.dataTask(with: request) {
-            data,
-            response,
-            error in
-            
+        URLSession.shared.dataTask(with: request) { data, _, _ in
             guard let data = data else {
                 DispatchQueue.main.async {
                     completion("请求失败")
@@ -145,7 +134,9 @@ class OpenAIService {
     
     func sendStreamingMessage(
         message: String,
+        baseURL: String,
         apiKey: String,
+        customHeaders: String,
         onReasoningToken: @escaping (String) -> Void,
         onContentToken: @escaping (String) -> Void,
         onComplete: @escaping (_ reasoningText: String, _ contentText: String) -> Void,
@@ -153,10 +144,8 @@ class OpenAIService {
     ) {
         cancelStreaming()
         
-        guard let url = URL(
-            string: "https://api.deepseek.com/chat/completions"
-        ) else {
-            onError("URL无效")
+        guard let url = URL(string: baseURL) else {
+            onError("Base URL 无效")
             return
         }
         
@@ -178,24 +167,12 @@ class OpenAIService {
             return
         }
         
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        
-        request.setValue(
-            "application/json",
-            forHTTPHeaderField: "Content-Type"
+        var request = makeRequest(
+            url: url,
+            apiKey: apiKey,
+            customHeaders: customHeaders,
+            acceptsEventStream: true
         )
-        
-        request.setValue(
-            "text/event-stream",
-            forHTTPHeaderField: "Accept"
-        )
-        
-        request.setValue(
-            "Bearer \(apiKey)",
-            forHTTPHeaderField: "Authorization"
-        )
-        
         request.httpBody = jsonData
         
         streamingTask = Task {
@@ -291,5 +268,54 @@ class OpenAIService {
                 streamingTask = nil
             }
         }
+    }
+    
+    private func makeRequest(
+        url: URL,
+        apiKey: String,
+        customHeaders: String,
+        acceptsEventStream: Bool
+    ) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        if acceptsEventStream {
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        }
+        
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+        
+        for header in parseCustomHeaders(customHeaders) {
+            request.setValue(header.value, forHTTPHeaderField: header.name)
+        }
+        
+        return request
+    }
+    
+    private func parseCustomHeaders(_ text: String) -> [(name: String, value: String)] {
+        text
+            .components(separatedBy: .newlines)
+            .compactMap { line in
+                let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedLine.isEmpty,
+                      let separatorIndex = trimmedLine.firstIndex(of: ":") else {
+                    return nil
+                }
+                
+                let name = trimmedLine[..<separatorIndex]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let value = trimmedLine[trimmedLine.index(after: separatorIndex)...]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                guard !name.isEmpty, !value.isEmpty else {
+                    return nil
+                }
+                
+                return (name: String(name), value: String(value))
+            }
     }
 }

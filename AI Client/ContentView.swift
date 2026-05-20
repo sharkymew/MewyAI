@@ -13,11 +13,13 @@ struct ChatMessage: Identifiable {
 
 struct ContentView: View {
     
+    @AppStorage("baseURL") private var baseURL = "https://api.deepseek.com/chat/completions"
     @AppStorage("apiKey") private var apiKey = ""
+    @AppStorage("customHeaders") private var customHeaders = ""
     @State private var inputText = ""
     @State private var messages: [ChatMessage] = []
     @State private var isGenerating = false
-    @State private var showAPIKey = false
+    @State private var showConfiguration = false
     @State private var shouldAutoScroll = true
     @State private var scrollVersion = 0
     @State private var pendingReasoningText = ""
@@ -26,11 +28,11 @@ struct ContentView: View {
     @State private var activeAssistantMessageID: UUID?
     @FocusState private var isInputFocused: Bool
     
-    let openAIService = OpenAIService()
+    let aiService = AIService()
     
     var body: some View {
         VStack(spacing: 0) {
-            apiKeyInputView
+            configurationBar
             
             Divider()
             
@@ -110,59 +112,59 @@ struct ContentView: View {
             .padding()
             .background(.regularMaterial)
         }
+        .sheet(isPresented: $showConfiguration) {
+            AIConfigurationView()
+        }
     }
     
-    private var apiKeyInputView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("API Key")
+    private var configurationBar: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("AI 配置")
                     .font(.headline)
                 
-                Spacer()
-                
-                Button(showAPIKey ? "隐藏" : "显示") {
-                    showAPIKey.toggle()
-                }
-                .font(.caption)
+                Text(configurationSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             
-            if showAPIKey {
-                TextField(
-                    "输入你的 API Key",
-                    text: $apiKey
-                )
-                .textFieldStyle(.roundedBorder)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            } else {
-                SecureField(
-                    "输入你的 API Key",
-                    text: $apiKey
-                )
-                .textFieldStyle(.roundedBorder)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            }
+            Spacer()
             
-            Text("API Key 会保存在本机 AppStorage 中，适合自己测试用；正式发布 App 时不要把供应商 Key 放在客户端。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Button {
+                showConfiguration = true
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 18, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
         }
         .padding()
         .background(.regularMaterial)
     }
     
+    private var configurationSummary: String {
+        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasAPIKey = !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasCustomHeaders = !customHeaders.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let authSummary = hasAPIKey ? "API Key" : (hasCustomHeaders ? "自定义请求头" : "未配置认证")
+        
+        return "\(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(authSummary)"
+    }
+    
     func sendMessage() {
         let userText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCustomHeaders = customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
         
         guard !userText.isEmpty else { return }
         
-        guard !trimmedAPIKey.isEmpty else {
+        guard !trimmedBaseURL.isEmpty else {
             messages.append(
                 ChatMessage(
                     role: "assistant",
-                    content: "请先输入 API Key。"
+                    content: "请先配置 Base URL。"
                 )
             )
             return
@@ -194,9 +196,11 @@ struct ContentView: View {
         let assistantMessageID = messages.last?.id
         activeAssistantMessageID = assistantMessageID
         
-        openAIService.sendStreamingMessage(
+        aiService.sendStreamingMessage(
             message: userText,
+            baseURL: trimmedBaseURL,
             apiKey: trimmedAPIKey,
+            customHeaders: trimmedCustomHeaders,
             onReasoningToken: { token in
                 guard let assistantMessageID else { return }
                 guard activeAssistantMessageID == assistantMessageID else { return }
@@ -319,7 +323,7 @@ struct ContentView: View {
     func stopGenerating() {
         let stoppedMessageID = activeAssistantMessageID
         
-        openAIService.cancelStreaming()
+        aiService.cancelStreaming()
         
         if let stoppedMessageID {
             flushPendingTokens(for: stoppedMessageID)
