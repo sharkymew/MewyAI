@@ -51,6 +51,13 @@ class OpenAIService {
         )
     ]
     
+    private var streamingTask: Task<Void, Never>?
+    
+    func cancelStreaming() {
+        streamingTask?.cancel()
+        streamingTask = nil
+    }
+    
     func sendMessage(
         message: String,
         apiKey: String,
@@ -144,6 +151,8 @@ class OpenAIService {
         onComplete: @escaping (_ reasoningText: String, _ contentText: String) -> Void,
         onError: @escaping (String) -> Void
     ) {
+        cancelStreaming()
+        
         guard let url = URL(
             string: "https://api.deepseek.com/chat/completions"
         ) else {
@@ -189,7 +198,7 @@ class OpenAIService {
         
         request.httpBody = jsonData
         
-        Task {
+        streamingTask = Task {
             do {
                 let (bytes, response) = try await URLSession.shared.bytes(for: request)
                 
@@ -205,6 +214,10 @@ class OpenAIService {
                 var fullContentText = ""
                 
                 for try await line in bytes.lines {
+                    if Task.isCancelled {
+                        return
+                    }
+                    
                     if line.hasPrefix("data: ") {
                         let jsonString = String(line.dropFirst(6))
                         
@@ -219,6 +232,8 @@ class OpenAIService {
                             await MainActor.run {
                                 onComplete(fullReasoningText, fullContentText)
                             }
+                            
+                            streamingTask = nil
                             return
                         }
                         
@@ -262,10 +277,18 @@ class OpenAIService {
                 await MainActor.run {
                     onComplete(fullReasoningText, fullContentText)
                 }
+                
+                streamingTask = nil
             } catch {
+                if Task.isCancelled {
+                    return
+                }
+                
                 await MainActor.run {
                     onError("流式请求失败：\(error.localizedDescription)")
                 }
+                
+                streamingTask = nil
             }
         }
     }

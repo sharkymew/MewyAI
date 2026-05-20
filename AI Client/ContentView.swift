@@ -8,6 +8,7 @@ struct ChatMessage: Identifiable {
     var reasoningContent: String = ""
     var reasoningChunks: [String] = []
     var isReasoningExpanded: Bool = false
+    var isStopped: Bool = false
 }
 
 struct ContentView: View {
@@ -22,6 +23,7 @@ struct ContentView: View {
     @State private var pendingReasoningText = ""
     @State private var pendingContentText = ""
     @State private var isFlushScheduled = false
+    @State private var activeAssistantMessageID: UUID?
     @FocusState private var isInputFocused: Bool
     
     let openAIService = OpenAIService()
@@ -90,15 +92,19 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
                 
                 Button {
-                    sendMessage()
+                    if isGenerating {
+                        stopGenerating()
+                    } else {
+                        sendMessage()
+                    }
                 } label: {
-                    Image(systemName: "paperplane.fill")
+                    Image(systemName: isGenerating ? "stop.fill" : "paperplane.fill")
                         .font(.system(size: 18, weight: .semibold))
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(
-                    inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || isGenerating
+                    !isGenerating
+                    && inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
             }
             .padding()
@@ -186,31 +192,44 @@ struct ContentView: View {
         )
         
         let assistantMessageID = messages.last?.id
+        activeAssistantMessageID = assistantMessageID
         
         openAIService.sendStreamingMessage(
             message: userText,
             apiKey: trimmedAPIKey,
             onReasoningToken: { token in
                 guard let assistantMessageID else { return }
+                guard activeAssistantMessageID == assistantMessageID else { return }
+                guard isGenerating else { return }
+                
                 pendingReasoningText += token
                 scheduleTokenFlush(for: assistantMessageID)
             },
             onContentToken: { token in
                 guard let assistantMessageID else { return }
+                guard activeAssistantMessageID == assistantMessageID else { return }
+                guard isGenerating else { return }
+                
                 pendingContentText += token
                 scheduleTokenFlush(for: assistantMessageID)
             },
             onComplete: { _, _ in
                 guard let assistantMessageID else {
                     isGenerating = false
+                    activeAssistantMessageID = nil
                     return
                 }
+                guard activeAssistantMessageID == assistantMessageID else { return }
+                
                 flushPendingTokens(for: assistantMessageID)
                 finalizeMessageLayout(for: assistantMessageID)
                 isGenerating = false
+                activeAssistantMessageID = nil
             },
             onError: { error in
                 guard let assistantMessageID else { return }
+                guard activeAssistantMessageID == assistantMessageID else { return }
+                
                 flushPendingTokens(for: assistantMessageID)
                 
                 if let index = messages.firstIndex(where: { $0.id == assistantMessageID }) {
@@ -219,6 +238,7 @@ struct ContentView: View {
                 }
                 
                 isGenerating = false
+                activeAssistantMessageID = nil
             }
         )
     }
@@ -296,6 +316,27 @@ struct ContentView: View {
         isFlushScheduled = false
     }
     
+    func stopGenerating() {
+        let stoppedMessageID = activeAssistantMessageID
+        
+        openAIService.cancelStreaming()
+        
+        if let stoppedMessageID {
+            flushPendingTokens(for: stoppedMessageID)
+            finalizeMessageLayout(for: stoppedMessageID)
+            
+            if let index = messages.firstIndex(where: { $0.id == stoppedMessageID }) {
+                messages[index].isStopped = true
+            }
+        }
+        
+        activeAssistantMessageID = nil
+        isGenerating = false
+        pendingReasoningText = ""
+        pendingContentText = ""
+        isFlushScheduled = false
+    }
+    
     func hideKeyboard() {
         isInputFocused = false
     }
@@ -326,9 +367,9 @@ struct MessageBubble: View {
     private var messageContentBubble: some View {
         VStack(alignment: .leading, spacing: 0) {
             if message.content.isEmpty && message.contentChunks.isEmpty {
-                Text("正在生成回答...")
+                Text(message.isStopped ? "已停止生成。" : "正在生成回答...")
             } else if message.contentChunks.isEmpty {
-                Text(message.content)
+                Text(message.isStopped ? message.content + "\n\n已停止生成。" : message.content)
             } else {
                 ForEach(message.contentChunks.indices, id: \.self) { index in
                     Text(message.contentChunks[index])
