@@ -1,25 +1,16 @@
 import SwiftUI
 
-struct ChatMessage: Identifiable {
-    let id = UUID()
-    let role: String
-    var content: String
-    var contentChunks: [String] = []
-    var reasoningContent: String = ""
-    var reasoningChunks: [String] = []
-    var isReasoningExpanded: Bool = false
-    var isStopped: Bool = false
-}
-
 struct ContentView: View {
-    
-    @AppStorage("baseURL") private var baseURL = "https://api.deepseek.com/chat/completions"
-    @AppStorage("apiKey") private var apiKey = ""
-    @AppStorage("customHeaders") private var customHeaders = ""
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var configurations = AIConfigurationStore.loadConfigurations()
+    @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
     @State private var inputText = ""
     @State private var messages: [ChatMessage] = []
+    @State private var conversations = ConversationStore.loadConversations()
+    @State private var selectedConversationID: UUID? = ConversationStore.loadSelectedConversationID()
     @State private var isGenerating = false
     @State private var showConfiguration = false
+    @State private var showConversationSidebar = false
     @State private var shouldAutoScroll = true
     @State private var scrollVersion = 0
     @State private var pendingReasoningText = ""
@@ -30,7 +21,64 @@ struct ContentView: View {
     
     let aiService = AIService()
     
+    private var inputFieldBackground: Color {
+        colorScheme == .dark ? Color.black.opacity(0.70) : Color.white.opacity(0.82)
+    }
+    
+    private var inputControlBackground: Color {
+        colorScheme == .dark ? Color.white.opacity(0.11) : Color.black.opacity(0.08)
+    }
+    
+    private var sendControlBackground: Color {
+        inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isGenerating
+            ? inputControlBackground
+            : Color.accentColor.opacity(colorScheme == .dark ? 0.26 : 0.16)
+    }
+    
     var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                mainContent
+                    .disabled(showConversationSidebar)
+                    .offset(x: showConversationSidebar ? min(geometry.size.width * 0.72, 320) : 0)
+                    .animation(.easeOut(duration: 0.22), value: showConversationSidebar)
+                
+                if showConversationSidebar {
+                    Color.black.opacity(0.22)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            showConversationSidebar = false
+                        }
+                }
+                
+                ConversationSidebarView(
+                    conversations: conversations,
+                    selectedConversationID: selectedConversationID,
+                    onSelect: selectConversation,
+                    onCreate: createConversation,
+                    onDelete: deleteConversation,
+                    canCreateConversation: canCreateConversation
+                )
+                .frame(width: min(geometry.size.width * 0.72, 320))
+                .offset(x: showConversationSidebar ? 0 : -min(geometry.size.width * 0.72, 320))
+                .animation(.easeOut(duration: 0.22), value: showConversationSidebar)
+            }
+            .gesture(sidebarGesture)
+        }
+        .onAppear {
+            loadSelectedConversation()
+        }
+        .sheet(isPresented: $showConfiguration) {
+            AIConfigurationView()
+        }
+        .onChange(of: showConfiguration) { _, isPresented in
+            if !isPresented {
+                reloadConfigurations()
+            }
+        }
+    }
+    
+    private var mainContent: some View {
         VStack(spacing: 0) {
             configurationBar
             
@@ -55,6 +103,11 @@ struct ContentView: View {
                         shouldAutoScroll = false
                     }
                 )
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        hideKeyboard()
+                    }
+                )
                 .onChange(of: messages.count) { _, _ in
                     forceScrollToBottom(proxy: proxy, animated: true)
                 }
@@ -63,65 +116,124 @@ struct ContentView: View {
                 }
             }
             
+            inputBar
+        }
+    }
+    
+    private var inputBar: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField(
+                "输入消息...",
+                text: $inputText,
+                axis: .vertical
+            )
+            .textFieldStyle(.plain)
+            .lineLimit(1...5)
+            .focused($isInputFocused)
+            .disabled(isGenerating)
+            .font(.body)
+            .foregroundStyle(Color.primary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(inputFieldBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
+            )
+            
+            Button {
+                shouldAutoScroll = true
+                scrollVersion += 1
+            } label: {
+                Image(systemName: "arrow.down.to.line.compact")
+                    .font(.system(size: 19, weight: .semibold))
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(inputControlBackground))
+            }
+            .buttonStyle(.plain)
+            
+            modelMenu
+            
+            Button {
+                if isGenerating {
+                    stopGenerating()
+                } else {
+                    sendMessage()
+                }
+            } label: {
+                Image(systemName: isGenerating ? "stop.fill" : "paperplane.fill")
+                    .font(.system(size: 19, weight: .semibold))
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(sendControlBackground))
+            }
+            .buttonStyle(.plain)
+            .disabled(
+                !isGenerating
+                && inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 34, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 34, style: .continuous)
+                .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
+        )
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+    }
+    
+    private var modelMenu: some View {
+        Menu {
+            ForEach(currentConfiguration.models, id: \.self) { model in
+                Button {
+                    selectModel(model)
+                } label: {
+                    if model == currentConfiguration.selectedModel {
+                        Label(model, systemImage: "checkmark")
+                    } else {
+                        Text(model)
+                    }
+                }
+            }
+            
             Divider()
             
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField(
-                    "输入消息...",
-                    text: $inputText,
-                    axis: .vertical
-                )
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...5)
-                .focused($isInputFocused)
-                .disabled(isGenerating)
-                
-                Button {
-                    shouldAutoScroll = true
-                    scrollVersion += 1
-                } label: {
-                    Image(systemName: "arrow.down.to.line.compact")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-                .buttonStyle(.bordered)
-                
-                Button {
-                    hideKeyboard()
-                } label: {
-                    Image(systemName: "keyboard.chevron.compact.down")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-                .buttonStyle(.bordered)
-                
-                Button {
-                    if isGenerating {
-                        stopGenerating()
-                    } else {
-                        sendMessage()
-                    }
-                } label: {
-                    Image(systemName: isGenerating ? "stop.fill" : "paperplane.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(
-                    !isGenerating
-                    && inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
+            Button {
+                showConfiguration = true
+            } label: {
+                Label("管理模型", systemImage: "slider.horizontal.3")
             }
-            .padding()
-            .background(.regularMaterial)
+        } label: {
+            Image(systemName: "cube.transparent")
+                .font(.system(size: 19, weight: .semibold))
+                .frame(width: 48, height: 48)
+                .background(Circle().fill(inputControlBackground))
         }
-        .sheet(isPresented: $showConfiguration) {
-            AIConfigurationView()
-        }
+        .disabled(isGenerating)
     }
     
     private var configurationBar: some View {
         HStack(spacing: 12) {
+            Button {
+                showConversationSidebar = true
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 18, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+            
             VStack(alignment: .leading, spacing: 4) {
-                Text("AI 配置")
+                Text(currentConversationTitle)
                     .font(.headline)
+                    .lineLimit(1)
                 
                 Text(configurationSummary)
                     .font(.caption)
@@ -130,6 +242,15 @@ struct ContentView: View {
             }
             
             Spacer()
+            
+            Button {
+                createConversation()
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 18, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+            .disabled(isGenerating || !canCreateConversation)
             
             Button {
                 showConfiguration = true
@@ -143,20 +264,58 @@ struct ContentView: View {
         .background(.regularMaterial)
     }
     
+    private var sidebarGesture: some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onEnded { value in
+                if !showConversationSidebar,
+                   value.startLocation.x < 32,
+                   value.translation.width > 70 {
+                    showConversationSidebar = true
+                } else if showConversationSidebar,
+                          value.translation.width < -70 {
+                    showConversationSidebar = false
+                }
+            }
+    }
+    
+    private var currentConversationTitle: String {
+        guard let selectedConversationID,
+              let conversation = conversations.first(where: { $0.id == selectedConversationID }) else {
+            return "新对话"
+        }
+        
+        return conversation.title
+    }
+    
+    private var canCreateConversation: Bool {
+        guard !isGenerating else { return false }
+        return !messages.isEmpty
+    }
+    
+    private var currentConfiguration: AIConfiguration {
+        AIConfigurationStore.selectedConfiguration(
+            from: configurations,
+            selectedID: selectedConfigurationID
+        )
+    }
+    
     private var configurationSummary: String {
-        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasAPIKey = !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasCustomHeaders = !customHeaders.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let configuration = currentConfiguration
+        let trimmedBaseURL = configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasAPIKey = !configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasCustomHeaders = !configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let authSummary = hasAPIKey ? "API Key" : (hasCustomHeaders ? "自定义请求头" : "未配置认证")
         
-        return "\(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(authSummary)"
+        return "\(configuration.name) · \(configuration.selectedModel) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(authSummary)"
     }
     
     func sendMessage() {
         let userText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedCustomHeaders = customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configuration = currentConfiguration
+        let trimmedBaseURL = configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAPIKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCustomHeaders = configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         
         guard !userText.isEmpty else { return }
         
@@ -167,8 +326,23 @@ struct ContentView: View {
                     content: "请先配置 Base URL。"
                 )
             )
+            persistCurrentConversation()
             return
         }
+        
+        guard !model.isEmpty else {
+            messages.append(
+                ChatMessage(
+                    role: "assistant",
+                    content: "请先选择模型。"
+                )
+            )
+            persistCurrentConversation()
+            return
+        }
+        
+        ensureCurrentConversation()
+        aiService.resetConversation(with: messages)
         
         inputText = ""
         isInputFocused = false
@@ -192,6 +366,7 @@ struct ContentView: View {
                 content: ""
             )
         )
+        persistCurrentConversation()
         
         let assistantMessageID = messages.last?.id
         activeAssistantMessageID = assistantMessageID
@@ -201,6 +376,7 @@ struct ContentView: View {
             baseURL: trimmedBaseURL,
             apiKey: trimmedAPIKey,
             customHeaders: trimmedCustomHeaders,
+            model: model,
             onReasoningToken: { token in
                 guard let assistantMessageID else { return }
                 guard activeAssistantMessageID == assistantMessageID else { return }
@@ -229,6 +405,8 @@ struct ContentView: View {
                 finalizeMessageLayout(for: assistantMessageID)
                 isGenerating = false
                 activeAssistantMessageID = nil
+                persistCurrentConversation()
+                generateTitleIfNeeded()
             },
             onError: { error in
                 guard let assistantMessageID else { return }
@@ -243,6 +421,7 @@ struct ContentView: View {
                 
                 isGenerating = false
                 activeAssistantMessageID = nil
+                persistCurrentConversation()
             }
         )
     }
@@ -318,6 +497,7 @@ struct ContentView: View {
         }
         
         isFlushScheduled = false
+        persistCurrentConversation()
     }
     
     func stopGenerating() {
@@ -339,6 +519,7 @@ struct ContentView: View {
         pendingReasoningText = ""
         pendingContentText = ""
         isFlushScheduled = false
+        persistCurrentConversation()
     }
     
     func hideKeyboard() {
@@ -359,16 +540,228 @@ struct ContentView: View {
             proxy.scrollTo("bottomAnchor", anchor: .bottom)
         }
     }
+    
+    private func selectModel(_ model: String) {
+        guard let index = configurations.firstIndex(where: { $0.id == currentConfiguration.id }) else { return }
+        configurations[index].selectedModel = model
+        if !configurations[index].models.contains(model) {
+            configurations[index].models.append(model)
+        }
+        configurations[index].updatedAt = Date()
+        selectedConfigurationID = configurations[index].id
+        AIConfigurationStore.saveSelectedConfigurationID(configurations[index].id)
+        AIConfigurationStore.saveConfigurations(configurations)
+    }
+    
+    private func reloadConfigurations() {
+        configurations = AIConfigurationStore.loadConfigurations()
+        selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
+        if selectedConfigurationID == nil,
+           let firstConfiguration = configurations.first {
+            selectedConfigurationID = firstConfiguration.id
+            AIConfigurationStore.saveSelectedConfigurationID(firstConfiguration.id)
+        }
+    }
+    
+    private func loadSelectedConversation() {
+        if let selectedConversationID,
+           conversations.contains(where: { $0.id == selectedConversationID }) {
+            selectConversation(selectedConversationID, closesSidebar: false)
+        } else if let firstConversation = conversations.first {
+            selectConversation(firstConversation.id, closesSidebar: false)
+        } else {
+            let conversation = AIConversation()
+            conversations = [conversation]
+            selectedConversationID = conversation.id
+            messages = []
+            aiService.resetConversation(with: [])
+            ConversationStore.saveSelectedConversationID(conversation.id)
+            ConversationStore.saveConversations(conversations)
+        }
+    }
+    
+    private func ensureCurrentConversation() {
+        if selectedConversationID == nil || !conversations.contains(where: { $0.id == selectedConversationID }) {
+            let conversation = AIConversation()
+            conversations.insert(conversation, at: 0)
+            selectedConversationID = conversation.id
+            ConversationStore.saveSelectedConversationID(conversation.id)
+            ConversationStore.saveConversations(conversations)
+        }
+    }
+    
+    private func selectConversation(_ id: UUID) {
+        selectConversation(id, closesSidebar: true)
+    }
+    
+    private func selectConversation(_ id: UUID, closesSidebar: Bool) {
+        if isGenerating {
+            stopGenerating()
+        } else {
+            persistCurrentConversation()
+        }
+        
+        guard let conversation = conversations.first(where: { $0.id == id }) else { return }
+        selectedConversationID = conversation.id
+        messages = conversation.messages
+        inputText = ""
+        activeAssistantMessageID = nil
+        pendingReasoningText = ""
+        pendingContentText = ""
+        isFlushScheduled = false
+        shouldAutoScroll = true
+        scrollVersion += 1
+        aiService.resetConversation(with: messages)
+        ConversationStore.saveSelectedConversationID(conversation.id)
+        
+        if closesSidebar {
+            showConversationSidebar = false
+        }
+    }
+    
+    private func createConversation() {
+        createConversation(closesSidebar: true)
+    }
+    
+    private func createConversation(closesSidebar: Bool) {
+        guard canCreateConversation else {
+            if closesSidebar {
+                showConversationSidebar = false
+            }
+            return
+        }
+        
+        if isGenerating {
+            stopGenerating()
+        } else {
+            persistCurrentConversation()
+        }
+        
+        let conversation = AIConversation()
+        conversations.insert(conversation, at: 0)
+        selectedConversationID = conversation.id
+        messages = []
+        inputText = ""
+        activeAssistantMessageID = nil
+        aiService.resetConversation(with: [])
+        ConversationStore.saveSelectedConversationID(conversation.id)
+        ConversationStore.saveConversations(conversations)
+        
+        if closesSidebar {
+            showConversationSidebar = false
+        }
+    }
+    
+    private func deleteConversation(_ id: UUID) {
+        if conversations.count <= 1 {
+            if selectedConversationID == id && isGenerating {
+                aiService.cancelStreaming()
+                isGenerating = false
+            }
+            
+            let conversation = AIConversation()
+            conversations = [conversation]
+            selectedConversationID = conversation.id
+            messages = []
+            inputText = ""
+            activeAssistantMessageID = nil
+            pendingReasoningText = ""
+            pendingContentText = ""
+            isFlushScheduled = false
+            showConversationSidebar = false
+            aiService.resetConversation(with: [])
+            ConversationStore.saveSelectedConversationID(conversation.id)
+            ConversationStore.saveConversations(conversations)
+            return
+        }
+        
+        if selectedConversationID == id && isGenerating {
+            stopGenerating()
+        }
+        
+        conversations.removeAll { $0.id == id }
+        
+        if selectedConversationID == id || selectedConversationID == nil {
+            let nextConversation = conversations[0]
+            selectedConversationID = nextConversation.id
+            messages = nextConversation.messages
+            aiService.resetConversation(with: messages)
+            ConversationStore.saveSelectedConversationID(nextConversation.id)
+        }
+        
+        ConversationStore.saveConversations(conversations)
+    }
+    
+    private func persistCurrentConversation() {
+        guard let selectedConversationID,
+              let index = conversations.firstIndex(where: { $0.id == selectedConversationID }) else {
+            return
+        }
+        
+        conversations[index].messages = messages
+        conversations[index].updatedAt = Date()
+        ConversationStore.saveConversations(conversations)
+    }
+    
+    private func generateTitleIfNeeded() {
+        guard let selectedConversationID,
+              let index = conversations.firstIndex(where: { $0.id == selectedConversationID }),
+              !conversations[index].hasGeneratedTitle,
+              conversations[index].messages.contains(where: { $0.role == "assistant" && !$0.content.isEmpty }) else {
+            return
+        }
+        
+        let titleMessages = conversations[index].messages
+        let configuration = currentConfiguration
+        let trimmedBaseURL = configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAPIKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCustomHeaders = configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard !model.isEmpty else { return }
+        
+        aiService.generateConversationTitle(
+            messages: titleMessages,
+            baseURL: trimmedBaseURL,
+            apiKey: trimmedAPIKey,
+            customHeaders: trimmedCustomHeaders,
+            model: model
+        ) { title in
+            guard let title,
+                  let currentIndex = conversations.firstIndex(where: { $0.id == selectedConversationID }),
+                  !title.isEmpty else {
+                return
+            }
+            
+            conversations[currentIndex].title = title
+            conversations[currentIndex].hasGeneratedTitle = true
+            conversations[currentIndex].updatedAt = Date()
+            ConversationStore.saveConversations(conversations)
+        }
+    }
 }
 
 struct MessageBubble: View {
     @Binding var message: ChatMessage
+    @Environment(\.colorScheme) private var colorScheme
     
     private var isUser: Bool {
         message.role == "user"
     }
     
-    private var messageContentBubble: some View {
+    private var userBubbleColor: Color {
+        colorScheme == .dark ? Color.blue.opacity(0.72) : Color.accentColor
+    }
+    
+    private var assistantBubbleColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.10) : Color.gray.opacity(0.16)
+    }
+    
+    private var assistantReasoningColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.gray.opacity(0.10)
+    }
+    
+    private func messageContentBubble(maxWidth: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if message.content.isEmpty && message.contentChunks.isEmpty {
                 Text(message.isStopped ? "已停止生成。" : "正在生成回答...")
@@ -382,15 +775,15 @@ struct MessageBubble: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .font(.body)
-        .foregroundStyle(isUser ? .white : .primary)
+        .foregroundStyle(isUser ? Color.white : Color.primary)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(isUser ? Color.accentColor : Color.gray.opacity(0.16))
+                .fill(isUser ? userBubbleColor : assistantBubbleColor)
         )
         .frame(
-            maxWidth: UIScreen.main.bounds.width * 0.78,
+            maxWidth: maxWidth,
             alignment: isUser ? .trailing : .leading
         )
         .textSelection(.enabled)
@@ -400,26 +793,30 @@ struct MessageBubble: View {
     }
     
     var body: some View {
-        HStack {
-            if isUser {
-                Spacer(minLength: 48)
-            }
-            
-            VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
-                if !isUser && !message.reasoningContent.isEmpty {
-                    reasoningBlock
+        GeometryReader { geometry in
+            HStack {
+                if isUser {
+                    Spacer(minLength: 48)
                 }
                 
-                messageContentBubble
-            }
-            
-            if !isUser {
-                Spacer(minLength: 48)
+                VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
+                    if !isUser && !message.reasoningContent.isEmpty {
+                        reasoningBlock(maxWidth: geometry.size.width * 0.78)
+                    }
+                    
+                    messageContentBubble(maxWidth: geometry.size.width * 0.78)
+                }
+                
+                if !isUser {
+                    Spacer(minLength: 48)
+                }
             }
         }
+        .frame(minHeight: 1)
+        .fixedSize(horizontal: false, vertical: true)
     }
     
-    private var reasoningBlock: some View {
+    private func reasoningBlock(maxWidth: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
                 message.isReasoningExpanded.toggle()
@@ -455,7 +852,7 @@ struct MessageBubble: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.gray.opacity(0.10))
+                        .fill(assistantReasoningColor)
                 )
                 .textSelection(.enabled)
                 .transaction { transaction in
@@ -466,10 +863,10 @@ struct MessageBubble: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(maxWidth: UIScreen.main.bounds.width * 0.78, alignment: .leading)
+        .frame(maxWidth: maxWidth, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.gray.opacity(0.25), lineWidth: 1)
+                .stroke(Color.secondary.opacity(0.28), lineWidth: 1)
         )
         .clipped()
     }
