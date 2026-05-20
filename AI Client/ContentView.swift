@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var pendingReasoningText = ""
     @State private var pendingContentText = ""
     @State private var isFlushScheduled = false
+    @State private var flushTask: Task<Void, Never>?
     @State private var activeAssistantMessageID: UUID?
     @FocusState private var isInputFocused: Bool
     
@@ -403,8 +404,8 @@ struct ContentView: View {
                 }
                 guard activeAssistantMessageID == assistantMessageID else { return }
                 
+                cancelScheduledFlush()
                 flushPendingTokens(for: assistantMessageID)
-                finalizeMessageLayout(for: assistantMessageID)
                 isGenerating = false
                 activeAssistantMessageID = nil
                 persistCurrentConversation()
@@ -414,11 +415,11 @@ struct ContentView: View {
                 guard let assistantMessageID else { return }
                 guard activeAssistantMessageID == assistantMessageID else { return }
                 
+                cancelScheduledFlush()
                 flushPendingTokens(for: assistantMessageID)
                 
                 if let index = messages.firstIndex(where: { $0.id == assistantMessageID }) {
                     messages[index].content = error
-                    messages[index].contentChunks = []
                 }
                 
                 isGenerating = false
@@ -428,30 +429,14 @@ struct ContentView: View {
         )
     }
     
-    func finalizeMessageLayout(for messageID: UUID) {
-        guard let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
-        
-        var transaction = Transaction()
-        transaction.animation = nil
-        
-        withTransaction(transaction) {
-            if !messages[index].contentChunks.isEmpty {
-                messages[index].content = messages[index].contentChunks.joined()
-                messages[index].contentChunks = []
-            }
-            
-            if !messages[index].reasoningChunks.isEmpty {
-                messages[index].reasoningContent = messages[index].reasoningChunks.joined()
-                messages[index].reasoningChunks = []
-            }
-        }
-    }
-    
     func scheduleTokenFlush(for messageID: UUID) {
         guard !isFlushScheduled else { return }
         isFlushScheduled = true
+        flushTask?.cancel()
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+        flushTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
             flushPendingTokens(for: messageID)
         }
     }
@@ -461,6 +446,7 @@ struct ContentView: View {
             pendingReasoningText = ""
             pendingContentText = ""
             isFlushScheduled = false
+            flushTask = nil
             return
         }
         
@@ -470,25 +456,11 @@ struct ContentView: View {
         withTransaction(transaction) {
             if !pendingReasoningText.isEmpty {
                 messages[index].reasoningContent += pendingReasoningText
-                
-                if let lastChunk = messages[index].reasoningChunks.last,
-                   lastChunk.count < 1600 {
-                    messages[index].reasoningChunks[messages[index].reasoningChunks.count - 1] += pendingReasoningText
-                } else {
-                    messages[index].reasoningChunks.append(pendingReasoningText)
-                }
-                
                 pendingReasoningText = ""
             }
             
             if !pendingContentText.isEmpty {
-                if let lastChunk = messages[index].contentChunks.last,
-                   lastChunk.count < 1600 {
-                    messages[index].contentChunks[messages[index].contentChunks.count - 1] += pendingContentText
-                } else {
-                    messages[index].contentChunks.append(pendingContentText)
-                }
-                
+                messages[index].content += pendingContentText
                 messages[index].isReasoningExpanded = false
                 pendingContentText = ""
             }
@@ -499,17 +471,24 @@ struct ContentView: View {
         }
         
         isFlushScheduled = false
+        flushTask = nil
         persistCurrentConversation()
+    }
+    
+    func cancelScheduledFlush() {
+        flushTask?.cancel()
+        flushTask = nil
+        isFlushScheduled = false
     }
     
     func stopGenerating() {
         let stoppedMessageID = activeAssistantMessageID
         
         aiService.cancelStreaming()
+        cancelScheduledFlush()
         
         if let stoppedMessageID {
             flushPendingTokens(for: stoppedMessageID)
-            finalizeMessageLayout(for: stoppedMessageID)
             
             if let index = messages.firstIndex(where: { $0.id == stoppedMessageID }) {
                 messages[index].isStopped = true
@@ -763,19 +742,14 @@ struct MessageBubble: View {
         colorScheme == .dark ? Color.white.opacity(0.08) : Color.gray.opacity(0.10)
     }
     
-    private func messageContentBubble(maxWidth: CGFloat) -> some View {
+    private var messageContentBubble: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if message.content.isEmpty && message.contentChunks.isEmpty {
+            if message.content.isEmpty {
                 Text(message.isStopped ? "已停止生成。" : "正在生成回答...")
-            } else if message.contentChunks.isEmpty {
-                Text(message.isStopped ? message.content + "\n\n已停止生成。" : message.content)
             } else {
-                ForEach(message.contentChunks.indices, id: \.self) { index in
-                    Text(message.contentChunks[index])
-                }
+                MarkdownText(message.isStopped ? message.content + "\n\n已停止生成。" : message.content)
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
         .font(.body)
         .foregroundStyle(isUser ? Color.white : Color.primary)
         .padding(.horizontal, 14)
@@ -784,10 +758,6 @@ struct MessageBubble: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(isUser ? userBubbleColor : assistantBubbleColor)
         )
-        .frame(
-            maxWidth: maxWidth,
-            alignment: isUser ? .trailing : .leading
-        )
         .textSelection(.enabled)
         .transaction { transaction in
             transaction.animation = nil
@@ -795,30 +765,27 @@ struct MessageBubble: View {
     }
     
     var body: some View {
-        GeometryReader { geometry in
-            HStack {
-                if isUser {
-                    Spacer(minLength: 48)
+        HStack(alignment: .top) {
+            if isUser {
+                Spacer(minLength: 48)
+            }
+            
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
+                if !isUser && !message.reasoningContent.isEmpty {
+                    reasoningBlock
                 }
                 
-                VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
-                    if !isUser && !message.reasoningContent.isEmpty {
-                        reasoningBlock(maxWidth: geometry.size.width * 0.78)
-                    }
-                    
-                    messageContentBubble(maxWidth: geometry.size.width * 0.78)
-                }
-                
-                if !isUser {
-                    Spacer(minLength: 48)
-                }
+                messageContentBubble
+            }
+            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+            
+            if !isUser {
+                Spacer(minLength: 48)
             }
         }
-        .frame(minHeight: 1)
-        .fixedSize(horizontal: false, vertical: true)
     }
     
-    private func reasoningBlock(maxWidth: CGFloat) -> some View {
+    private var reasoningBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
                 message.isReasoningExpanded.toggle()
@@ -839,17 +806,10 @@ struct MessageBubble: View {
             
             if message.isReasoningExpanded {
                 VStack(alignment: .leading, spacing: 0) {
-                    if message.reasoningChunks.isEmpty {
-                        Text(message.reasoningContent)
-                    } else {
-                        ForEach(message.reasoningChunks.indices, id: \.self) { index in
-                            Text(message.reasoningChunks[index])
-                        }
-                    }
+                    Text(message.reasoningContent)
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
@@ -865,12 +825,28 @@ struct MessageBubble: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(maxWidth: maxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.secondary.opacity(0.28), lineWidth: 1)
         )
         .clipped()
+    }
+}
+
+struct MarkdownText: View {
+    let content: String
+    
+    init(_ content: String) {
+        self.content = content
+    }
+    
+    var body: some View {
+        if let attributed = try? AttributedString(markdown: content) {
+            Text(attributed)
+        } else {
+            Text(content)
+        }
     }
 }
 

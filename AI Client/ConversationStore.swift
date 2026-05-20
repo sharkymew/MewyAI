@@ -9,6 +9,19 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var reasoningChunks: [String] = []
     var isReasoningExpanded: Bool = false
     var isStopped: Bool = false
+    
+    var normalized: ChatMessage {
+        var message = self
+        if message.content.isEmpty, !message.contentChunks.isEmpty {
+            message.content = message.contentChunks.joined()
+        }
+        if message.reasoningContent.isEmpty, !message.reasoningChunks.isEmpty {
+            message.reasoningContent = message.reasoningChunks.joined()
+        }
+        message.contentChunks = []
+        message.reasoningChunks = []
+        return message
+    }
 }
 
 struct AIConversation: Identifiable, Codable, Equatable {
@@ -18,6 +31,12 @@ struct AIConversation: Identifiable, Codable, Equatable {
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
     var hasGeneratedTitle: Bool = false
+    
+    var normalized: AIConversation {
+        var conversation = self
+        conversation.messages = messages.map(\.normalized)
+        return conversation
+    }
 }
 
 enum ConversationStore {
@@ -31,11 +50,14 @@ enum ConversationStore {
             return [AIConversation()]
         }
         
-        return conversations.sorted { $0.updatedAt > $1.updatedAt }
+        return conversations
+            .map(\.normalized)
+            .sorted { $0.updatedAt > $1.updatedAt }
     }
     
     static func saveConversations(_ conversations: [AIConversation]) {
-        guard let data = try? JSONEncoder().encode(conversations) else { return }
+        let normalizedConversations = conversations.map(\.normalized)
+        guard let data = try? JSONEncoder().encode(normalizedConversations) else { return }
         UserDefaults.standard.set(data, forKey: conversationsKey)
     }
     

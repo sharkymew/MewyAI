@@ -213,7 +213,15 @@ struct AIConfigurationView: View {
     }
     
     private var selectedAPIKeyBinding: Binding<String> {
-        binding(\.apiKey)
+        Binding(
+            get: { selectedConfiguration?.apiKey ?? "" },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    configuration.apiKey = newValue
+                    KeychainService.saveAPIKey(newValue, for: configuration.id)
+                }
+            }
+        )
     }
     
     private var selectedCustomHeadersBinding: Binding<String> {
@@ -285,7 +293,8 @@ struct AIConfigurationView: View {
     private func deleteCurrentConfiguration() {
         guard configurations.count > 1,
               let selectedIndex else { return }
-        configurations.remove(at: selectedIndex)
+        let removedConfiguration = configurations.remove(at: selectedIndex)
+        KeychainService.deleteAPIKey(for: removedConfiguration.id)
         selectedConfigurationID = configurations[0].id
         saveCurrentState()
     }

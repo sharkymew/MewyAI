@@ -31,6 +31,9 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         self.baseURL = baseURL
         self.endpoint = endpoint
         self.apiKey = apiKey
+        if !apiKey.isEmpty {
+            KeychainService.saveAPIKey(apiKey, for: id)
+        }
         self.customHeaders = customHeaders
         self.models = models
         self.selectedModel = selectedModel
@@ -42,22 +45,33 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         case name
         case baseURL
         case endpoint
-        case apiKey
         case customHeaders
         case models
         case selectedModel
         case updatedAt
     }
     
+    private enum LegacyCodingKeys: String, CodingKey {
+        case apiKey
+    }
+    
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "默认配置"
-        apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
         customHeaders = try container.decodeIfPresent(String.self, forKey: .customHeaders) ?? ""
         models = try container.decodeIfPresent([String].self, forKey: .models) ?? ["deepseek-v4-pro"]
         selectedModel = try container.decodeIfPresent(String.self, forKey: .selectedModel) ?? models.first ?? "deepseek-v4-pro"
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        apiKey = KeychainService.readAPIKey(for: id)
+        
+        if apiKey.isEmpty,
+           let legacyContainer = try? decoder.container(keyedBy: LegacyCodingKeys.self),
+           let legacyAPIKey = try? legacyContainer.decodeIfPresent(String.self, forKey: .apiKey),
+           !legacyAPIKey.isEmpty {
+            apiKey = legacyAPIKey
+            KeychainService.saveAPIKey(legacyAPIKey, for: id)
+        }
         
         let decodedBaseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? "https://api.deepseek.com"
         if let decodedEndpoint = try container.decodeIfPresent(String.self, forKey: .endpoint),
