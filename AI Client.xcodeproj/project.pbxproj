@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		DF1124712FBF49A9007131D0 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF1124702FBF49A9007131D0 /* MarkdownUI */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		DF1124322FBD5F56007131D0 /* AI Client.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "AI Client.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF1124712FBF49A9007131D0 /* MarkdownUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = "AI Client";
 			packageProductDependencies = (
+				DF1124702FBF49A9007131D0 /* MarkdownUI */,
 			);
 			productName = "AI Client";
 			productReference = DF1124322FBD5F56007131D0 /* AI Client.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = DF1124292FBD5F56007131D0;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				DF11246F2FBF49A9007131D0 /* XCLocalSwiftPackageReference "../../../../../Downloads/swift-markdown-ui-2.4.1" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DF1124332FBD5F56007131D0 /* Products */;
 			projectDirPath = "";
@@ -346,6 +355,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		DF11246F2FBF49A9007131D0 /* XCLocalSwiftPackageReference "../../../../../Downloads/swift-markdown-ui-2.4.1" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../../../../Downloads/swift-markdown-ui-2.4.1";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DF1124702FBF49A9007131D0 /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MarkdownUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = DF11242A2FBD5F56007131D0 /* Project object */;
 }
