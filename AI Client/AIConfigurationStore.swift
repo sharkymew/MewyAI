@@ -1,5 +1,35 @@
 import Foundation
 
+enum ReasoningEffort: String, CaseIterable, Codable, Identifiable {
+    case low
+    case medium
+    case high
+    
+    var id: String { rawValue }
+    
+    var title: String {
+        switch self {
+        case .low:
+            return "低"
+        case .medium:
+            return "中"
+        case .high:
+            return "高"
+        }
+    }
+}
+
+struct AIModelConfiguration: Identifiable, Codable, Equatable {
+    var id: String { name }
+    var name: String
+    var supportsReasoning: Bool
+    
+    init(name: String, supportsReasoning: Bool = false) {
+        self.name = name
+        self.supportsReasoning = supportsReasoning
+    }
+}
+
 struct AIConfiguration: Identifiable, Codable, Equatable {
     var id: UUID
     var name: String
@@ -7,12 +37,21 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     var endpoint: String
     var apiKey: String
     var customHeaders: String
-    var models: [String]
+    var models: [AIModelConfiguration]
     var selectedModel: String
+    var reasoningEffort: ReasoningEffort
     var updatedAt: Date
     
     var requestURLString: String {
         Self.join(baseURL: baseURL, endpoint: endpoint)
+    }
+    
+    var selectedModelConfiguration: AIModelConfiguration? {
+        models.first { $0.name == selectedModel }
+    }
+    
+    var selectedModelSupportsReasoning: Bool {
+        selectedModelConfiguration?.supportsReasoning == true
     }
     
     init(
@@ -22,8 +61,9 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         endpoint: String = "chat/completions",
         apiKey: String = "",
         customHeaders: String = "",
-        models: [String] = ["deepseek-v4-pro"],
+        models: [AIModelConfiguration] = [AIModelConfiguration(name: "deepseek-v4-pro")],
         selectedModel: String = "deepseek-v4-pro",
+        reasoningEffort: ReasoningEffort = .medium,
         updatedAt: Date = Date()
     ) {
         self.id = id
@@ -37,6 +77,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         self.customHeaders = customHeaders
         self.models = models
         self.selectedModel = selectedModel
+        self.reasoningEffort = reasoningEffort
         self.updatedAt = updatedAt
     }
     
@@ -48,6 +89,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         case customHeaders
         case models
         case selectedModel
+        case reasoningEffort
         case updatedAt
     }
     
@@ -60,11 +102,27 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "默认配置"
         customHeaders = try container.decodeIfPresent(String.self, forKey: .customHeaders) ?? ""
-        models = try container.decodeIfPresent([String].self, forKey: .models) ?? ["deepseek-v4-pro"]
-        selectedModel = try container.decodeIfPresent(String.self, forKey: .selectedModel) ?? models.first ?? "deepseek-v4-pro"
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
-        apiKey = KeychainService.readAPIKey(for: id)
+        reasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort) ?? .medium
         
+        if let decodedModels = try? container.decodeIfPresent([AIModelConfiguration].self, forKey: .models),
+           let decodedModels,
+           !decodedModels.isEmpty {
+            models = decodedModels
+        } else if let legacyModels = try? container.decodeIfPresent([String].self, forKey: .models),
+                  let legacyModels,
+                  !legacyModels.isEmpty {
+            models = legacyModels.map { AIModelConfiguration(name: $0) }
+        } else {
+            models = [AIModelConfiguration(name: "deepseek-v4-pro")]
+        }
+        
+        selectedModel = try container.decodeIfPresent(String.self, forKey: .selectedModel) ?? models.first?.name ?? "deepseek-v4-pro"
+        if !models.contains(where: { $0.name == selectedModel }), !selectedModel.isEmpty {
+            models.insert(AIModelConfiguration(name: selectedModel), at: 0)
+        }
+        
+        apiKey = KeychainService.readAPIKey(for: id)
         if apiKey.isEmpty,
            let legacyContainer = try? decoder.container(keyedBy: LegacyCodingKeys.self),
            let legacyAPIKey = try? legacyContainer.decodeIfPresent(String.self, forKey: .apiKey),
@@ -166,7 +224,7 @@ enum AIConfigurationStore {
             endpoint: split.endpoint,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            models: ["deepseek-v4-pro"],
+            models: [AIModelConfiguration(name: "deepseek-v4-pro")],
             selectedModel: "deepseek-v4-pro"
         )
     }
