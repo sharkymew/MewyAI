@@ -26,10 +26,12 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
     var id: String { name }
     var name: String
     var supportsReasoning: Bool
+    var supportsImages: Bool
     
-    init(name: String, supportsReasoning: Bool = false) {
+    init(name: String, supportsReasoning: Bool = false, supportsImages: Bool = false) {
         self.name = name
         self.supportsReasoning = supportsReasoning
+        self.supportsImages = supportsImages
     }
 }
 
@@ -56,6 +58,10 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     
     var selectedModelSupportsReasoning: Bool {
         selectedModelConfiguration?.supportsReasoning == true
+    }
+    
+    var selectedModelSupportsImages: Bool {
+        selectedModelConfiguration?.supportsImages == true
     }
     
     init(

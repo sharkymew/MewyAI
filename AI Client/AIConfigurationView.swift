@@ -184,12 +184,20 @@ struct AIConfigurationView: View {
                         Text(model.supportsReasoning ? "支持推理" : "不支持推理")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Text(model.supportsImages ? "支持图片" : "仅文字")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     
-                    Toggle("", isOn: supportsReasoningBinding(for: model.name))
-                        .labelsHidden()
-                        .fixedSize()
+                    VStack(spacing: 8) {
+                        Toggle("", isOn: supportsReasoningBinding(for: model.name))
+                            .labelsHidden()
+                            .fixedSize()
+                        Toggle("", isOn: supportsImagesBinding(for: model.name))
+                            .labelsHidden()
+                            .fixedSize()
+                    }
                     
                     Button(role: .destructive) {
                         deleteModel(model.name)
@@ -344,6 +352,20 @@ struct AIConfigurationView: View {
         )
     }
     
+    private func supportsImagesBinding(for model: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                selectedConfiguration?.models.first { $0.name == model }?.supportsImages == true
+            },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    guard let index = configuration.models.firstIndex(where: { $0.name == model }) else { return }
+                    configuration.models[index].supportsImages = newValue
+                }
+            }
+        )
+    }
+    
     private func fetchModels() {
         guard let configuration = selectedConfiguration else { return }
         isFetchingModels = true
@@ -366,7 +388,8 @@ struct AIConfigurationView: View {
                     configuration.models = models.map { model in
                         AIModelConfiguration(
                             name: model.name,
-                            supportsReasoning: model.supportsReasoning
+                            supportsReasoning: model.supportsReasoning,
+                            supportsImages: model.supportsImages
                         )
                     }
                     if !configuration.models.contains(where: { $0.name == configuration.selectedModel }) {
@@ -374,7 +397,8 @@ struct AIConfigurationView: View {
                     }
                 }
                 let reasoningModelCount = models.filter(\.supportsReasoning).count
-                modelFetchMessage = "已获取 \(models.count) 个模型，识别到 \(reasoningModelCount) 个支持推理。"
+                let imageModelCount = models.filter(\.supportsImages).count
+                modelFetchMessage = "已获取 \(models.count) 个模型，识别到 \(reasoningModelCount) 个支持推理、\(imageModelCount) 个支持图片。"
             case .failure(let error):
                 modelFetchMessage = error.localizedDescription
             }

@@ -6,9 +6,9 @@
 //
 import Foundation
 
-struct OpenAIRequest: Codable {
+struct OpenAIRequest: Encodable {
     let model: String
-    let messages: [Message]
+    let messages: [ChatRequestMessage]
     let stream: Bool
     let thinking: ThinkingConfig?
     let reasoningEffort: ReasoningEffort?
@@ -29,6 +29,77 @@ struct ThinkingConfig: Codable {
 struct Message: Codable {
     let role: String
     let content: String
+}
+
+struct ChatRequestMessage: Encodable {
+    let role: String
+    let content: ChatRequestContent
+    
+    init(role: String, text: String) {
+        self.role = role
+        self.content = .text(text)
+    }
+    
+    init(role: String, text: String, imageAttachments: [ChatImageAttachment]) {
+        self.role = role
+        
+        guard !imageAttachments.isEmpty else {
+            content = .text(text)
+            return
+        }
+        
+        var parts = [ChatRequestContent.Part]()
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedText.isEmpty {
+            parts.append(.text(trimmedText))
+        }
+        parts.append(contentsOf: imageAttachments.map { .imageURL($0.dataURL) })
+        content = .parts(parts)
+    }
+}
+
+enum ChatRequestContent: Encodable {
+    case text(String)
+    case parts([Part])
+    
+    enum Part: Encodable {
+        case text(String)
+        case imageURL(String)
+        
+        enum CodingKeys: String, CodingKey {
+            case type
+            case text
+            case imageURL = "image_url"
+        }
+        
+        enum ImageURLCodingKeys: String, CodingKey {
+            case url
+        }
+        
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            switch self {
+            case .text(let text):
+                try container.encode("text", forKey: .type)
+                try container.encode(text, forKey: .text)
+            case .imageURL(let url):
+                try container.encode("image_url", forKey: .type)
+                var imageContainer = container.nestedContainer(keyedBy: ImageURLCodingKeys.self, forKey: .imageURL)
+                try imageContainer.encode(url, forKey: .url)
+            }
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .text(let text):
+            var container = encoder.singleValueContainer()
+            try container.encode(text)
+        case .parts(let parts):
+            var container = encoder.singleValueContainer()
+            try container.encode(parts)
+        }
+    }
 }
 
 struct OpenAIResponse: Codable {
@@ -64,10 +135,14 @@ struct ModelListResponse: Decodable {
 struct ModelItem: Decodable {
     let id: String
     let supportsReasoning: Bool?
+    let supportsImages: Bool?
     
     enum CodingKeys: String, CodingKey {
         case id
         case supportsReasoning = "supports_reasoning"
+        case supportsImages = "supports_images"
+        case multimodal
+        case vision
         case reasoning
         case thinking
         case capabilities
@@ -79,19 +154,30 @@ struct ModelItem: Decodable {
         let directSupport = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoning)
         let reasoningSupport = try container.decodeIfPresent(Bool.self, forKey: .reasoning)
         let thinkingSupport = try container.decodeIfPresent(Bool.self, forKey: .thinking)
+        let directImageSupport = try container.decodeIfPresent(Bool.self, forKey: .supportsImages)
+        let multimodalSupport = try container.decodeIfPresent(Bool.self, forKey: .multimodal)
+        let visionSupport = try container.decodeIfPresent(Bool.self, forKey: .vision)
         let capabilities = try container.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities)
         supportsReasoning = directSupport
             ?? reasoningSupport
             ?? thinkingSupport
             ?? capabilities?.supportsReasoning
+        supportsImages = directImageSupport
+            ?? multimodalSupport
+            ?? visionSupport
+            ?? capabilities?.supportsImages
     }
 }
 
 struct ModelCapabilities: Decodable {
     let supportsReasoning: Bool?
+    let supportsImages: Bool?
     
     enum CodingKeys: String, CodingKey {
         case supportsReasoning = "supports_reasoning"
+        case supportsImages = "supports_images"
+        case multimodal
+        case vision
         case reasoning
         case thinking
     }
@@ -101,6 +187,9 @@ struct ModelCapabilities: Decodable {
         supportsReasoning = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoning)
             ?? container.decodeIfPresent(Bool.self, forKey: .reasoning)
             ?? container.decodeIfPresent(Bool.self, forKey: .thinking)
+        supportsImages = try container.decodeIfPresent(Bool.self, forKey: .supportsImages)
+            ?? container.decodeIfPresent(Bool.self, forKey: .multimodal)
+            ?? container.decodeIfPresent(Bool.self, forKey: .vision)
     }
 }
 
@@ -123,10 +212,10 @@ enum AIServiceError: LocalizedError {
 }
 
 class AIService {
-    private var conversationHistory: [Message] = [
-        Message(
+    private var conversationHistory: [ChatRequestMessage] = [
+        ChatRequestMessage(
             role: "system",
-            content: "你是一个友好且有帮助的AI助手。"
+            text: "你是一个友好且有帮助的AI助手。"
         )
     ]
     
@@ -139,20 +228,25 @@ class AIService {
     
     func resetConversation(with messages: [ChatMessage]) {
         conversationHistory = [
-            Message(
+            ChatRequestMessage(
                 role: "system",
-                content: "你是一个友好且有帮助的AI助手。"
+                text: "你是一个友好且有帮助的AI助手。"
             )
         ]
         
         conversationHistory.append(
             contentsOf: messages.compactMap { message in
                 let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !content.isEmpty, message.role == "user" || message.role == "assistant" else {
+                let hasImages = !message.imageAttachments.isEmpty
+                guard (hasImages || !content.isEmpty), message.role == "user" || message.role == "assistant" else {
                     return nil
                 }
                 
-                return Message(role: message.role, content: content)
+                return ChatRequestMessage(
+                    role: message.role,
+                    text: content,
+                    imageAttachments: message.role == "user" ? message.imageAttachments : []
+                )
             }
         )
     }
@@ -208,7 +302,8 @@ class AIService {
                     .map { item in
                         AIModelConfiguration(
                             name: item.id,
-                            supportsReasoning: item.supportsReasoning ?? Self.infersReasoningSupport(for: item.id)
+                            supportsReasoning: item.supportsReasoning ?? Self.infersReasoningSupport(for: item.id),
+                            supportsImages: item.supportsImages ?? Self.infersImageSupport(for: item.id)
                         )
                     }
                     .sorted { $0.name < $1.name }
@@ -245,11 +340,11 @@ class AIService {
         }
         
         let titleMessages = [
-            Message(
+            ChatRequestMessage(
                 role: "system",
-                content: "请根据对话内容生成一个简短中文标题。只输出标题，不要解释，不要加引号，最多12个字。"
+                text: "请根据对话内容生成一个简短中文标题。只输出标题，不要解释，不要加引号，最多12个字。"
             ),
-            Message(role: "user", content: transcript)
+            ChatRequestMessage(role: "user", text: transcript)
         ]
         
         let requestBody = OpenAIRequest(
@@ -296,6 +391,7 @@ class AIService {
     
     func sendMessage(
         message: String,
+        imageAttachments: [ChatImageAttachment] = [],
         baseURL: String,
         apiKey: String,
         customHeaders: String,
@@ -309,7 +405,13 @@ class AIService {
             return
         }
         
-        conversationHistory.append(Message(role: "user", content: message))
+        conversationHistory.append(
+            ChatRequestMessage(
+                role: "user",
+                text: message,
+                imageAttachments: imageAttachments
+            )
+        )
         
         let requestBody = OpenAIRequest(
             model: model,
@@ -354,7 +456,7 @@ class AIService {
                 if let data,
                    let decoded = try? JSONDecoder().decode(OpenAIResponse.self, from: data) {
                     let text = decoded.choices.first?.message.content ?? "无回复"
-                    self.conversationHistory.append(Message(role: "assistant", content: text))
+                    self.conversationHistory.append(ChatRequestMessage(role: "assistant", text: text))
                     completion(text)
                 } else {
                     completion("解析失败：\(responseText)")
@@ -366,6 +468,7 @@ class AIService {
     
     func sendStreamingMessage(
         message: String,
+        imageAttachments: [ChatImageAttachment],
         baseURL: String,
         apiKey: String,
         customHeaders: String,
@@ -384,7 +487,13 @@ class AIService {
             return
         }
         
-        conversationHistory.append(Message(role: "user", content: message))
+        conversationHistory.append(
+            ChatRequestMessage(
+                role: "user",
+                text: message,
+                imageAttachments: imageAttachments
+            )
+        )
         
         let requestBody = OpenAIRequest(
             model: model,
@@ -432,7 +541,7 @@ class AIService {
                     let jsonString = String(line.dropFirst(6))
                     
                     if jsonString == "[DONE]" {
-                        conversationHistory.append(Message(role: "assistant", content: fullContentText))
+                        conversationHistory.append(ChatRequestMessage(role: "assistant", text: fullContentText))
                         
                         await MainActor.run {
                             onComplete(fullReasoningText, fullContentText)
@@ -468,7 +577,7 @@ class AIService {
                     }
                 }
                 
-                conversationHistory.append(Message(role: "assistant", content: fullContentText))
+                conversationHistory.append(ChatRequestMessage(role: "assistant", text: fullContentText))
                 
                 await MainActor.run {
                     onComplete(fullReasoningText, fullContentText)
@@ -625,6 +734,34 @@ class AIService {
         ]
         
         return reasoningKeywords.contains { lowercasedID.contains($0) }
+    }
+    
+    private nonisolated static func infersImageSupport(for modelID: String) -> Bool {
+        let lowercasedID = modelID.lowercased()
+        let imageInputKeywords = [
+            "vision",
+            "visual",
+            "vl",
+            "qwen-vl",
+            "qwen2-vl",
+            "qwen2.5-vl",
+            "qwen3-vl",
+            "glm-4v",
+            "glm-4.1v",
+            "gpt-4o",
+            "gpt-4.1",
+            "gpt-5",
+            "claude-3",
+            "claude-4",
+            "gemini",
+            "llava",
+            "internvl",
+            "minicpm-v",
+            "mllama",
+            "pixtral"
+        ]
+        
+        return imageInputKeywords.contains { lowercasedID.contains($0) }
     }
     
     private static func responseText(from data: Data?) -> String {
