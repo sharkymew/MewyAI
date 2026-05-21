@@ -1,9 +1,15 @@
 import Foundation
 
+struct ChatImageAttachment: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var dataURL: String
+}
+
 struct ChatMessage: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     let role: String
     var content: String
+    var imageAttachments: [ChatImageAttachment] = []
     var contentChunks: [String] = []
     var reasoningContent: String = ""
     var reasoningChunks: [String] = []

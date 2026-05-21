@@ -175,10 +175,31 @@ struct AIConfigurationView: View {
                     .foregroundStyle(.secondary)
             }
             
-            ForEach(selectedConfiguration?.models ?? [], id: \.self) { model in
-                Text(model)
+            ForEach(selectedConfiguration?.models ?? []) { model in
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(model.name)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                        Text(model.supportsReasoning ? "支持推理" : "不支持推理")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    Toggle("", isOn: supportsReasoningBinding(for: model.name))
+                        .labelsHidden()
+                        .fixedSize()
+                    
+                    Button(role: .destructive) {
+                        deleteModel(model.name)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled((selectedConfiguration?.models.count ?? 0) <= 1)
+                }
             }
-            .onDelete(perform: deleteModels)
         } header: {
             Text("模型")
         } footer: {
@@ -226,20 +247,6 @@ struct AIConfigurationView: View {
     
     private var selectedCustomHeadersBinding: Binding<String> {
         binding(\.customHeaders)
-    }
-    
-    private var selectedModelBinding: Binding<String> {
-        Binding(
-            get: { selectedConfiguration?.selectedModel ?? "" },
-            set: { newValue in
-                updateSelectedConfiguration { configuration in
-                    configuration.selectedModel = newValue
-                    if !configuration.models.contains(newValue) {
-                        configuration.models.append(newValue)
-                    }
-                }
-            }
-        )
     }
     
     private func binding(_ keyPath: WritableKeyPath<AIConfiguration, String>) -> Binding<String> {
@@ -304,8 +311,8 @@ struct AIConfigurationView: View {
         guard !model.isEmpty else { return }
         
         updateSelectedConfiguration { configuration in
-            if !configuration.models.contains(model) {
-                configuration.models.append(model)
+            if !configuration.models.contains(where: { $0.name == model }) {
+                configuration.models.append(AIModelConfiguration(name: model))
             }
             configuration.selectedModel = model
         }
@@ -313,16 +320,28 @@ struct AIConfigurationView: View {
         newModelName = ""
     }
     
-    private func deleteModels(at offsets: IndexSet) {
+    private func deleteModel(_ model: String) {
         updateSelectedConfiguration { configuration in
-            configuration.models.remove(atOffsets: offsets)
-            if configuration.models.isEmpty {
-                configuration.models = [configuration.selectedModel].filter { !$0.isEmpty }
-            }
-            if !configuration.models.contains(configuration.selectedModel) {
-                configuration.selectedModel = configuration.models.first ?? ""
+            guard configuration.models.count > 1 else { return }
+            configuration.models.removeAll { $0.name == model }
+            if !configuration.models.contains(where: { $0.name == configuration.selectedModel }) {
+                configuration.selectedModel = configuration.models.first?.name ?? ""
             }
         }
+    }
+    
+    private func supportsReasoningBinding(for model: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                selectedConfiguration?.models.first { $0.name == model }?.supportsReasoning == true
+            },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    guard let index = configuration.models.firstIndex(where: { $0.name == model }) else { return }
+                    configuration.models[index].supportsReasoning = newValue
+                }
+            }
+        )
     }
     
     private func fetchModels() {
@@ -344,12 +363,18 @@ struct AIConfigurationView: View {
                     return
                 }
                 updateSelectedConfiguration { configuration in
-                    configuration.models = models
-                    if !models.contains(configuration.selectedModel) {
-                        configuration.selectedModel = models[0]
+                    configuration.models = models.map { model in
+                        AIModelConfiguration(
+                            name: model.name,
+                            supportsReasoning: model.supportsReasoning
+                        )
+                    }
+                    if !configuration.models.contains(where: { $0.name == configuration.selectedModel }) {
+                        configuration.selectedModel = configuration.models[0].name
                     }
                 }
-                modelFetchMessage = "已获取 \(models.count) 个模型。"
+                let reasoningModelCount = models.filter(\.supportsReasoning).count
+                modelFetchMessage = "已获取 \(models.count) 个模型，识别到 \(reasoningModelCount) 个支持推理。"
             case .failure(let error):
                 modelFetchMessage = error.localizedDescription
             }

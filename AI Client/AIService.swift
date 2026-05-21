@@ -10,6 +10,20 @@ struct OpenAIRequest: Codable {
     let model: String
     let messages: [Message]
     let stream: Bool
+    let thinking: ThinkingConfig?
+    let reasoningEffort: ReasoningEffort?
+    
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case stream
+        case thinking
+        case reasoningEffort = "reasoning_effort"
+    }
+}
+
+struct ThinkingConfig: Codable {
+    let type: String
 }
 
 struct Message: Codable {
@@ -43,12 +57,51 @@ struct StreamDelta: Codable {
     }
 }
 
-struct ModelListResponse: Codable {
+struct ModelListResponse: Decodable {
     let data: [ModelItem]
 }
 
-struct ModelItem: Codable {
+struct ModelItem: Decodable {
     let id: String
+    let supportsReasoning: Bool?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case supportsReasoning = "supports_reasoning"
+        case reasoning
+        case thinking
+        case capabilities
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        let directSupport = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoning)
+        let reasoningSupport = try container.decodeIfPresent(Bool.self, forKey: .reasoning)
+        let thinkingSupport = try container.decodeIfPresent(Bool.self, forKey: .thinking)
+        let capabilities = try container.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities)
+        supportsReasoning = directSupport
+            ?? reasoningSupport
+            ?? thinkingSupport
+            ?? capabilities?.supportsReasoning
+    }
+}
+
+struct ModelCapabilities: Decodable {
+    let supportsReasoning: Bool?
+    
+    enum CodingKeys: String, CodingKey {
+        case supportsReasoning = "supports_reasoning"
+        case reasoning
+        case thinking
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        supportsReasoning = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoning)
+            ?? container.decodeIfPresent(Bool.self, forKey: .reasoning)
+            ?? container.decodeIfPresent(Bool.self, forKey: .thinking)
+    }
 }
 
 enum AIServiceError: LocalizedError {
@@ -108,9 +161,9 @@ class AIService {
         baseURL: String,
         apiKey: String,
         customHeaders: String,
-        completion: @escaping (Result<[String], AIServiceError>) -> Void
+        completion: @escaping (Result<[AIModelConfiguration], AIServiceError>) -> Void
     ) {
-        guard let url = modelsURL(from: baseURL) else {
+        guard let url = modelsURL(from: baseURL, filtersTextChatModels: true) else {
             completion(.failure(.invalidURL))
             return
         }
@@ -149,7 +202,16 @@ class AIService {
                     return
                 }
                 
-                let models = decoded.data.map(\.id).filter { !$0.isEmpty }.sorted()
+                let models = decoded.data
+                    .filter { !$0.id.isEmpty }
+                    .filter { Self.isTextChatModel($0.id) }
+                    .map { item in
+                        AIModelConfiguration(
+                            name: item.id,
+                            supportsReasoning: item.supportsReasoning ?? Self.infersReasoningSupport(for: item.id)
+                        )
+                    }
+                    .sorted { $0.name < $1.name }
                 completion(.success(models))
             }
         }
@@ -162,6 +224,8 @@ class AIService {
         apiKey: String,
         customHeaders: String,
         model: String,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
     ) {
         guard let url = URL(string: baseURL) else {
@@ -191,7 +255,9 @@ class AIService {
         let requestBody = OpenAIRequest(
             model: model,
             messages: titleMessages,
-            stream: false
+            stream: false,
+            thinking: thinkingConfig(from: reasoningEnabled),
+            reasoningEffort: reasoningEnabled == true ? reasoningEffort : nil
         )
         
         guard let jsonData = try? JSONEncoder().encode(requestBody) else {
@@ -234,6 +300,8 @@ class AIService {
         apiKey: String,
         customHeaders: String,
         model: String,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
         completion: @escaping (String) -> Void
     ) {
         guard let url = URL(string: baseURL) else {
@@ -246,7 +314,9 @@ class AIService {
         let requestBody = OpenAIRequest(
             model: model,
             messages: conversationHistory,
-            stream: false
+            stream: false,
+            thinking: thinkingConfig(from: reasoningEnabled),
+            reasoningEffort: reasoningEnabled == true ? reasoningEffort : nil
         )
         
         guard let jsonData = try? JSONEncoder().encode(requestBody) else {
@@ -300,6 +370,8 @@ class AIService {
         apiKey: String,
         customHeaders: String,
         model: String,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
         onReasoningToken: @escaping (String) -> Void,
         onContentToken: @escaping (String) -> Void,
         onComplete: @escaping (_ reasoningText: String, _ contentText: String) -> Void,
@@ -317,7 +389,9 @@ class AIService {
         let requestBody = OpenAIRequest(
             model: model,
             messages: conversationHistory,
-            stream: true
+            stream: true,
+            thinking: thinkingConfig(from: reasoningEnabled),
+            reasoningEffort: reasoningEnabled == true ? reasoningEffort : nil
         )
         
         guard let jsonData = try? JSONEncoder().encode(requestBody) else {
@@ -464,7 +538,12 @@ class AIService {
             }
     }
     
-    private func modelsURL(from baseURL: String) -> URL? {
+    private func thinkingConfig(from reasoningEnabled: Bool?) -> ThinkingConfig? {
+        guard let reasoningEnabled else { return nil }
+        return ThinkingConfig(type: reasoningEnabled ? "enabled" : "disabled")
+    }
+    
+    private func modelsURL(from baseURL: String, filtersTextChatModels: Bool) -> URL? {
         guard let url = URL(string: baseURL),
               var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return nil
@@ -481,7 +560,71 @@ class AIService {
         }
         components.query = nil
         
+        if filtersTextChatModels {
+            components.queryItems = [
+                URLQueryItem(name: "type", value: "text"),
+                URLQueryItem(name: "sub_type", value: "chat")
+            ]
+        }
+        
         return components.url
+    }
+    
+    private nonisolated static func isTextChatModel(_ modelID: String) -> Bool {
+        let lowercasedID = modelID.lowercased()
+        let nonChatKeywords = [
+            "embedding",
+            "embeddings",
+            "embed",
+            "rerank",
+            "reranker",
+            "ranker",
+            "stable-diffusion",
+            "sdxl",
+            "flux",
+            "kolors",
+            "qwen-image",
+            "image-edit",
+            "text-to-image",
+            "image-to-image",
+            "cogvideo",
+            "video",
+            "wan",
+            "audio",
+            "speech",
+            "voice",
+            "tts",
+            "whisper",
+            "sensevoice",
+            "funaudio",
+            "cosyvoice",
+            "fish-speech"
+        ]
+        
+        return !nonChatKeywords.contains { lowercasedID.contains($0) }
+    }
+    
+    private nonisolated static func infersReasoningSupport(for modelID: String) -> Bool {
+        let lowercasedID = modelID.lowercased()
+        let reasoningKeywords = [
+            "deepseek-r1",
+            "qwq",
+            "qvq",
+            "qwen3",
+            "glm-z1",
+            "glm-4.5",
+            "glm-5",
+            "o1",
+            "o3",
+            "o4",
+            "gpt-5",
+            "grok-3-mini",
+            "grok-4",
+            "magistral",
+            "thinking"
+        ]
+        
+        return reasoningKeywords.contains { lowercasedID.contains($0) }
     }
     
     private static func responseText(from data: Data?) -> String {

@@ -4,6 +4,7 @@ enum ReasoningEffort: String, CaseIterable, Codable, Identifiable {
     case low
     case medium
     case high
+    case max
     
     var id: String { rawValue }
     
@@ -15,6 +16,8 @@ enum ReasoningEffort: String, CaseIterable, Codable, Identifiable {
             return "中"
         case .high:
             return "高"
+        case .max:
+            return "极高"
         }
     }
 }
@@ -39,6 +42,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     var customHeaders: String
     var models: [AIModelConfiguration]
     var selectedModel: String
+    var reasoningEnabled: Bool
     var reasoningEffort: ReasoningEffort
     var updatedAt: Date
     
@@ -63,6 +67,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         customHeaders: String = "",
         models: [AIModelConfiguration] = [AIModelConfiguration(name: "deepseek-v4-pro")],
         selectedModel: String = "deepseek-v4-pro",
+        reasoningEnabled: Bool = true,
         reasoningEffort: ReasoningEffort = .medium,
         updatedAt: Date = Date()
     ) {
@@ -77,6 +82,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         self.customHeaders = customHeaders
         self.models = models
         self.selectedModel = selectedModel
+        self.reasoningEnabled = reasoningEnabled
         self.reasoningEffort = reasoningEffort
         self.updatedAt = updatedAt
     }
@@ -89,6 +95,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         case customHeaders
         case models
         case selectedModel
+        case reasoningEnabled
         case reasoningEffort
         case updatedAt
     }
@@ -103,14 +110,13 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "默认配置"
         customHeaders = try container.decodeIfPresent(String.self, forKey: .customHeaders) ?? ""
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        reasoningEnabled = try container.decodeIfPresent(Bool.self, forKey: .reasoningEnabled) ?? true
         reasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort) ?? .medium
         
-        if let decodedModels = try? container.decodeIfPresent([AIModelConfiguration].self, forKey: .models),
-           let decodedModels,
+        if let decodedModels = try? container.decode([AIModelConfiguration].self, forKey: .models),
            !decodedModels.isEmpty {
             models = decodedModels
-        } else if let legacyModels = try? container.decodeIfPresent([String].self, forKey: .models),
-                  let legacyModels,
+        } else if let legacyModels = try? container.decode([String].self, forKey: .models),
                   !legacyModels.isEmpty {
             models = legacyModels.map { AIModelConfiguration(name: $0) }
         } else {
@@ -118,7 +124,11 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         }
         
         selectedModel = try container.decodeIfPresent(String.self, forKey: .selectedModel) ?? models.first?.name ?? "deepseek-v4-pro"
-        if !models.contains(where: { $0.name == selectedModel }), !selectedModel.isEmpty {
+        var containsSelectedModel = false
+        for model in models where model.name == selectedModel {
+            containsSelectedModel = true
+        }
+        if !containsSelectedModel, !selectedModel.isEmpty {
             models.insert(AIModelConfiguration(name: selectedModel), at: 0)
         }
         

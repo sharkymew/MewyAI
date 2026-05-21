@@ -158,6 +158,10 @@ struct ContentView: View {
             
             modelMenu
             
+            if currentConfiguration.selectedModelSupportsReasoning {
+                reasoningEffortMenu
+            }
+            
             Button {
                 if isGenerating {
                     stopGenerating()
@@ -193,14 +197,14 @@ struct ContentView: View {
     
     private var modelMenu: some View {
         Menu {
-            ForEach(currentConfiguration.models, id: \.self) { model in
+            ForEach(currentConfiguration.models) { model in
                 Button {
-                    selectModel(model)
+                    selectModel(model.name)
                 } label: {
-                    if model == currentConfiguration.selectedModel {
-                        Label(model, systemImage: "checkmark")
+                    if model.name == currentConfiguration.selectedModel {
+                        Label(model.name, systemImage: "checkmark")
                     } else {
-                        Text(model)
+                        Text(model.name)
                     }
                 }
             }
@@ -214,6 +218,39 @@ struct ContentView: View {
             }
         } label: {
             Image(systemName: "cube.transparent")
+                .font(.system(size: 19, weight: .semibold))
+                .frame(width: 48, height: 48)
+                .background(Circle().fill(inputControlBackground))
+        }
+        .disabled(isGenerating)
+    }
+    
+    private var reasoningEffortMenu: some View {
+        Menu {
+            Button {
+                setReasoningEnabled(!currentConfiguration.reasoningEnabled)
+            } label: {
+                Label(
+                    currentConfiguration.reasoningEnabled ? "关闭思考" : "开启思考",
+                    systemImage: currentConfiguration.reasoningEnabled ? "brain.head.profile" : "brain"
+                )
+            }
+            
+            Divider()
+            
+            ForEach(ReasoningEffort.allCases) { effort in
+                Button {
+                    selectReasoningEffort(effort)
+                } label: {
+                    if effort == currentConfiguration.reasoningEffort {
+                        Label(effort.title, systemImage: "checkmark")
+                    } else {
+                        Text(effort.title)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: currentConfiguration.reasoningEnabled ? "brain.head.profile" : "brain")
                 .font(.system(size: 19, weight: .semibold))
                 .frame(width: 48, height: 48)
                 .background(Circle().fill(inputControlBackground))
@@ -309,7 +346,10 @@ struct ContentView: View {
         
         let endpoint = configuration.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         let endpointSummary = endpoint.isEmpty ? "未配置 Endpoint" : endpoint
-        return "\(configuration.name) · \(configuration.selectedModel) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(endpointSummary) · \(authSummary)"
+        let reasoningSummary = configuration.selectedModelSupportsReasoning
+            ? (configuration.reasoningEnabled ? "思考 \(configuration.reasoningEffort.title)" : "思考关闭")
+            : "无推理"
+        return "\(configuration.name) · \(configuration.selectedModel) · \(reasoningSummary) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(endpointSummary) · \(authSummary)"
     }
     
     func sendMessage() {
@@ -319,6 +359,8 @@ struct ContentView: View {
         let trimmedAPIKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCustomHeaders = configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
+        let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
         
         guard !userText.isEmpty else { return }
         
@@ -380,6 +422,8 @@ struct ContentView: View {
             apiKey: trimmedAPIKey,
             customHeaders: trimmedCustomHeaders,
             model: model,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
             onReasoningToken: { token in
                 guard let assistantMessageID else { return }
                 guard activeAssistantMessageID == assistantMessageID else { return }
@@ -525,9 +569,27 @@ struct ContentView: View {
     private func selectModel(_ model: String) {
         guard let index = configurations.firstIndex(where: { $0.id == currentConfiguration.id }) else { return }
         configurations[index].selectedModel = model
-        if !configurations[index].models.contains(model) {
-            configurations[index].models.append(model)
+        if !configurations[index].models.contains(where: { $0.name == model }) {
+            configurations[index].models.append(AIModelConfiguration(name: model))
         }
+        configurations[index].updatedAt = Date()
+        selectedConfigurationID = configurations[index].id
+        AIConfigurationStore.saveSelectedConfigurationID(configurations[index].id)
+        AIConfigurationStore.saveConfigurations(configurations)
+    }
+    
+    private func selectReasoningEffort(_ effort: ReasoningEffort) {
+        guard let index = configurations.firstIndex(where: { $0.id == currentConfiguration.id }) else { return }
+        configurations[index].reasoningEffort = effort
+        configurations[index].updatedAt = Date()
+        selectedConfigurationID = configurations[index].id
+        AIConfigurationStore.saveSelectedConfigurationID(configurations[index].id)
+        AIConfigurationStore.saveConfigurations(configurations)
+    }
+    
+    private func setReasoningEnabled(_ isEnabled: Bool) {
+        guard let index = configurations.firstIndex(where: { $0.id == currentConfiguration.id }) else { return }
+        configurations[index].reasoningEnabled = isEnabled
         configurations[index].updatedAt = Date()
         selectedConfigurationID = configurations[index].id
         AIConfigurationStore.saveSelectedConfigurationID(configurations[index].id)
@@ -698,6 +760,8 @@ struct ContentView: View {
         let trimmedAPIKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCustomHeaders = configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
+        let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
         
         guard !model.isEmpty else { return }
         
@@ -706,7 +770,9 @@ struct ContentView: View {
             baseURL: trimmedBaseURL,
             apiKey: trimmedAPIKey,
             customHeaders: trimmedCustomHeaders,
-            model: model
+            model: model,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort
         ) { title in
             guard let title,
                   let currentIndex = conversations.firstIndex(where: { $0.id == selectedConversationID }),
