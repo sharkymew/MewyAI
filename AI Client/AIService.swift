@@ -550,6 +550,7 @@ class AIService {
                 
                 var fullReasoningText = ""
                 var fullContentText = ""
+                let streamDecoder = JSONDecoder()
                 
                 for try await line in bytes.lines {
                     if Task.isCancelled {
@@ -571,27 +572,31 @@ class AIService {
                     }
                     
                     guard let data = jsonString.data(using: .utf8),
-                          let decoded = try? JSONDecoder().decode(OpenAIStreamResponse.self, from: data) else {
+                          let decoded = try? streamDecoder.decode(OpenAIStreamResponse.self, from: data) else {
                         continue
                     }
                     
                     let delta = decoded.choices.first?.delta
+                    let reasoningToken = delta?.reasoningContent
+                    let contentToken = delta?.content
                     
-                    if let reasoningToken = delta?.reasoningContent,
-                       !reasoningToken.isEmpty {
+                    if let reasoningToken, !reasoningToken.isEmpty {
                         fullReasoningText += reasoningToken
-                        
-                        await MainActor.run {
-                            onReasoningToken(reasoningToken)
-                        }
                     }
                     
-                    if let contentToken = delta?.content,
-                       !contentToken.isEmpty {
+                    if let contentToken, !contentToken.isEmpty {
                         fullContentText += contentToken
-                        
+                    }
+
+                    if reasoningToken?.isEmpty == false || contentToken?.isEmpty == false {
                         await MainActor.run {
-                            onContentToken(contentToken)
+                            if let reasoningToken, !reasoningToken.isEmpty {
+                                onReasoningToken(reasoningToken)
+                            }
+
+                            if let contentToken, !contentToken.isEmpty {
+                                onContentToken(contentToken)
+                            }
                         }
                     }
                 }
