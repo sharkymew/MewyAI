@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
@@ -16,10 +17,150 @@ private struct ChatScrollBottomDistancePreferenceKey: PreferenceKey {
     }
 }
 
+@MainActor
+private final class ChatScrollController: ObservableObject {
+    @Published private var shouldAutoScroll = true
+    @Published private var isScrolledToBottom = true
+
+    private var isUserDragging = false
+    private var isAutoScrollScheduled = false
+    private var isBottomDistanceUpdateScheduled = false
+    private var pendingDistanceFromBottom: CGFloat?
+    private var autoScrollTask: Task<Void, Never>?
+    private var scrollAction: ((Bool) -> Void)?
+
+    var shouldShowScrollToBottomButton: Bool {
+        !shouldAutoScroll && !isScrolledToBottom
+    }
+
+    deinit {
+        autoScrollTask?.cancel()
+    }
+
+    func setScrollAction(_ action: @escaping (Bool) -> Void) {
+        scrollAction = action
+    }
+
+    func clearScrollAction() {
+        scrollAction = nil
+    }
+
+    func beginUserDrag() {
+        isUserDragging = true
+
+        guard !isScrolledToBottom else { return }
+        setShouldAutoScroll(false)
+        cancelScheduledAutoScroll()
+    }
+
+    func endUserDrag() {
+        isUserDragging = false
+    }
+
+    func scheduleBottomDistanceUpdate(_ distanceFromBottom: CGFloat) {
+        pendingDistanceFromBottom = distanceFromBottom
+
+        guard !isBottomDistanceUpdateScheduled else { return }
+        isBottomDistanceUpdateScheduled = true
+
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else { return }
+
+            let distanceFromBottom = pendingDistanceFromBottom ?? 0
+            pendingDistanceFromBottom = nil
+            isBottomDistanceUpdateScheduled = false
+            updateBottomDistance(distanceFromBottom)
+        }
+    }
+
+    private func updateBottomDistance(_ distanceFromBottom: CGFloat) {
+        let isAtBottom = distanceFromBottom <= ChatScrollMetrics.bottomThreshold
+
+        if isScrolledToBottom != isAtBottom {
+            setIsScrolledToBottom(isAtBottom)
+        }
+
+        if isAtBottom {
+            setShouldAutoScroll(true)
+        } else if isUserDragging {
+            setShouldAutoScroll(false)
+            cancelScheduledAutoScroll()
+        }
+    }
+
+    func returnToBottom() {
+        setShouldAutoScroll(true)
+        requestImmediateAutoScroll(animated: false)
+    }
+
+    func requestImmediateAutoScroll(animated: Bool = false) {
+        guard shouldAutoScroll else { return }
+        cancelScheduledAutoScroll()
+        scrollAction?(animated)
+    }
+
+    func scheduleStreamingAutoScroll() {
+        guard shouldAutoScroll else { return }
+        guard !isAutoScrollScheduled else { return }
+        isAutoScrollScheduled = true
+        autoScrollTask?.cancel()
+
+        autoScrollTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(32))
+            guard let self, !Task.isCancelled else { return }
+            if shouldAutoScroll {
+                scrollAction?(false)
+            }
+            isAutoScrollScheduled = false
+            autoScrollTask = nil
+        }
+    }
+
+    func cancelScheduledAutoScroll() {
+        autoScrollTask?.cancel()
+        autoScrollTask = nil
+        isAutoScrollScheduled = false
+    }
+
+    private func setShouldAutoScroll(_ value: Bool) {
+        guard shouldAutoScroll != value else { return }
+        shouldAutoScroll = value
+    }
+
+    private func setIsScrolledToBottom(_ value: Bool) {
+        guard isScrolledToBottom != value else { return }
+        isScrolledToBottom = value
+    }
+}
+
+private struct ScrollToBottomButtonOverlay<Label: View>: View {
+    @ObservedObject var scrollController: ChatScrollController
+    let label: () -> Label
+
+    var body: some View {
+        ZStack {
+            if scrollController.shouldShowScrollToBottomButton {
+                Button {
+                    scrollController.returnToBottom()
+                } label: {
+                    label()
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 92)
+                .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .animation(
+            .easeOut(duration: 0.18),
+            value: scrollController.shouldShowScrollToBottomButton
+        )
+    }
+}
+
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
-    @GestureState private var isDraggingChatScroll = false
     @State private var configurations = AIConfigurationStore.loadConfigurations()
     @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
     @State private var inputText = ""
@@ -29,17 +170,13 @@ struct ContentView: View {
     @State private var isGenerating = false
     @State private var showConfiguration = false
     @State private var showConversationSidebar = false
-    @State private var shouldAutoScroll = true
-    @State private var isScrolledToBottom = true
-    @State private var scrollVersion = 0
+    @State private var chatScrollController = ChatScrollController()
     @State private var pendingReasoningText = ""
     @State private var pendingContentText = ""
     @State private var liveAssistantReasoningText = ""
     @State private var liveAssistantContentText = ""
     @State private var isFlushScheduled = false
     @State private var flushTask: Task<Void, Never>?
-    @State private var isAutoScrollScheduled = false
-    @State private var autoScrollTask: Task<Void, Never>?
     @State private var activeAssistantMessageID: UUID?
     @State private var markdownRenderCache: [UUID: MarkdownRenderCacheEntry] = [:]
     @State private var markdownRenderTasks: [UUID: Task<Void, Never>] = [:]
@@ -69,13 +206,9 @@ struct ContentView: View {
         colorScheme == .dark ? Color.white.opacity(0.18) : Color.white.opacity(0.62)
     }
 
-    private var inputControlBackground: Color {
-        colorScheme == .dark ? Color.white.opacity(0.11) : Color.black.opacity(0.08)
-    }
-
     private var sendControlBackground: Color {
         !canSendMessage && !isGenerating
-            ? inputControlBackground
+            ? inputGlassTint
             : Color.accentColor.opacity(colorScheme == .dark ? 0.26 : 0.16)
     }
 
@@ -83,7 +216,35 @@ struct ContentView: View {
         Color.red.opacity(colorScheme == .dark ? 0.24 : 0.12)
     }
 
-    private func controlGlassBackground(_ tint: Color) -> some View {
+    private var inputBottomFadeTint: Color {
+        colorScheme == .dark ? Color.black.opacity(0.40) : Color.white.opacity(0.62)
+    }
+
+    @ViewBuilder
+    private func inputGlassContainer<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 34, style: .continuous)
+
+        if #available(iOS 26.0, *) {
+            content()
+                .background {
+                shape
+                    .fill(.clear)
+                    .glassEffect(.regular.tint(inputGlassTint), in: shape)
+                }
+        } else {
+            content()
+                .background(.ultraThinMaterial, in: shape)
+                .background(shape.fill(inputGlassTint))
+                .overlay(
+                    shape
+                        .stroke(inputGlassHighlight, lineWidth: 1)
+                        .blendMode(.screen)
+                )
+        }
+    }
+
+    @ViewBuilder
+    private func controlGlassBackground(_ tint: Color, isInteractive: Bool = true) -> some View {
         Circle()
             .fill(.thinMaterial)
             .overlay(Circle().fill(tint))
@@ -93,8 +254,22 @@ struct ContentView: View {
             )
     }
 
-    private var inputBottomFadeTint: Color {
-        colorScheme == .dark ? Color.black.opacity(0.40) : Color.white.opacity(0.62)
+    private func controlGlassIcon(
+        systemName: String,
+        size: CGFloat,
+        weight: Font.Weight,
+        frame: CGFloat,
+        tint: Color,
+        foreground: Color = .primary
+    ) -> some View {
+        ZStack {
+            controlGlassBackground(tint)
+
+            Image(systemName: systemName)
+                .font(.system(size: size, weight: weight))
+                .foregroundStyle(foreground)
+        }
+        .frame(width: frame, height: frame)
     }
 
     private var inputBottomFade: some View {
@@ -121,10 +296,6 @@ struct ContentView: View {
     private var canSendMessage: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !pendingImageAttachments.isEmpty
-    }
-
-    private var shouldShowScrollToBottomButton: Bool {
-        !shouldAutoScroll && !isScrolledToBottom
     }
 
     private var isEditingMessage: Bool {
@@ -255,11 +426,11 @@ struct ContentView: View {
                     .coordinateSpace(name: ChatScrollMetrics.coordinateSpaceName)
                     .simultaneousGesture(
                         DragGesture()
-                            .updating($isDraggingChatScroll) { _, state, _ in
-                                state = true
-                            }
                             .onChanged { _ in
-                                handleChatScrollDragChanged()
+                                chatScrollController.beginUserDrag()
+                            }
+                            .onEnded { _ in
+                                chatScrollController.endUserDrag()
                             }
                     )
                     .simultaneousGesture(
@@ -279,13 +450,18 @@ struct ContentView: View {
                         }
                     )
                     .onChange(of: messages.count) { _, _ in
-                        scrollToBottom(proxy: proxy, animated: true)
-                    }
-                    .onChange(of: scrollVersion) { _, _ in
-                        scrollToBottom(proxy: proxy, animated: false)
+                        chatScrollController.requestImmediateAutoScroll(animated: true)
                     }
                     .onPreferenceChange(ChatScrollBottomDistancePreferenceKey.self) { distanceFromBottom in
-                        updateChatScrollBottomState(distanceFromBottom: distanceFromBottom)
+                        chatScrollController.scheduleBottomDistanceUpdate(distanceFromBottom)
+                    }
+                    .onAppear {
+                        chatScrollController.setScrollAction { animated in
+                            forceScrollToBottom(proxy: proxy, animated: animated)
+                        }
+                    }
+                    .onDisappear {
+                        chatScrollController.clearScrollAction()
                     }
                 }
             }
@@ -294,68 +470,50 @@ struct ContentView: View {
             inputBar
         }
         .overlay(alignment: .bottom) {
-            if shouldShowScrollToBottomButton {
-                Button {
-                    shouldAutoScroll = true
-                    requestImmediateAutoScroll()
-                } label: {
-                    Image(systemName: "arrow.down")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 36, height: 36)
-                        .background(Circle().fill(.regularMaterial))
-                        .overlay(
-                            Circle()
-                                .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                .padding(.bottom, 92)
-                .transition(.scale.combined(with: .opacity))
+            ScrollToBottomButtonOverlay(scrollController: chatScrollController) {
+                controlGlassIcon(
+                    systemName: "arrow.down",
+                    size: 15,
+                    weight: .semibold,
+                    frame: 36,
+                    tint: inputGlassTint
+                )
             }
         }
-        .animation(.easeOut(duration: 0.18), value: shouldAutoScroll)
     }
 
     private var inputBar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !pendingImageAttachments.isEmpty {
-                imageAttachmentPreview
-            }
+        inputGlassContainer {
+            VStack(alignment: .leading, spacing: 8) {
+                if !pendingImageAttachments.isEmpty {
+                    imageAttachmentPreview
+                }
 
-            if let imageSelectionError {
-                Text(imageSelectionError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 6)
-            }
+                if let imageSelectionError {
+                    Text(imageSelectionError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 6)
+                }
 
-            if isEditingMessage {
-                Text("正在修改消息")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-            }
+                if isEditingMessage {
+                    Text("正在修改消息")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                }
 
-            inputComposer
+                inputComposer
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
-        .background(
-            RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .fill(inputGlassTint)
-        )
         .overlay(
             RoundedRectangle(cornerRadius: 34, style: .continuous)
                 .stroke(
                     isImageDropTargeted ? Color.accentColor.opacity(0.56) : Color.secondary.opacity(0.12),
                     lineWidth: isImageDropTargeted ? 2 : 1
                 )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .stroke(inputGlassHighlight, lineWidth: 1)
-                .blendMode(.screen)
         )
         .onDrop(
             of: [UTType.image.identifier],
@@ -377,7 +535,12 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder
     private var inputComposer: some View {
+        inputComposerContent
+    }
+
+    private var inputComposerContent: some View {
         HStack(alignment: .center, spacing: 10) {
             inputOptionsMenu
 
@@ -405,11 +568,14 @@ struct ContentView: View {
                 Button {
                     cancelEditingMessage()
                 } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 19, weight: .semibold))
-                        .foregroundStyle(.red)
-                        .frame(width: 48, height: 48)
-                        .background(controlGlassBackground(cancelControlBackground))
+                    controlGlassIcon(
+                        systemName: "xmark",
+                        size: 19,
+                        weight: .semibold,
+                        frame: 48,
+                        tint: cancelControlBackground,
+                        foreground: .red
+                    )
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("取消修改")
@@ -423,10 +589,13 @@ struct ContentView: View {
                         saveEditingMessageAndRegenerate()
                     }
                 } label: {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 19, weight: .semibold))
-                        .frame(width: 48, height: 48)
-                        .background(controlGlassBackground(sendControlBackground))
+                    controlGlassIcon(
+                        systemName: "checkmark",
+                        size: 19,
+                        weight: .semibold,
+                        frame: 48,
+                        tint: sendControlBackground
+                    )
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSendMessage)
@@ -439,10 +608,13 @@ struct ContentView: View {
                     sendMessage()
                 }
             } label: {
-                Image(systemName: isGenerating ? "stop.fill" : "paperplane.fill")
-                    .font(.system(size: 19, weight: .semibold))
-                    .frame(width: 48, height: 48)
-                    .background(controlGlassBackground(sendControlBackground))
+                controlGlassIcon(
+                    systemName: isGenerating ? "stop.fill" : "paperplane.fill",
+                    size: 19,
+                    weight: .semibold,
+                    frame: 48,
+                    tint: sendControlBackground
+                )
             }
             .buttonStyle(.plain)
             .disabled(!isGenerating && !canSendMessage)
@@ -498,10 +670,13 @@ struct ContentView: View {
                 Label("管理模型", systemImage: "slider.horizontal.3")
             }
         } label: {
-            Image(systemName: "cube.transparent")
-                .font(.system(size: 19, weight: .semibold))
-                .frame(width: 48, height: 48)
-                .background(Circle().fill(inputControlBackground))
+            controlGlassIcon(
+                systemName: "cube.transparent",
+                size: 19,
+                weight: .semibold,
+                frame: 48,
+                tint: inputGlassTint
+            )
         }
         .disabled(isGenerating)
     }
@@ -582,11 +757,13 @@ struct ContentView: View {
                 }
             }
         } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 16, weight: .bold))
-                .frame(width: 34, height: 34)
-                .foregroundStyle(Color.primary)
-                .background(controlGlassBackground(inputControlBackground))
+            controlGlassIcon(
+                systemName: "plus",
+                size: 16,
+                weight: .bold,
+                frame: 34,
+                tint: inputGlassTint
+            )
         }
         .buttonStyle(.plain)
         .disabled(isGenerating)
@@ -749,8 +926,7 @@ struct ContentView: View {
         aiService.resetConversation(with: contextMessages, systemPrompt: configuration.systemPrompt)
         clearInputState()
         isGenerating = true
-        shouldAutoScroll = true
-        requestImmediateAutoScroll()
+        chatScrollController.returnToBottom()
         pendingReasoningText = ""
         pendingContentText = ""
         liveAssistantReasoningText = ""
@@ -1046,33 +1222,8 @@ struct ContentView: View {
         liveAssistantContentText = ""
     }
 
-    private func requestImmediateAutoScroll() {
-        guard shouldAutoScroll else { return }
-        cancelScheduledAutoScroll()
-        scrollVersion += 1
-    }
-
     private func scheduleStreamingAutoScroll() {
-        guard shouldAutoScroll else { return }
-        guard !isAutoScrollScheduled else { return }
-        isAutoScrollScheduled = true
-        autoScrollTask?.cancel()
-
-        autoScrollTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(32))
-            guard !Task.isCancelled else { return }
-            if shouldAutoScroll {
-                scrollVersion += 1
-            }
-            isAutoScrollScheduled = false
-            autoScrollTask = nil
-        }
-    }
-
-    private func cancelScheduledAutoScroll() {
-        autoScrollTask?.cancel()
-        autoScrollTask = nil
-        isAutoScrollScheduled = false
+        chatScrollController.scheduleStreamingAutoScroll()
     }
 
     private func prepareMarkdownCaches(for messages: [ChatMessage]) {
@@ -1312,32 +1463,6 @@ struct ContentView: View {
         return max(0, bottomY - viewportHeight)
     }
 
-    private func handleChatScrollDragChanged() {
-        guard !isScrolledToBottom else { return }
-        shouldAutoScroll = false
-        cancelScheduledAutoScroll()
-    }
-
-    private func updateChatScrollBottomState(distanceFromBottom: CGFloat) {
-        let isAtBottom = distanceFromBottom <= ChatScrollMetrics.bottomThreshold
-
-        if isScrolledToBottom != isAtBottom {
-            isScrolledToBottom = isAtBottom
-        }
-
-        if isAtBottom {
-            shouldAutoScroll = true
-        } else if isDraggingChatScroll {
-            shouldAutoScroll = false
-            cancelScheduledAutoScroll()
-        }
-    }
-
-    func scrollToBottom(proxy: ScrollViewProxy, animated: Bool = true) {
-        guard shouldAutoScroll else { return }
-        forceScrollToBottom(proxy: proxy, animated: animated)
-    }
-
     func forceScrollToBottom(proxy: ScrollViewProxy, animated: Bool = true) {
         if animated {
             withAnimation(.easeOut(duration: 0.2)) {
@@ -1453,8 +1578,7 @@ struct ContentView: View {
         pendingContentText = ""
         clearLiveStreamingText()
         isFlushScheduled = false
-        shouldAutoScroll = true
-        requestImmediateAutoScroll()
+        chatScrollController.returnToBottom()
         aiService.resetConversation(with: messages, systemPrompt: currentConfiguration.systemPrompt)
         ConversationStore.saveSelectedConversationID(conversation.id)
 
