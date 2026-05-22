@@ -31,7 +31,7 @@ struct ContentView: View {
     @State private var activeMessageActionID: UUID?
     @State private var didTapMessageBubble = false
     @State private var editingMessageID: UUID?
-    @FocusState private var isInputFocused: Bool
+    @State private var isInputFocused = false
 
     let aiService = AIService()
     private let maxImageAttachmentCount = 4
@@ -120,58 +120,66 @@ struct ContentView: View {
             Divider()
 
             ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 12) {
-                        ForEach($messages) { $message in
-                            MessageBubble(
-                                message: $message,
-                                isStreaming: isGenerating && activeAssistantMessageID == message.id,
-                                markdownRenderCache: markdownRenderCache[message.id],
-                                showsActions: activeMessageActionID == message.id,
-                                onSelect: {
-                                    selectMessageAction(for: message.id)
-                                },
-                                onRegenerate: {
-                                    regenerateAssistantResponse(message.id)
-                                },
-                                onEdit: {
-                                    startEditingUserMessage(message.id)
+                GeometryReader { scrollGeometry in
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            ForEach($messages) { $message in
+                                MessageBubble(
+                                    message: $message,
+                                    isStreaming: isGenerating && activeAssistantMessageID == message.id,
+                                    markdownRenderCache: markdownRenderCache[message.id],
+                                    showsActions: activeMessageActionID == message.id,
+                                    onSelect: {
+                                        selectMessageAction(for: message.id)
+                                    },
+                                    onRegenerate: {
+                                        regenerateAssistantResponse(message.id)
+                                    },
+                                    onEdit: {
+                                        startEditingUserMessage(message.id)
+                                    }
+                                )
+                                    .id(message.id)
+                            }
+
+                            Color.clear
+                                .frame(height: 1)
+                                .id("bottomAnchor")
+                        }
+                        .padding()
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: scrollGeometry.size.height,
+                            alignment: .top
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .simultaneousGesture(
+                        DragGesture().onChanged { _ in
+                            shouldAutoScroll = false
+                        }
+                    )
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            hideKeyboard()
+                            DispatchQueue.main.async {
+                                if didTapMessageBubble {
+                                    didTapMessageBubble = false
+                                    return
                                 }
-                            )
-                                .id(message.id)
-                        }
 
-                        Color.clear
-                            .frame(height: 1)
-                            .id("bottomAnchor")
-                    }
-                    .padding()
-                }
-                .simultaneousGesture(
-                    DragGesture().onChanged { _ in
-                        shouldAutoScroll = false
-                    }
-                )
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        hideKeyboard()
-                        DispatchQueue.main.async {
-                            if didTapMessageBubble {
-                                didTapMessageBubble = false
-                                return
-                            }
-
-                            withAnimation(.easeOut(duration: 0.16)) {
-                                activeMessageActionID = nil
+                                withAnimation(.easeOut(duration: 0.16)) {
+                                    activeMessageActionID = nil
+                                }
                             }
                         }
+                    )
+                    .onChange(of: messages.count) { _, _ in
+                        forceScrollToBottom(proxy: proxy, animated: true)
                     }
-                )
-                .onChange(of: messages.count) { _, _ in
-                    forceScrollToBottom(proxy: proxy, animated: true)
-                }
-                .onChange(of: scrollVersion) { _, _ in
-                    scrollToBottom(proxy: proxy, animated: false)
+                    .onChange(of: scrollVersion) { _, _ in
+                        scrollToBottom(proxy: proxy, animated: false)
+                    }
                 }
             }
 
@@ -263,6 +271,11 @@ struct ContentView: View {
                         .background(Circle().fill(inputControlBackground))
                 }
                 .buttonStyle(.plain)
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        hideKeyboard()
+                    }
+                )
                 .disabled(isGenerating || !currentConfiguration.selectedModelSupportsImages)
                 .opacity(currentConfiguration.selectedModelSupportsImages ? 1 : 0.35)
 
@@ -371,6 +384,7 @@ struct ContentView: View {
             Divider()
 
             Button {
+                hideKeyboard()
                 showConfiguration = true
             } label: {
                 Label("管理模型", systemImage: "slider.horizontal.3")
@@ -401,6 +415,7 @@ struct ContentView: View {
             Divider()
 
             Button {
+                hideKeyboard()
                 showConfiguration = true
             } label: {
                 Label("管理模型", systemImage: "slider.horizontal.3")
@@ -456,6 +471,7 @@ struct ContentView: View {
     private var configurationBar: some View {
         HStack(spacing: 12) {
             Button {
+                hideKeyboard()
                 showConversationSidebar = true
             } label: {
                 Image(systemName: "sidebar.left")
@@ -474,6 +490,7 @@ struct ContentView: View {
             Spacer()
 
             Button {
+                hideKeyboard()
                 createConversation()
             } label: {
                 Image(systemName: "square.and.pencil")
@@ -483,6 +500,7 @@ struct ContentView: View {
             .disabled(isGenerating || !canCreateConversation)
 
             Button {
+                hideKeyboard()
                 showConfiguration = true
             } label: {
                 Image(systemName: "gearshape.fill")
@@ -500,6 +518,7 @@ struct ContentView: View {
                 if !showConversationSidebar,
                    value.translation.width > 46,
                    abs(value.translation.width) > abs(value.translation.height) * 1.6 {
+                    hideKeyboard()
                     showConversationSidebar = true
                 }
             }
@@ -919,6 +938,7 @@ struct ContentView: View {
 
     func hideKeyboard() {
         isInputFocused = false
+        KeyboardDismissal.dismissNowAndDeferred()
     }
 
     private func loadSelectedImages(from items: [PhotosPickerItem]) {
@@ -2078,7 +2098,7 @@ enum ChatMarkdownPreprocessor {
 struct ImagePastingTextView: UIViewRepresentable {
     @Binding var text: String
 
-    let isFocused: FocusState<Bool>.Binding
+    @Binding var isFocused: Bool
     let isDisabled: Bool
     let placeholder: String
     let onPasteImages: ([UIImage]) -> Void
@@ -2112,9 +2132,9 @@ struct ImagePastingTextView: UIViewRepresentable {
         textView.accessibilityLabel = placeholder
         textView.updatePlaceholderVisibility()
 
-        if isFocused.wrappedValue, !textView.isFirstResponder {
+        if isFocused, !textView.isFirstResponder {
             textView.becomeFirstResponder()
-        } else if !isFocused.wrappedValue, textView.isFirstResponder {
+        } else if !isFocused, textView.isFirstResponder {
             textView.resignFirstResponder()
         }
     }
@@ -2133,14 +2153,14 @@ struct ImagePastingTextView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, isFocused: isFocused)
+        Coordinator(text: $text, isFocused: $isFocused)
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         private let text: Binding<String>
-        private let isFocused: FocusState<Bool>.Binding
+        private let isFocused: Binding<Bool>
 
-        init(text: Binding<String>, isFocused: FocusState<Bool>.Binding) {
+        init(text: Binding<String>, isFocused: Binding<Bool>) {
             self.text = text
             self.isFocused = isFocused
         }

@@ -49,7 +49,7 @@ struct AIConfigurationView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") {
-                        focusedField = nil
+                        hideKeyboard()
                         saveCurrentState()
                         dismiss()
                     }
@@ -67,14 +67,14 @@ struct AIConfigurationView: View {
             }
             
             Button {
-                focusedField = nil
+                hideKeyboard()
                 addConfiguration()
             } label: {
                 Label("新增配置", systemImage: "plus")
             }
             
             Button(role: .destructive) {
-                focusedField = nil
+                hideKeyboard()
                 deleteCurrentConfiguration()
             } label: {
                 Label("删除当前配置", systemImage: "trash")
@@ -151,14 +151,14 @@ struct AIConfigurationView: View {
                     .autocorrectionDisabled()
                 
                 Button("添加") {
-                    focusedField = nil
+                    hideKeyboard()
                     addModel()
                 }
                 .disabled(newModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             
             Button {
-                focusedField = nil
+                hideKeyboard()
                 fetchModels()
             } label: {
                 if isFetchingModels {
@@ -293,6 +293,11 @@ struct AIConfigurationView: View {
         if let selectedConfigurationID {
             AIConfigurationStore.saveSelectedConfigurationID(selectedConfigurationID)
         }
+    }
+
+    private func hideKeyboard() {
+        focusedField = nil
+        KeyboardDismissal.dismissNowAndDeferred()
     }
     
     private func addConfiguration() {
