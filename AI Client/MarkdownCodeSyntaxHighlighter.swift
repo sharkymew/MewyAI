@@ -37,34 +37,29 @@ private struct ChatCodeLineHighlighter {
     }
 
     func highlight(_ code: String) -> Text {
-        let lines = code.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var output = Text("")
-
-        for (index, line) in lines.enumerated() {
-            output = output + highlightLine(line)
-            if index < lines.count - 1 {
-                output = output + Text("\n")
-            }
-        }
-
-        return output
-    }
-
-    private func highlightLine(_ line: String) -> Text {
-        let characters = Array(line)
+        let characters = Array(code)
         var index = 0
         var output = Text("")
 
         while index < characters.count {
+            if supportsBlockComments, characters.matches("/*", at: index) {
+                let range = blockCommentRange(in: characters, from: index)
+                output = output + Text(String(characters[range])).foregroundColor(Self.commentColor)
+                index = range.upperBound
+                continue
+            }
+
             if commentMarker(in: characters, at: index) != nil {
-                let comment = String(characters[index...])
-                return output + Text(comment).foregroundColor(Self.commentColor)
+                let range = lineCommentRange(in: characters, from: index)
+                output = output + Text(String(characters[range])).foregroundColor(Self.commentColor)
+                index = range.upperBound
+                continue
             }
 
             let character = characters[index]
 
-            if isStringDelimiter(character) {
-                let range = stringRange(in: characters, from: index, delimiter: character)
+            if let delimiter = stringDelimiter(in: characters, at: index) {
+                let range = stringRange(in: characters, from: index, delimiter: delimiter)
                 output = output + Text(String(characters[range])).foregroundColor(Self.stringColor)
                 index = range.upperBound
                 continue
@@ -110,8 +105,43 @@ private struct ChatCodeLineHighlighter {
         }
     }
 
-    private func stringRange(in characters: [Character], from start: Int, delimiter: Character) -> Range<Int> {
-        var index = start + 1
+    private func lineCommentRange(in characters: [Character], from start: Int) -> Range<Int> {
+        var index = start
+        while index < characters.count, characters[index] != "\n" {
+            index += 1
+        }
+        return start..<index
+    }
+
+    private func blockCommentRange(in characters: [Character], from start: Int) -> Range<Int> {
+        var index = start + 2
+        while index < characters.count {
+            if characters.matches("*/", at: index) {
+                return start..<(index + 2)
+            }
+            index += 1
+        }
+        return start..<characters.count
+    }
+
+    private func stringDelimiter(in characters: [Character], at index: Int) -> StringDelimiter? {
+        if supportsTripleQuotedStrings {
+            for marker in ["\"\"\"", "'''"] where characters.matches(marker, at: index) {
+                return StringDelimiter(marker: marker, allowsNewlines: true)
+            }
+        }
+        if supportsBacktickStrings, characters.matches("`", at: index) {
+            return StringDelimiter(marker: "`", allowsNewlines: true)
+        }
+        let character = characters[index]
+        if character == "\"" || character == "'" {
+            return StringDelimiter(marker: String(character), allowsNewlines: false)
+        }
+        return nil
+    }
+
+    private func stringRange(in characters: [Character], from start: Int, delimiter: StringDelimiter) -> Range<Int> {
+        var index = start + delimiter.marker.count
         var isEscaped = false
 
         while index < characters.count {
@@ -121,8 +151,10 @@ private struct ChatCodeLineHighlighter {
                 isEscaped = false
             } else if character == "\\" {
                 isEscaped = true
-            } else if character == delimiter {
-                return start..<(index + 1)
+            } else if characters.matches(delimiter.marker, at: index) {
+                return start..<(index + delimiter.marker.count)
+            } else if !delimiter.allowsNewlines, character == "\n" {
+                return start..<index
             }
 
             index += 1
@@ -161,18 +193,28 @@ private struct ChatCodeLineHighlighter {
         return start..<index
     }
 
-    private func isStringDelimiter(_ character: Character) -> Bool {
-        if character == "\"" || character == "'" {
-            return true
-        }
-
-        return language == "javascript" || language == "js" || language == "typescript" || language == "ts"
-            ? character == "`"
-            : false
-    }
-
     private func isIdentifierStart(_ character: Character) -> Bool {
         character.isLetter || character == "_"
+    }
+
+    private var supportsTripleQuotedStrings: Bool {
+        language == "python" || language == "py" || language == "swift"
+    }
+
+    private var supportsBacktickStrings: Bool {
+        language == "javascript" || language == "js" || language == "typescript" || language == "ts"
+            || language == "tsx" || language == "jsx" || language == "shell" || language == "sh"
+            || language == "bash" || language == "zsh"
+    }
+
+    private var supportsBlockComments: Bool {
+        switch language {
+        case "swift", "javascript", "js", "typescript", "ts", "tsx", "jsx", "java",
+            "kotlin", "c", "cpp", "c++", "cs", "csharp", "go", "rust", "css":
+            return true
+        default:
+            return false
+        }
     }
 
     private static func lineCommentMarkers(for language: String) -> [String] {
@@ -234,6 +276,11 @@ private struct ChatCodeLineHighlighter {
         "extends", "implements", "interface", "namespace", "new", "of", "readonly",
         "require", "string", "symbol", "this", "type", "typeof", "void"
     ])
+
+    private struct StringDelimiter {
+        let marker: String
+        let allowsNewlines: Bool
+    }
 }
 
 private extension Array where Element == Character {
