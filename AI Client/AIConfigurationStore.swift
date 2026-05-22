@@ -36,12 +36,15 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
 }
 
 struct AIConfiguration: Identifiable, Codable, Equatable {
+    static let defaultSystemPrompt = "你是一个友好且有帮助的AI助手。"
+
     var id: UUID
     var name: String
     var baseURL: String
     var endpoint: String
     var apiKey: String
     var customHeaders: String
+    var systemPrompt: String
     var models: [AIModelConfiguration]
     var selectedModel: String
     var reasoningEnabled: Bool
@@ -71,6 +74,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         endpoint: String = "chat/completions",
         apiKey: String = "",
         customHeaders: String = "",
+        systemPrompt: String = AIConfiguration.defaultSystemPrompt,
         models: [AIModelConfiguration] = [AIModelConfiguration(name: "deepseek-v4-pro")],
         selectedModel: String = "deepseek-v4-pro",
         reasoningEnabled: Bool = true,
@@ -86,6 +90,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
             KeychainService.saveAPIKey(apiKey, for: id)
         }
         self.customHeaders = customHeaders
+        self.systemPrompt = systemPrompt
         self.models = models
         self.selectedModel = selectedModel
         self.reasoningEnabled = reasoningEnabled
@@ -99,6 +104,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         case baseURL
         case endpoint
         case customHeaders
+        case systemPrompt
         case models
         case selectedModel
         case reasoningEnabled
@@ -115,6 +121,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "默认配置"
         customHeaders = try container.decodeIfPresent(String.self, forKey: .customHeaders) ?? ""
+        systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? Self.defaultSystemPrompt
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         reasoningEnabled = try container.decodeIfPresent(Bool.self, forKey: .reasoningEnabled) ?? true
         reasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort) ?? .medium

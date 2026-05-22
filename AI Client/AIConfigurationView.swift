@@ -19,6 +19,7 @@ struct AIConfigurationView: View {
         case endpoint
         case apiKey
         case customHeaders
+        case systemPrompt
         case newModel
     }
     
@@ -39,8 +40,14 @@ struct AIConfigurationView: View {
                 requestSection
                 authSection
                 customHeadersSection
+                promptSection
                 modelsSection
             }
+            .background(
+                KeyboardDismissTapLayer {
+                    hideKeyboard()
+                }
+            )
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("AI 配置")
             .onAppear {
@@ -139,6 +146,28 @@ struct AIConfigurationView: View {
             }
         } footer: {
             Text("每行一个请求头，格式为 Header-Name: value。自定义请求头会覆盖同名默认请求头。")
+        }
+    }
+
+    private var promptSection: some View {
+        Section {
+            TextEditor(text: selectedSystemPromptBinding)
+                .focused($focusedField, equals: .systemPrompt)
+                .frame(minHeight: 140)
+                .textInputAutocapitalization(.sentences)
+                .autocorrectionDisabled()
+
+            Button("恢复默认提示词") {
+                hideKeyboard()
+                updateSelectedConfiguration { configuration in
+                    configuration.systemPrompt = AIConfiguration.defaultSystemPrompt
+                }
+            }
+            .disabled(selectedConfiguration?.systemPrompt == AIConfiguration.defaultSystemPrompt)
+        } header: {
+            Text("预设提示词")
+        } footer: {
+            Text("这里的内容会作为每次对话的 system message 发送。留空则不发送预设提示词。")
         }
     }
     
@@ -255,6 +284,10 @@ struct AIConfigurationView: View {
     
     private var selectedCustomHeadersBinding: Binding<String> {
         binding(\.customHeaders)
+    }
+
+    private var selectedSystemPromptBinding: Binding<String> {
+        binding(\.systemPrompt)
     }
     
     private func binding(_ keyPath: WritableKeyPath<AIConfiguration, String>) -> Binding<String> {

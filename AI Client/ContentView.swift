@@ -628,7 +628,7 @@ struct ContentView: View {
             return
         }
 
-        aiService.resetConversation(with: contextMessages)
+        aiService.resetConversation(with: contextMessages, systemPrompt: configuration.systemPrompt)
         clearInputState()
         isGenerating = true
         shouldAutoScroll = true
@@ -1171,7 +1171,7 @@ struct ContentView: View {
             selectedConversationID = conversation.id
             messages = []
             resetMarkdownCache(for: messages)
-            aiService.resetConversation(with: [])
+            aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
             ConversationStore.saveSelectedConversationID(conversation.id)
             ConversationStore.saveConversations(conversations)
         }
@@ -1218,7 +1218,7 @@ struct ContentView: View {
         isFlushScheduled = false
         shouldAutoScroll = true
         scrollVersion += 1
-        aiService.resetConversation(with: messages)
+        aiService.resetConversation(with: messages, systemPrompt: currentConfiguration.systemPrompt)
         ConversationStore.saveSelectedConversationID(conversation.id)
 
         if closesSidebar {
@@ -1270,7 +1270,7 @@ struct ContentView: View {
         activeAssistantMessageID = nil
         activeMessageActionID = nil
         editingMessageID = nil
-        aiService.resetConversation(with: [])
+        aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
         ConversationStore.saveSelectedConversationID(conversation.id)
         ConversationStore.saveConversations(conversations)
 
@@ -1302,7 +1302,7 @@ struct ContentView: View {
             pendingContentText = ""
             isFlushScheduled = false
             showConversationSidebar = false
-            aiService.resetConversation(with: [])
+            aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
             ConversationStore.saveSelectedConversationID(conversation.id)
             ConversationStore.saveConversations(conversations)
             return
@@ -1324,7 +1324,7 @@ struct ContentView: View {
             imageSelectionError = nil
             activeMessageActionID = nil
             editingMessageID = nil
-            aiService.resetConversation(with: messages)
+            aiService.resetConversation(with: messages, systemPrompt: currentConfiguration.systemPrompt)
             ConversationStore.saveSelectedConversationID(nextConversation.id)
         }
 

@@ -212,12 +212,9 @@ enum AIServiceError: LocalizedError {
 }
 
 class AIService {
-    private var conversationHistory: [ChatRequestMessage] = [
-        ChatRequestMessage(
-            role: "system",
-            text: "你是一个友好且有帮助的AI助手。"
-        )
-    ]
+    private var conversationHistory = AIService.initialConversationHistory(
+        systemPrompt: AIConfiguration.defaultSystemPrompt
+    )
     
     private var streamingTask: Task<Void, Never>?
     
@@ -226,13 +223,11 @@ class AIService {
         streamingTask = nil
     }
     
-    func resetConversation(with messages: [ChatMessage]) {
-        conversationHistory = [
-            ChatRequestMessage(
-                role: "system",
-                text: "你是一个友好且有帮助的AI助手。"
-            )
-        ]
+    func resetConversation(
+        with messages: [ChatMessage],
+        systemPrompt: String = AIConfiguration.defaultSystemPrompt
+    ) {
+        conversationHistory = Self.initialConversationHistory(systemPrompt: systemPrompt)
         
         conversationHistory.append(
             contentsOf: messages.compactMap { message in
@@ -249,6 +244,12 @@ class AIService {
                 )
             }
         )
+    }
+
+    private static func initialConversationHistory(systemPrompt: String) -> [ChatRequestMessage] {
+        let trimmedPrompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty else { return [] }
+        return [ChatRequestMessage(role: "system", text: trimmedPrompt)]
     }
     
     func fetchModels(
@@ -342,7 +343,7 @@ class AIService {
         let titleMessages = [
             ChatRequestMessage(
                 role: "system",
-                text: "请根据对话内容生成一个简短中文标题。只输出标题，不要解释，不要加引号，最多12个字。"
+                text: "请根据对话内容生成一个中文标题。只输出标题文字，不要解释，不要引号、方框、括号、Markdown、项目符号或任何额外格式，最多10个字。"
             ),
             ChatRequestMessage(role: "user", text: transcript)
         ]
@@ -379,14 +380,32 @@ class AIService {
                     return
                 }
                 
-                let title = decoded.choices.first?.message.content
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'“”‘’"))
+                let title = Self.sanitizedConversationTitle(decoded.choices.first?.message.content)
                 
                 completion(title?.isEmpty == false ? title : nil)
             }
         }
         .resume()
+    }
+
+    private nonisolated static func sanitizedConversationTitle(_ rawTitle: String?) -> String? {
+        guard let rawTitle else { return nil }
+
+        let formatCharacters = CharacterSet(charactersIn: "\"'“”‘’[]【】()（）{}《》<>#*-_`·•「」『』")
+        let words = rawTitle
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines.union(formatCharacters)) }
+            .filter { !$0.isEmpty }
+        var title = (words.first ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(formatCharacters))
+        for prefix in ["标题：", "标题:", "题目：", "题目:"] where title.hasPrefix(prefix) {
+            title.removeFirst(prefix.count)
+            title = title.trimmingCharacters(in: .whitespacesAndNewlines.union(formatCharacters))
+            break
+        }
+
+        guard !title.isEmpty else { return nil }
+        return String(title.prefix(10))
     }
     
     func sendMessage(
