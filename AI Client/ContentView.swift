@@ -1555,10 +1555,10 @@ struct AssistantMarkdownText: View {
                 switch segment.kind {
                 case let .text(text):
                     if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        SelectableTextView(
-                            text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                        SelectableMarkdownTextView(
+                            markdown: text.trimmingCharacters(in: .whitespacesAndNewlines),
                             textColor: .label,
-                            font: .preferredFont(forTextStyle: .body),
+                            baseFont: .preferredFont(forTextStyle: .body),
                             textAlignment: .left
                         )
                     }
