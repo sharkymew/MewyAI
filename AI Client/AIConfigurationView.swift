@@ -151,23 +151,49 @@ struct AIConfigurationView: View {
 
     private var promptSection: some View {
         Section {
-            TextEditor(text: selectedSystemPromptBinding)
+            Picker("当前提示词", selection: selectedPromptPresetIDBinding) {
+                ForEach(selectedConfiguration?.promptPresets ?? []) { promptPreset in
+                    Text(promptPreset.displayName).tag(promptPreset.id)
+                }
+            }
+
+            TextField("提示词名称", text: selectedPromptPresetNameBinding)
+                .focused($focusedField, equals: .systemPrompt)
+
+            TextEditor(text: selectedPromptPresetContentBinding)
                 .focused($focusedField, equals: .systemPrompt)
                 .frame(minHeight: 140)
                 .textInputAutocapitalization(.sentences)
                 .autocorrectionDisabled()
 
-            Button("恢复默认提示词") {
+            Button("新增提示词") {
                 hideKeyboard()
                 updateSelectedConfiguration { configuration in
-                    configuration.systemPrompt = AIConfiguration.defaultSystemPrompt
+                    configuration.addPromptPreset()
+                }
+            }
+
+            Button("恢复默认内容") {
+                hideKeyboard()
+                updateSelectedConfiguration { configuration in
+                    configuration.restoreDefaultSelectedPrompt()
                 }
             }
             .disabled(selectedConfiguration?.systemPrompt == AIConfiguration.defaultSystemPrompt)
+
+            Button(role: .destructive) {
+                hideKeyboard()
+                updateSelectedConfiguration { configuration in
+                    configuration.deleteSelectedPromptPreset()
+                }
+            } label: {
+                Label("删除当前提示词", systemImage: "trash")
+            }
+            .disabled((selectedConfiguration?.promptPresets.count ?? 0) <= 1)
         } header: {
-            Text("预设提示词")
+            Text("提示词")
         } footer: {
-            Text("这里的内容会作为每次对话的 system message 发送。留空则不发送预设提示词。")
+            Text("当前选中的内容会作为每次对话的 system message 发送。留空则不发送提示词。")
         }
     }
     
@@ -286,8 +312,41 @@ struct AIConfigurationView: View {
         binding(\.customHeaders)
     }
 
-    private var selectedSystemPromptBinding: Binding<String> {
-        binding(\.systemPrompt)
+    private var selectedPromptPresetIDBinding: Binding<UUID> {
+        Binding(
+            get: {
+                selectedConfiguration?.selectedPromptPreset?.id
+                    ?? selectedConfiguration?.promptPresets.first?.id
+                    ?? UUID()
+            },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    configuration.selectPromptPreset(newValue)
+                }
+            }
+        )
+    }
+
+    private var selectedPromptPresetNameBinding: Binding<String> {
+        Binding(
+            get: { selectedConfiguration?.selectedPromptPreset?.name ?? "" },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    configuration.updateSelectedPromptName(newValue)
+                }
+            }
+        )
+    }
+
+    private var selectedPromptPresetContentBinding: Binding<String> {
+        Binding(
+            get: { selectedConfiguration?.selectedPromptPreset?.content ?? "" },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    configuration.updateSelectedPromptContent(newValue)
+                }
+            }
+        )
     }
     
     private func binding(_ keyPath: WritableKeyPath<AIConfiguration, String>) -> Binding<String> {

@@ -45,6 +45,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     var apiKey: String
     var customHeaders: String
     var systemPrompt: String
+    var promptPresets: [AIPromptPreset]
+    var selectedPromptPresetID: UUID
     var models: [AIModelConfiguration]
     var selectedModel: String
     var reasoningEnabled: Bool
@@ -66,6 +68,10 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     var selectedModelSupportsImages: Bool {
         selectedModelConfiguration?.supportsImages == true
     }
+
+    var selectedPromptPreset: AIPromptPreset? {
+        promptPresets.first { $0.id == selectedPromptPresetID } ?? promptPresets.first
+    }
     
     init(
         id: UUID = UUID(),
@@ -75,6 +81,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         apiKey: String = "",
         customHeaders: String = "",
         systemPrompt: String = AIConfiguration.defaultSystemPrompt,
+        promptPresets: [AIPromptPreset]? = nil,
+        selectedPromptPresetID: UUID? = nil,
         models: [AIModelConfiguration] = [AIModelConfiguration(name: "deepseek-v4-pro")],
         selectedModel: String = "deepseek-v4-pro",
         reasoningEnabled: Bool = true,
@@ -90,7 +98,14 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
             KeychainService.saveAPIKey(apiKey, for: id)
         }
         self.customHeaders = customHeaders
-        self.systemPrompt = systemPrompt
+        let promptSelection = Self.normalizedPromptSelection(
+            promptPresets: promptPresets,
+            selectedPromptPresetID: selectedPromptPresetID,
+            fallbackSystemPrompt: systemPrompt
+        )
+        self.systemPrompt = promptSelection.systemPrompt
+        self.promptPresets = promptSelection.presets
+        self.selectedPromptPresetID = promptSelection.selectedID
         self.models = models
         self.selectedModel = selectedModel
         self.reasoningEnabled = reasoningEnabled
@@ -105,6 +120,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         case endpoint
         case customHeaders
         case systemPrompt
+        case promptPresets
+        case selectedPromptPresetID
         case models
         case selectedModel
         case reasoningEnabled
@@ -121,7 +138,17 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "默认配置"
         customHeaders = try container.decodeIfPresent(String.self, forKey: .customHeaders) ?? ""
-        systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? Self.defaultSystemPrompt
+        let decodedSystemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? Self.defaultSystemPrompt
+        let decodedPromptPresets = try container.decodeIfPresent([AIPromptPreset].self, forKey: .promptPresets)
+        let decodedSelectedPromptID = try container.decodeIfPresent(UUID.self, forKey: .selectedPromptPresetID)
+        let promptSelection = Self.normalizedPromptSelection(
+            promptPresets: decodedPromptPresets,
+            selectedPromptPresetID: decodedSelectedPromptID,
+            fallbackSystemPrompt: decodedSystemPrompt
+        )
+        systemPrompt = promptSelection.systemPrompt
+        promptPresets = promptSelection.presets
+        selectedPromptPresetID = promptSelection.selectedID
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         reasoningEnabled = try container.decodeIfPresent(Bool.self, forKey: .reasoningEnabled) ?? true
         reasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort) ?? .medium
@@ -186,7 +213,6 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
                 return (String(trimmedURL.dropLast(suffix.count)), endpoint)
             }
         }
-        
         return (trimmedURL.isEmpty ? "https://api.deepseek.com" : trimmedURL, "chat/completions")
     }
 }
