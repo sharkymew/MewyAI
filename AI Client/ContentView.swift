@@ -26,6 +26,7 @@ struct ContentView: View {
     @State private var markdownRenderCache: [UUID: MarkdownRenderCacheEntry] = [:]
     @State private var markdownRenderTasks: [UUID: Task<Void, Never>] = [:]
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var isPhotoPickerPresented = false
     @State private var pendingImageAttachments: [ChatImageAttachment] = []
     @State private var imageSelectionError: String?
     @State private var isImageDropTargeted = false
@@ -33,6 +34,7 @@ struct ContentView: View {
     @State private var didTapMessageBubble = false
     @State private var editingMessageID: UUID?
     @State private var isInputFocused = false
+    @State private var inputFocusRequestID = 0
     @State private var hasLoadedInitialConversation = false
 
     let aiService = AIService()
@@ -50,6 +52,10 @@ struct ContentView: View {
         !canSendMessage && !isGenerating
             ? inputControlBackground
             : Color.accentColor.opacity(colorScheme == .dark ? 0.26 : 0.16)
+    }
+
+    private var cancelControlBackground: Color {
+        Color.red.opacity(colorScheme == .dark ? 0.24 : 0.12)
     }
 
     private var canSendMessage: Bool {
@@ -107,6 +113,12 @@ struct ContentView: View {
         .sheet(isPresented: $showConfiguration) {
             AIConfigurationView()
         }
+        .photosPicker(
+            isPresented: $isPhotoPickerPresented,
+            selection: $selectedPhotoItems,
+            maxSelectionCount: maxImageAttachmentCount,
+            matching: .images
+        )
         .onChange(of: showConfiguration) { _, isPresented in
             if !isPresented {
                 reloadConfigurations()
@@ -169,12 +181,13 @@ struct ContentView: View {
                     )
                     .simultaneousGesture(
                         TapGesture().onEnded {
-                            hideKeyboard()
                             DispatchQueue.main.async {
                                 if didTapMessageBubble {
                                     didTapMessageBubble = false
                                     return
                                 }
+
+                                hideKeyboard()
 
                                 withAnimation(.easeOut(duration: 0.16)) {
                                     activeMessageActionID = nil
@@ -190,7 +203,8 @@ struct ContentView: View {
                     }
                 }
             }
-
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             inputBar
         }
         .overlay(alignment: .bottom) {
@@ -230,107 +244,19 @@ struct ContentView: View {
             }
 
             if isEditingMessage {
-                HStack(spacing: 10) {
-                    Text("正在修改消息")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-
-                    Button("取消") {
-                        cancelEditingMessage()
-                    }
+                Text("正在修改消息")
                     .font(.caption)
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 6)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
-                ImagePastingTextView(
-                    text: $inputText,
-                    isFocused: $isInputFocused,
-                    isDisabled: isGenerating,
-                    placeholder: "输入消息...",
-                    onPasteImages: pasteImagesFromInputMenu
-                )
-                .font(.body)
-                .foregroundStyle(Color.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(inputFieldBackground)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
-                )
-
-                PhotosPicker(
-                    selection: $selectedPhotoItems,
-                    maxSelectionCount: maxImageAttachmentCount,
-                    matching: .images
-                ) {
-                    Image(systemName: "photo")
-                        .font(.system(size: 19, weight: .semibold))
-                        .frame(width: 48, height: 48)
-                        .background(Circle().fill(inputControlBackground))
-                }
-                .buttonStyle(.plain)
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        hideKeyboard()
-                    }
-                )
-                .disabled(isGenerating || !currentConfiguration.selectedModelSupportsImages)
-                .opacity(currentConfiguration.selectedModelSupportsImages ? 1 : 0.35)
-
-                if currentConfiguration.selectedModelSupportsReasoning {
-                    reasoningEffortMenu
-                }
-
-                if isEditingMessage {
-                    Menu {
-                        Button("仅修改") {
-                            saveEditingMessageOnly()
-                        }
-
-                        Button("修改并发送") {
-                            saveEditingMessageAndRegenerate()
-                        }
-                    } label: {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 19, weight: .semibold))
-                            .frame(width: 48, height: 48)
-                            .background(Circle().fill(sendControlBackground))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSendMessage)
-                } else {
-                    Button {
-                        if isGenerating {
-                            stopGenerating()
-                        } else {
-                            sendMessage()
-                        }
-                    } label: {
-                        Image(systemName: isGenerating ? "stop.fill" : "paperplane.fill")
-                            .font(.system(size: 19, weight: .semibold))
-                            .frame(width: 48, height: 48)
-                            .background(Circle().fill(sendControlBackground))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!isGenerating && !canSendMessage)
-                }
-            }
+            inputComposer
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .fill(.regularMaterial)
+                .fill(inputFieldBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 34, style: .continuous)
@@ -344,9 +270,85 @@ struct ContentView: View {
             isTargeted: $isImageDropTargeted,
             perform: handleDroppedImages
         )
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 8)
+    }
+
+    private var inputComposer: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            inputOptionsMenu
+
+            ImagePastingTextView(
+                text: $inputText,
+                isFocused: $isInputFocused,
+                focusRequestID: inputFocusRequestID,
+                isDisabled: isGenerating,
+                placeholder: "输入消息...",
+                onPasteImages: pasteImagesFromInputMenu
+            )
+            .font(.body)
+            .foregroundStyle(Color.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 11)
+
+            inputActionControl
+        }
+    }
+
+    @ViewBuilder
+    private var inputActionControl: some View {
+        if isEditingMessage {
+            HStack(spacing: 8) {
+                Button {
+                    cancelEditingMessage()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(.red)
+                        .frame(width: 48, height: 48)
+                        .background(Circle().fill(cancelControlBackground))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("取消修改")
+
+                Menu {
+                    Button("仅修改") {
+                        saveEditingMessageOnly()
+                    }
+
+                    Button("修改并发送") {
+                        saveEditingMessageAndRegenerate()
+                    }
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 19, weight: .semibold))
+                        .frame(width: 48, height: 48)
+                        .background(Circle().fill(sendControlBackground))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSendMessage)
+            }
+        } else {
+            Button {
+                if isGenerating {
+                    stopGenerating()
+                } else {
+                    sendMessage()
+                }
+            } label: {
+                Image(systemName: isGenerating ? "stop.fill" : "paperplane.fill")
+                    .font(.system(size: 19, weight: .semibold))
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(sendControlBackground))
+            }
+            .buttonStyle(.plain)
+            .disabled(!isGenerating && !canSendMessage)
+        }
     }
 
     private var imageAttachmentPreview: some View {
@@ -443,37 +445,55 @@ struct ContentView: View {
         .disabled(isGenerating)
     }
 
-    private var reasoningEffortMenu: some View {
+    private var inputOptionsMenu: some View {
         Menu {
             Button {
-                setReasoningEnabled(!currentConfiguration.reasoningEnabled)
+                isPhotoPickerPresented = true
             } label: {
                 Label(
-                    currentConfiguration.reasoningEnabled ? "关闭思考" : "开启思考",
-                    systemImage: currentConfiguration.reasoningEnabled ? "brain.head.profile" : "brain"
+                    currentConfiguration.selectedModelSupportsImages ? "上传图片" : "当前模型不支持图片",
+                    systemImage: "photo"
                 )
             }
+            .disabled(!currentConfiguration.selectedModelSupportsImages)
 
-            Divider()
+            if currentConfiguration.selectedModelSupportsReasoning {
+                Divider()
 
-            ForEach(ReasoningEffort.allCases) { effort in
                 Button {
-                    selectReasoningEffort(effort)
+                    setReasoningEnabled(false)
                 } label: {
-                    if effort == currentConfiguration.reasoningEffort {
-                        Label(effort.title, systemImage: "checkmark")
+                    if currentConfiguration.reasoningEnabled {
+                        Text("思考强度：关闭")
                     } else {
-                        Text(effort.title)
+                        Label("思考强度：关闭", systemImage: "checkmark")
+                    }
+                }
+
+                ForEach(ReasoningEffort.allCases) { effort in
+                    Button {
+                        selectReasoningEffort(effort)
+                    } label: {
+                        if currentConfiguration.reasoningEnabled,
+                           effort == currentConfiguration.reasoningEffort {
+                            Label("思考强度：\(effort.title)", systemImage: "checkmark")
+                        } else {
+                            Text("思考强度：\(effort.title)")
+                        }
                     }
                 }
             }
         } label: {
-            Image(systemName: currentConfiguration.reasoningEnabled ? "brain.head.profile" : "brain")
-                .font(.system(size: 19, weight: .semibold))
-                .frame(width: 48, height: 48)
+            Image(systemName: "plus")
+                .font(.system(size: 16, weight: .bold))
+                .frame(width: 34, height: 34)
+                .foregroundStyle(Color.primary)
                 .background(Circle().fill(inputControlBackground))
         }
+        .buttonStyle(.plain)
         .disabled(isGenerating)
+        .opacity(isGenerating ? 0.45 : 1)
+        .accessibilityLabel("更多输入选项")
     }
 
     private var configurationBar: some View {
@@ -722,22 +742,43 @@ struct ContentView: View {
         imageSelectionError = nil
         editingMessageID = nil
         isInputFocused = false
+        inputFocusRequestID += 1
     }
 
     private func startEditingUserMessage(_ id: UUID) {
+        didTapMessageBubble = true
+
         guard !isGenerating,
               editingMessageID != id,
               let message = messages.first(where: { $0.id == id && $0.role == "user" }) else {
             return
         }
 
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+
+        withTransaction(transaction) {
+            activateEditingInput(for: id, text: message.content, images: message.imageAttachments)
+            imageSelectionError = nil
+            activeMessageActionID = nil
+        }
+
+        DispatchQueue.main.async {
+            var focusTransaction = Transaction(animation: nil)
+            focusTransaction.disablesAnimations = true
+
+            withTransaction(focusTransaction) {
+                isInputFocused = true
+                inputFocusRequestID += 1
+            }
+        }
+    }
+
+    private func activateEditingInput(for id: UUID, text: String, images: [ChatImageAttachment]) {
         editingMessageID = id
-        inputText = message.content
-        pendingImageAttachments = message.imageAttachments
+        inputText = text
+        pendingImageAttachments = images
         selectedPhotoItems = []
-        imageSelectionError = nil
-        activeMessageActionID = nil
-        isInputFocused = true
     }
 
     private func selectMessageAction(for id: UUID) {
@@ -795,6 +836,8 @@ struct ContentView: View {
     }
 
     private func regenerateAssistantResponse(_ id: UUID) {
+        didTapMessageBubble = true
+
         guard !isGenerating,
               let assistantIndex = messages.firstIndex(where: { $0.id == id && $0.role == "assistant" }),
               let userIndex = messages[..<assistantIndex].lastIndex(where: { $0.role == "user" }) else {
@@ -1133,6 +1176,7 @@ struct ContentView: View {
 
     private func selectReasoningEffort(_ effort: ReasoningEffort) {
         guard let index = configurations.firstIndex(where: { $0.id == currentConfiguration.id }) else { return }
+        configurations[index].reasoningEnabled = true
         configurations[index].reasoningEffort = effort
         configurations[index].updatedAt = Date()
         selectedConfigurationID = configurations[index].id
@@ -2131,6 +2175,7 @@ struct ImagePastingTextView: UIViewRepresentable {
     @Binding var text: String
 
     @Binding var isFocused: Bool
+    let focusRequestID: Int
     let isDisabled: Bool
     let placeholder: String
     let onPasteImages: ([UIImage]) -> Void
@@ -2153,7 +2198,7 @@ struct ImagePastingTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: ImagePastingUITextView, context: Context) {
-        if textView.text != text {
+        if (textView.text ?? "") != text {
             textView.text = text
         }
 
@@ -2164,11 +2209,11 @@ struct ImagePastingTextView: UIViewRepresentable {
         textView.accessibilityLabel = placeholder
         textView.updatePlaceholderVisibility()
 
-        if isFocused, !textView.isFirstResponder {
-            textView.becomeFirstResponder()
-        } else if !isFocused, textView.isFirstResponder {
-            textView.resignFirstResponder()
-        }
+        context.coordinator.updateFocus(
+            for: textView,
+            shouldBeFocused: isFocused,
+            requestID: focusRequestID
+        )
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ImagePastingUITextView, context: Context) -> CGSize? {
@@ -2180,7 +2225,10 @@ struct ImagePastingTextView: UIViewRepresentable {
         let lineHeight = uiView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight
         let maxHeight = lineHeight * 5
         let height = min(max(fittingSize.height, lineHeight), maxHeight)
-        uiView.isScrollEnabled = fittingSize.height > maxHeight
+        let shouldScroll = fittingSize.height > maxHeight
+        if uiView.isScrollEnabled != shouldScroll {
+            uiView.isScrollEnabled = shouldScroll
+        }
         return CGSize(width: fittingWidth, height: height)
     }
 
@@ -2191,6 +2239,7 @@ struct ImagePastingTextView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         private let text: Binding<String>
         private let isFocused: Binding<Bool>
+        private var lastHandledFocusRequestID: Int?
 
         init(text: Binding<String>, isFocused: Binding<Bool>) {
             self.text = text
@@ -2198,16 +2247,78 @@ struct ImagePastingTextView: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            text.wrappedValue = textView.text
+            let updatedText = textView.text ?? ""
+            if text.wrappedValue != updatedText {
+                text.wrappedValue = updatedText
+            }
             (textView as? ImagePastingUITextView)?.updatePlaceholderVisibility()
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
-            isFocused.wrappedValue = true
+            if !isFocused.wrappedValue {
+                isFocused.wrappedValue = true
+            }
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            isFocused.wrappedValue = false
+            (textView as? ImagePastingUITextView)?.updatePlaceholderVisibility()
+        }
+
+        func updateFocus(
+            for textView: ImagePastingUITextView,
+            shouldBeFocused: Bool,
+            requestID: Int
+        ) {
+            let isNewRequest = lastHandledFocusRequestID != requestID
+            guard isNewRequest || shouldBeFocused != textView.isFirstResponder else { return }
+            lastHandledFocusRequestID = requestID
+
+            if shouldBeFocused, textView.window != nil {
+                if !textView.becomeFirstResponder() {
+                    retryFocus(to: textView, shouldBeFocused: shouldBeFocused, attemptsRemaining: 4)
+                }
+                return
+            }
+
+            retryFocus(to: textView, shouldBeFocused: shouldBeFocused, attemptsRemaining: 4)
+        }
+
+        private func retryFocus(
+            to textView: ImagePastingUITextView,
+            shouldBeFocused: Bool,
+            attemptsRemaining: Int
+        ) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self, weak textView] in
+                guard let self,
+                      let textView,
+                      self.isFocused.wrappedValue == shouldBeFocused,
+                      shouldBeFocused != textView.isFirstResponder else {
+                    return
+                }
+
+                if shouldBeFocused {
+                    guard textView.window != nil else {
+                        if attemptsRemaining > 0 {
+                            self.retryFocus(
+                                to: textView,
+                                shouldBeFocused: shouldBeFocused,
+                                attemptsRemaining: attemptsRemaining - 1
+                            )
+                        }
+                        return
+                    }
+
+                    if !textView.becomeFirstResponder(), attemptsRemaining > 0 {
+                        self.retryFocus(
+                            to: textView,
+                            shouldBeFocused: shouldBeFocused,
+                            attemptsRemaining: attemptsRemaining - 1
+                        )
+                    }
+                } else {
+                    textView.resignFirstResponder()
+                }
+            }
         }
     }
 }
