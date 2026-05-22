@@ -6,6 +6,7 @@ import MarkdownUI
 
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @State private var configurations = AIConfigurationStore.loadConfigurations()
     @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
     @State private var inputText = ""
@@ -32,6 +33,7 @@ struct ContentView: View {
     @State private var didTapMessageBubble = false
     @State private var editingMessageID: UUID?
     @State private var isInputFocused = false
+    @State private var hasLoadedInitialConversation = false
 
     let aiService = AIService()
     private let maxImageAttachmentCount = 4
@@ -98,6 +100,8 @@ struct ContentView: View {
             .simultaneousGesture(closeSidebarGesture)
         }
         .onAppear {
+            guard !hasLoadedInitialConversation else { return }
+            hasLoadedInitialConversation = true
             loadSelectedConversation()
         }
         .sheet(isPresented: $showConfiguration) {
@@ -110,6 +114,10 @@ struct ContentView: View {
         }
         .onChange(of: selectedPhotoItems) { _, newItems in
             loadSelectedImages(from: newItems)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .inactive || newPhase == .background else { return }
+            persistApplicationStateForLifecycle()
         }
     }
 
@@ -1153,10 +1161,10 @@ struct ContentView: View {
 
     private func loadSelectedConversation() {
         if let selectedConversationID,
-           conversations.contains(where: { $0.id == selectedConversationID }) {
-            selectConversation(selectedConversationID, closesSidebar: false)
+           let conversation = conversations.first(where: { $0.id == selectedConversationID }) {
+            restoreConversation(conversation, closesSidebar: false)
         } else if let firstConversation = conversations.first {
-            selectConversation(firstConversation.id, closesSidebar: false)
+            restoreConversation(firstConversation, closesSidebar: false)
         } else {
             let conversation = AIConversation()
             conversations = [conversation]
@@ -1191,6 +1199,10 @@ struct ContentView: View {
         }
 
         guard let conversation = conversations.first(where: { $0.id == id }) else { return }
+        restoreConversation(conversation, closesSidebar: closesSidebar)
+    }
+
+    private func restoreConversation(_ conversation: AIConversation, closesSidebar: Bool) {
         selectedConversationID = conversation.id
         messages = conversation.messages
         resetMarkdownCache(for: messages)
@@ -1319,15 +1331,31 @@ struct ContentView: View {
         ConversationStore.saveConversations(conversations)
     }
 
-    private func persistCurrentConversation() {
+    private func persistApplicationStateForLifecycle() {
+        let shouldRefreshUpdatedAt = activeAssistantMessageID != nil
+
+        if let activeAssistantMessageID {
+            cancelScheduledFlush()
+            flushPendingTokens(for: activeAssistantMessageID)
+        }
+
+        persistCurrentConversation(synchronize: true, refreshesUpdatedAt: shouldRefreshUpdatedAt)
+    }
+
+    private func persistCurrentConversation(
+        synchronize: Bool = false,
+        refreshesUpdatedAt: Bool = true
+    ) {
         guard let selectedConversationID,
               let index = conversations.firstIndex(where: { $0.id == selectedConversationID }) else {
             return
         }
 
         conversations[index].messages = messages
-        conversations[index].updatedAt = Date()
-        ConversationStore.saveConversations(conversations)
+        if refreshesUpdatedAt {
+            conversations[index].updatedAt = Date()
+        }
+        ConversationStore.saveConversations(conversations, synchronize: synchronize)
     }
 
     private func generateTitleIfNeeded() {
@@ -1358,6 +1386,10 @@ struct ContentView: View {
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { title in
+            if self.selectedConversationID == selectedConversationID {
+                persistCurrentConversation()
+            }
+
             guard let title,
                   let currentIndex = conversations.firstIndex(where: { $0.id == selectedConversationID }),
                   !title.isEmpty else {

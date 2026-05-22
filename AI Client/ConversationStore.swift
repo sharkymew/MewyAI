@@ -65,10 +65,13 @@ enum ConversationStore {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
     
-    static func saveConversations(_ conversations: [AIConversation]) {
+    static func saveConversations(_ conversations: [AIConversation], synchronize: Bool = false) {
         let normalizedConversations = conversations.map(\.normalized)
         guard let data = try? JSONEncoder().encode(normalizedConversations) else { return }
         UserDefaults.standard.set(data, forKey: conversationsKey)
+        if synchronize {
+            UserDefaults.standard.synchronize()
+        }
     }
     
     static func loadSelectedConversationID() -> UUID? {
