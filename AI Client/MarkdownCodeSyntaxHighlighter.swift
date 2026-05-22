@@ -20,38 +20,62 @@ extension CodeSyntaxHighlighter where Self == ChatCodeSyntaxHighlighter {
 }
 
 private struct ChatCodeLineHighlighter {
-    private let language: String
-    private let keywords: Set<String>
-    private let lineCommentMarkers: [String]
+    private let rules: ChatCodeSyntaxRules
 
     init(language: String?) {
-        let normalized = language?
-            .lowercased()
-            .split(whereSeparator: { $0 == " " || $0 == "\t" })
-            .first
-            .map(String.init) ?? ""
-
-        self.language = normalized
-        self.keywords = Self.keywords(for: normalized)
-        self.lineCommentMarkers = Self.lineCommentMarkers(for: normalized)
+        rules = ChatCodeSyntaxRules(language: language)
     }
 
     func highlight(_ code: String) -> Text {
         let characters = Array(code)
         var index = 0
         var output = Text("")
+        var plainBuffer = ""
+        var segmentCount = 0
+
+        func appendPlainBuffer() -> Bool {
+            guard !plainBuffer.isEmpty else { return true }
+            guard append(Text(plainBuffer)) else { return false }
+            plainBuffer = ""
+            return true
+        }
+
+        func append(_ text: Text) -> Bool {
+            segmentCount += 1
+            guard segmentCount <= Self.maximumHighlightedSegmentCount else { return false }
+            output = output + text
+            return true
+        }
 
         while index < characters.count {
-            if supportsBlockComments, characters.matches("/*", at: index) {
+            if rules.supportsBlockComments, characters.matches("/*", at: index) {
                 let range = blockCommentRange(in: characters, from: index)
-                output = output + Text(String(characters[range])).foregroundColor(Self.commentColor)
+                guard appendPlainBuffer(),
+                      append(Text(String(characters[range])).foregroundColor(Self.commentColor)) else {
+                    return Text(code)
+                }
+                index = range.upperBound
+                continue
+            }
+
+            if rules.supportsPreprocessorDirectives,
+               characters[index] == "#",
+               isPreprocessorStart(in: characters, at: index) {
+                let range = preprocessorDirectiveRange(in: characters, from: index)
+                guard appendPlainBuffer(),
+                      append(Text(String(characters[range])).foregroundColor(Self.keywordColor)) else {
+                    return Text(code)
+                }
                 index = range.upperBound
                 continue
             }
 
             if commentMarker(in: characters, at: index) != nil {
                 let range = lineCommentRange(in: characters, from: index)
-                output = output + Text(String(characters[range])).foregroundColor(Self.commentColor)
+                guard appendPlainBuffer(),
+                      append(Text(String(characters[range])).foregroundColor(Self.commentColor)) else {
+                    return Text(code)
+                }
                 index = range.upperBound
                 continue
             }
@@ -60,14 +84,20 @@ private struct ChatCodeLineHighlighter {
 
             if let delimiter = stringDelimiter(in: characters, at: index) {
                 let range = stringRange(in: characters, from: index, delimiter: delimiter)
-                output = output + Text(String(characters[range])).foregroundColor(Self.stringColor)
+                guard appendPlainBuffer(),
+                      append(Text(String(characters[range])).foregroundColor(Self.stringColor)) else {
+                    return Text(code)
+                }
                 index = range.upperBound
                 continue
             }
 
             if character.isNumber {
                 let range = numberRange(in: characters, from: index)
-                output = output + Text(String(characters[range])).foregroundColor(Self.numberColor)
+                guard appendPlainBuffer(),
+                      append(Text(String(characters[range])).foregroundColor(Self.numberColor)) else {
+                    return Text(code)
+                }
                 index = range.upperBound
                 continue
             }
@@ -75,32 +105,38 @@ private struct ChatCodeLineHighlighter {
             if isIdentifierStart(character) {
                 let range = identifierRange(in: characters, from: index)
                 let token = String(characters[range])
-                output = output + styledIdentifier(token)
+                let styledToken = styledIdentifier(token)
+                if styledToken.isPlain {
+                    plainBuffer += token
+                } else {
+                    guard appendPlainBuffer(), append(styledToken.text) else { return Text(code) }
+                }
                 index = range.upperBound
                 continue
             }
 
-            output = output + Text(String(character))
+            plainBuffer.append(character)
             index += 1
         }
 
+        guard appendPlainBuffer() else { return Text(code) }
         return output
     }
 
-    private func styledIdentifier(_ token: String) -> Text {
-        if keywords.contains(token) {
-            return Text(token).foregroundColor(Self.keywordColor)
+    private func styledIdentifier(_ token: String) -> StyledText {
+        if rules.keywords.contains(token) {
+            return StyledText(text: Text(token).foregroundColor(Self.keywordColor), isPlain: false)
         }
 
-        if Self.literalKeywords.contains(token) {
-            return Text(token).foregroundColor(Self.literalColor)
+        if ChatCodeSyntaxRules.literalKeywords.contains(token) || rules.builtins.contains(token) {
+            return StyledText(text: Text(token).foregroundColor(Self.literalColor), isPlain: false)
         }
 
-        return Text(token)
+        return StyledText(text: Text(token), isPlain: true)
     }
 
     private func commentMarker(in characters: [Character], at index: Int) -> String? {
-        lineCommentMarkers.first { marker in
+        rules.lineCommentMarkers.first { marker in
             characters.matches(marker, at: index)
         }
     }
@@ -124,13 +160,35 @@ private struct ChatCodeLineHighlighter {
         return start..<characters.count
     }
 
+    private func isPreprocessorStart(in characters: [Character], at index: Int) -> Bool {
+        var cursor = index - 1
+        while cursor >= 0 {
+            if characters[cursor] == "\n" {
+                return true
+            }
+            if characters[cursor] != " " && characters[cursor] != "\t" {
+                return false
+            }
+            cursor -= 1
+        }
+        return true
+    }
+
+    private func preprocessorDirectiveRange(in characters: [Character], from start: Int) -> Range<Int> {
+        var index = start + 1
+        while index < characters.count, isIdentifierStart(characters[index]) {
+            index += 1
+        }
+        return start..<index
+    }
+
     private func stringDelimiter(in characters: [Character], at index: Int) -> StringDelimiter? {
-        if supportsTripleQuotedStrings {
+        if rules.supportsTripleQuotedStrings {
             for marker in ["\"\"\"", "'''"] where characters.matches(marker, at: index) {
                 return StringDelimiter(marker: marker, allowsNewlines: true)
             }
         }
-        if supportsBacktickStrings, characters.matches("`", at: index) {
+        if rules.supportsBacktickStrings, characters.matches("`", at: index) {
             return StringDelimiter(marker: "`", allowsNewlines: true)
         }
         let character = characters[index]
@@ -197,89 +255,21 @@ private struct ChatCodeLineHighlighter {
         character.isLetter || character == "_"
     }
 
-    private var supportsTripleQuotedStrings: Bool {
-        language == "python" || language == "py" || language == "swift"
-    }
-
-    private var supportsBacktickStrings: Bool {
-        language == "javascript" || language == "js" || language == "typescript" || language == "ts"
-            || language == "tsx" || language == "jsx" || language == "shell" || language == "sh"
-            || language == "bash" || language == "zsh"
-    }
-
-    private var supportsBlockComments: Bool {
-        switch language {
-        case "swift", "javascript", "js", "typescript", "ts", "tsx", "jsx", "java",
-            "kotlin", "c", "cpp", "c++", "cs", "csharp", "go", "rust", "css":
-            return true
-        default:
-            return false
-        }
-    }
-
-    private static func lineCommentMarkers(for language: String) -> [String] {
-        switch language {
-        case "python", "py", "ruby", "rb", "shell", "sh", "bash", "zsh", "yaml", "yml", "toml":
-            return ["#"]
-        case "sql":
-            return ["--"]
-        default:
-            return ["//", "#"]
-        }
-    }
-
-    private static func keywords(for language: String) -> Set<String> {
-        switch language {
-        case "swift":
-            return swiftKeywords
-        case "python", "py":
-            return pythonKeywords
-        case "javascript", "js", "typescript", "ts", "tsx", "jsx":
-            return javaScriptKeywords
-        case "json":
-            return []
-        default:
-            return sharedKeywords
-        }
-    }
-
     private static let keywordColor = Color(red: 0.58, green: 0.25, blue: 0.78)
     private static let literalColor = Color(red: 0.10, green: 0.42, blue: 0.86)
     private static let stringColor = Color(red: 0.05, green: 0.48, blue: 0.30)
     private static let numberColor = Color(red: 0.78, green: 0.33, blue: 0.12)
     private static let commentColor = Color.secondary
-
-    private static let literalKeywords: Set<String> = [
-        "true", "false", "nil", "null", "none", "None", "True", "False", "undefined"
-    ]
-
-    private static let sharedKeywords: Set<String> = [
-        "as", "async", "await", "break", "case", "catch", "class", "const", "continue",
-        "default", "defer", "do", "else", "enum", "extension", "final", "for", "func",
-        "function", "guard", "if", "import", "in", "let", "private", "public", "return",
-        "static", "struct", "switch", "throw", "throws", "try", "var", "while"
-    ]
-
-    private static let swiftKeywords: Set<String> = sharedKeywords.union([
-        "actor", "associatedtype", "convenience", "didSet", "dynamic", "get", "inout",
-        "internal", "isolated", "mutating", "nonisolated", "open", "override", "protocol",
-        "required", "self", "Self", "set", "some", "super", "typealias", "where", "willSet"
-    ])
-
-    private static let pythonKeywords: Set<String> = sharedKeywords.union([
-        "and", "assert", "def", "del", "elif", "except", "finally", "from", "global",
-        "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "with", "yield"
-    ])
-
-    private static let javaScriptKeywords: Set<String> = sharedKeywords.union([
-        "abstract", "any", "boolean", "constructor", "debugger", "declare", "export",
-        "extends", "implements", "interface", "namespace", "new", "of", "readonly",
-        "require", "string", "symbol", "this", "type", "typeof", "void"
-    ])
+    private static let maximumHighlightedSegmentCount = 900
 
     private struct StringDelimiter {
         let marker: String
         let allowsNewlines: Bool
+    }
+
+    private struct StyledText {
+        let text: Text
+        let isPlain: Bool
     }
 }
 
