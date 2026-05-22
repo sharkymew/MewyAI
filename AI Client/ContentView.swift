@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UIKit
+import UniformTypeIdentifiers
 import MarkdownUI
 
 struct ContentView: View {
@@ -26,12 +27,14 @@ struct ContentView: View {
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var pendingImageAttachments: [ChatImageAttachment] = []
     @State private var imageSelectionError: String?
+    @State private var isImageDropTargeted = false
     @State private var activeMessageActionID: UUID?
     @State private var didTapMessageBubble = false
     @State private var editingMessageID: UUID?
     @FocusState private var isInputFocused: Bool
 
     let aiService = AIService()
+    private let maxImageAttachmentCount = 4
 
     private var inputFieldBackground: Color {
         colorScheme == .dark ? Color.black.opacity(0.70) : Color.white.opacity(0.82)
@@ -228,17 +231,16 @@ struct ContentView: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
-                TextField(
-                    "输入消息...",
+                ImagePastingTextView(
                     text: $inputText,
-                    axis: .vertical
+                    isFocused: $isInputFocused,
+                    isDisabled: isGenerating,
+                    placeholder: "输入消息...",
+                    onPasteImages: pasteImagesFromInputMenu
                 )
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .focused($isInputFocused)
-                .disabled(isGenerating)
                 .font(.body)
                 .foregroundStyle(Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
                 .background(
@@ -252,7 +254,7 @@ struct ContentView: View {
 
                 PhotosPicker(
                     selection: $selectedPhotoItems,
-                    maxSelectionCount: 4,
+                    maxSelectionCount: maxImageAttachmentCount,
                     matching: .images
                 ) {
                     Image(systemName: "photo")
@@ -311,7 +313,15 @@ struct ContentView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
+                .stroke(
+                    isImageDropTargeted ? Color.accentColor.opacity(0.56) : Color.secondary.opacity(0.12),
+                    lineWidth: isImageDropTargeted ? 2 : 1
+                )
+        )
+        .onDrop(
+            of: [UTType.image.identifier],
+            isTargeted: $isImageDropTargeted,
+            perform: handleDroppedImages
         )
         .padding(.horizontal, 12)
         .padding(.top, 8)
@@ -912,6 +922,8 @@ struct ContentView: View {
     }
 
     private func loadSelectedImages(from items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+
         guard currentConfiguration.selectedModelSupportsImages else {
             selectedPhotoItems = []
             imageSelectionError = "当前模型不支持图片输入。"
@@ -935,7 +947,7 @@ struct ContentView: View {
             if attachments.isEmpty, !items.isEmpty {
                 imageSelectionError = "图片读取失败，请重新选择。"
             } else {
-                pendingImageAttachments = attachments
+                setPendingImageAttachments(attachments)
                 imageSelectionError = nil
             }
         }
@@ -943,9 +955,113 @@ struct ContentView: View {
 
     private func compressedImageDataURL(from data: Data) -> String? {
         guard let image = UIImage(data: data) else { return nil }
+        return compressedImageDataURL(from: image)
+    }
+
+    private func compressedImageDataURL(from image: UIImage) -> String? {
         let scaledImage = image.scaledDown(maxDimension: 1600)
         guard let jpegData = scaledImage.jpegData(compressionQuality: 0.78) else { return nil }
         return "data:image/jpeg;base64,\(jpegData.base64EncodedString())"
+    }
+
+    private func setPendingImageAttachments(_ attachments: [ChatImageAttachment]) {
+        pendingImageAttachments = Array(attachments.prefix(maxImageAttachmentCount))
+        if attachments.count > maxImageAttachmentCount {
+            imageSelectionError = "最多只能添加 \(maxImageAttachmentCount) 张图片，已保留前 \(maxImageAttachmentCount) 张。"
+        }
+    }
+
+    private func appendPendingImageAttachments(_ attachments: [ChatImageAttachment], source: String) {
+        guard currentConfiguration.selectedModelSupportsImages else {
+            imageSelectionError = "当前模型不支持图片输入。"
+            return
+        }
+
+        guard !attachments.isEmpty else {
+            imageSelectionError = "\(source)图片读取失败。"
+            return
+        }
+
+        let remainingCount = maxImageAttachmentCount - pendingImageAttachments.count
+        guard remainingCount > 0 else {
+            imageSelectionError = "最多只能添加 \(maxImageAttachmentCount) 张图片。"
+            return
+        }
+
+        pendingImageAttachments.append(contentsOf: attachments.prefix(remainingCount))
+        imageSelectionError = attachments.count > remainingCount
+            ? "最多只能添加 \(maxImageAttachmentCount) 张图片，已保留前 \(maxImageAttachmentCount) 张。"
+            : nil
+    }
+
+    private func handleDroppedImages(_ providers: [NSItemProvider]) -> Bool {
+        guard !isGenerating else { return false }
+
+        guard currentConfiguration.selectedModelSupportsImages else {
+            imageSelectionError = "当前模型不支持图片输入。"
+            return false
+        }
+
+        let imageProviders = providers.filter { provider in
+            provider.registeredTypeIdentifiers.contains { identifier in
+                UTType(identifier)?.conforms(to: .image) == true
+            }
+        }
+
+        guard !imageProviders.isEmpty else { return false }
+        imageSelectionError = nil
+
+        Task {
+            var attachments = [ChatImageAttachment]()
+
+            for provider in imageProviders.prefix(maxImageAttachmentCount) {
+                guard let data = await imageData(from: provider),
+                      let dataURL = compressedImageDataURL(from: data) else {
+                    continue
+                }
+
+                attachments.append(ChatImageAttachment(dataURL: dataURL))
+            }
+
+            appendPendingImageAttachments(attachments, source: "拖拽")
+        }
+
+        return true
+    }
+
+    private func imageData(from provider: NSItemProvider) async -> Data? {
+        guard let identifier = provider.registeredTypeIdentifiers.first(where: { identifier in
+            UTType(identifier)?.conforms(to: .image) == true
+        }) else {
+            return nil
+        }
+
+        return await withCheckedContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: identifier) { data, _ in
+                continuation.resume(returning: data)
+            }
+        }
+    }
+
+    private func pasteImagesFromInputMenu(_ images: [UIImage]) {
+        guard !isGenerating else { return }
+
+        guard currentConfiguration.selectedModelSupportsImages else {
+            imageSelectionError = "当前模型不支持图片输入。"
+            return
+        }
+
+        guard !images.isEmpty else {
+            imageSelectionError = "剪贴板中没有可粘贴的图片。"
+            return
+        }
+
+        let attachments = images.compactMap { image -> ChatImageAttachment? in
+            guard let dataURL = compressedImageDataURL(from: image) else { return nil }
+            return ChatImageAttachment(dataURL: dataURL)
+        }
+
+        appendPendingImageAttachments(attachments, source: "剪贴板")
     }
 
     private func removePendingImage(_ id: UUID) {
@@ -1956,6 +2072,161 @@ enum ChatMarkdownPreprocessor {
         guard !footnotes.isEmpty else { return text }
         let renderedFootnotes = footnotes.map { "[^\($0.id)]: \($0.body)" }.joined(separator: "\n")
         return bodyLines.joined(separator: "\n") + "\n\n---\n\n" + renderedFootnotes
+    }
+}
+
+struct ImagePastingTextView: UIViewRepresentable {
+    @Binding var text: String
+
+    let isFocused: FocusState<Bool>.Binding
+    let isDisabled: Bool
+    let placeholder: String
+    let onPasteImages: ([UIImage]) -> Void
+
+    func makeUIView(context: Context) -> ImagePastingUITextView {
+        let textView = ImagePastingUITextView()
+        textView.delegate = context.coordinator
+        textView.onPasteImages = onPasteImages
+        textView.backgroundColor = .clear
+        textView.font = .preferredFont(forTextStyle: .body)
+        textView.adjustsFontForContentSizeCategory = true
+        textView.textColor = .label
+        textView.tintColor = .tintColor
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.isScrollEnabled = false
+        textView.returnKeyType = .default
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return textView
+    }
+
+    func updateUIView(_ textView: ImagePastingUITextView, context: Context) {
+        if textView.text != text {
+            textView.text = text
+        }
+
+        textView.onPasteImages = onPasteImages
+        textView.isEditable = !isDisabled
+        textView.isSelectable = !isDisabled
+        textView.placeholderText = placeholder
+        textView.accessibilityLabel = placeholder
+        textView.updatePlaceholderVisibility()
+
+        if isFocused.wrappedValue, !textView.isFirstResponder {
+            textView.becomeFirstResponder()
+        } else if !isFocused.wrappedValue, textView.isFirstResponder {
+            textView.resignFirstResponder()
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ImagePastingUITextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? 0
+        let fittingWidth = width > 0 ? width : UIScreen.main.bounds.width
+        let fittingSize = uiView.sizeThatFits(
+            CGSize(width: fittingWidth, height: .greatestFiniteMagnitude)
+        )
+        let lineHeight = uiView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight
+        let maxHeight = lineHeight * 5
+        let height = min(max(fittingSize.height, lineHeight), maxHeight)
+        uiView.isScrollEnabled = fittingSize.height > maxHeight
+        return CGSize(width: fittingWidth, height: height)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, isFocused: isFocused)
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        private let text: Binding<String>
+        private let isFocused: FocusState<Bool>.Binding
+
+        init(text: Binding<String>, isFocused: FocusState<Bool>.Binding) {
+            self.text = text
+            self.isFocused = isFocused
+        }
+
+        func textViewDidChange(_ textView: UITextView) {
+            text.wrappedValue = textView.text
+            (textView as? ImagePastingUITextView)?.updatePlaceholderVisibility()
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            isFocused.wrappedValue = true
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            isFocused.wrappedValue = false
+        }
+    }
+}
+
+final class ImagePastingUITextView: UITextView {
+    var onPasteImages: (([UIImage]) -> Void)?
+    private let placeholderLabel = UILabel()
+
+    var placeholderText: String = "" {
+        didSet {
+            placeholderLabel.text = placeholderText
+        }
+    }
+
+    override var text: String! {
+        didSet {
+            updatePlaceholderVisibility()
+        }
+    }
+
+    override var font: UIFont? {
+        didSet {
+            placeholderLabel.font = font
+        }
+    }
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        setupPlaceholder()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupPlaceholder()
+    }
+
+    func updatePlaceholderVisibility() {
+        placeholderLabel.isHidden = !text.isEmpty
+    }
+
+    private func setupPlaceholder() {
+        placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
+        placeholderLabel.textColor = .placeholderText
+        placeholderLabel.font = font ?? .preferredFont(forTextStyle: .body)
+        placeholderLabel.numberOfLines = 1
+        placeholderLabel.isUserInteractionEnabled = false
+        addSubview(placeholderLabel)
+
+        NSLayoutConstraint.activate([
+            placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            placeholderLabel.topAnchor.constraint(equalTo: topAnchor),
+            placeholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor)
+        ])
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)),
+           UIPasteboard.general.hasImages {
+            return true
+        }
+
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        guard let images = UIPasteboard.general.images, !images.isEmpty else {
+            super.paste(sender)
+            return
+        }
+
+        onPasteImages?(images)
     }
 }
 
