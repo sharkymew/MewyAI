@@ -43,6 +43,10 @@ struct AIConversation: Identifiable, Codable, Equatable {
         conversation.messages = messages.map(\.normalized)
         return conversation
     }
+
+    var hasInformation: Bool {
+        !messages.isEmpty
+    }
 }
 
 enum ConversationStore {

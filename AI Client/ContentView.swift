@@ -516,8 +516,13 @@ struct ContentView: View {
     }
 
     private var canCreateConversation: Bool {
-        guard !isGenerating else { return false }
-        return !messages.isEmpty
+        !isGenerating
+    }
+
+    private var currentConversationIsBlank: Bool {
+        messages.isEmpty
+            && inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && pendingImageAttachments.isEmpty
     }
 
     private var currentConfiguration: AIConfiguration {
@@ -1091,6 +1096,20 @@ struct ContentView: View {
             persistCurrentConversation()
         }
 
+        if currentConversationIsBlank {
+            if closesSidebar {
+                showConversationSidebar = false
+            }
+            return
+        }
+
+        if let emptyConversation = conversations.first(where: { conversation in
+            conversation.id != selectedConversationID && !conversation.hasInformation
+        }) {
+            selectConversation(emptyConversation.id, closesSidebar: closesSidebar)
+            return
+        }
+
         let conversation = AIConversation()
         conversations.insert(conversation, at: 0)
         selectedConversationID = conversation.id
@@ -1249,10 +1268,14 @@ struct MessageBubble: View {
                 Text(message.isStopped ? "已停止生成。" : "正在生成回答...")
             } else if !message.content.isEmpty {
                 if isUser {
-                    Text(message.content)
-                        .lineLimit(nil)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.leading)
+                    SelectableTextView(
+                        text: message.content,
+                        textColor: .white,
+                        font: .preferredFont(forTextStyle: .body),
+                        textAlignment: .left,
+                        sizing: .natural,
+                        onTap: onSelect
+                    )
                 } else {
                     AssistantMessageContent(
                         content: message.content,
@@ -1271,12 +1294,8 @@ struct MessageBubble: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(isUser ? userBubbleColor : assistantBubbleColor)
         )
-        .textSelection(.enabled)
         .transaction { transaction in
             transaction.animation = nil
-        }
-        .onTapGesture {
-            onSelect()
         }
     }
 
@@ -1397,7 +1416,12 @@ struct MessageBubble: View {
 
             if message.isReasoningExpanded {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(message.reasoningContent)
+                    SelectableTextView(
+                        text: message.reasoningContent,
+                        textColor: .secondaryLabel,
+                        font: .preferredFont(forTextStyle: .caption1),
+                        textAlignment: .left
+                    )
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1407,7 +1431,6 @@ struct MessageBubble: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(assistantReasoningColor)
                 )
-                .textSelection(.enabled)
                 .transaction { transaction in
                     transaction.animation = nil
                 }
@@ -1485,10 +1508,12 @@ struct PlainAssistantText: View {
     }
 
     var body: some View {
-        Text(content)
-            .lineLimit(nil)
-            .fixedSize(horizontal: false, vertical: true)
-            .multilineTextAlignment(.leading)
+        SelectableTextView(
+            text: content,
+            textColor: .label,
+            font: .preferredFont(forTextStyle: .body),
+            textAlignment: .left
+        )
     }
 }
 
@@ -1525,67 +1550,91 @@ struct AssistantMarkdownText: View {
     let renderCache: MarkdownRenderCacheEntry
 
     var body: some View {
-        MarkdownUI.Markdown(renderCache.markdownContent)
-            .textSelection(.enabled)
-            .markdownTheme(.gitHub)
-            .markdownTextStyle {
-                FontSize(15)
-            }
-            .markdownBlockStyle(\.heading1) { configuration in
-                ChatMarkdownHeading(configuration: configuration, fontSize: .em(1.55), top: 10, bottom: 8, showsDivider: true)
-            }
-            .markdownBlockStyle(\.heading2) { configuration in
-                ChatMarkdownHeading(configuration: configuration, fontSize: .em(1.35), top: 10, bottom: 8, showsDivider: true)
-            }
-            .markdownBlockStyle(\.heading3) { configuration in
-                ChatMarkdownHeading(configuration: configuration, fontSize: .em(1.18), top: 8, bottom: 6, showsDivider: false)
-            }
-            .markdownBlockStyle(\.paragraph) { configuration in
-                configuration.label
-                    .fixedSize(horizontal: false, vertical: true)
-                    .relativeLineSpacing(.em(0.18))
-                    .markdownMargin(top: 0, bottom: 8)
-            }
-            .markdownBlockStyle(\.listItem) { configuration in
-                configuration.label
-                    .markdownMargin(top: .em(0.1))
-            }
-            .markdownBlockStyle(\.table) { configuration in
-                ScrollView(.horizontal, showsIndicators: true) {
-                    configuration.label
-                        .fixedSize(horizontal: true, vertical: true)
-                        .markdownTableBorderStyle(
-                            TableBorderStyle(color: Color.secondary.opacity(0.45), width: 1)
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(ChatMarkdownBlockSegment.split(renderCache.renderedMarkdown)) { segment in
+                switch segment.kind {
+                case let .text(text):
+                    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        SelectableTextView(
+                            text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                            textColor: .label,
+                            font: .preferredFont(forTextStyle: .body),
+                            textAlignment: .left
                         )
-                        .markdownTableBackgroundStyle(
-                            .alternatingRows(
-                                Color.secondary.opacity(0.08),
-                                Color.clear,
-                                header: Color.secondary.opacity(0.13)
-                            )
-                        )
-                        .padding(.vertical, 2)
-                }
-                .markdownMargin(top: 4, bottom: 12)
-            }
-            .markdownBlockStyle(\.tableCell) { configuration in
-                configuration.label
-                    .markdownTextStyle {
-                        if configuration.row == 0 {
-                            FontWeight(.semibold)
-                        }
-                        BackgroundColor(nil)
                     }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 7)
-                    .padding(.horizontal, 12)
-                    .relativeLineSpacing(.em(0.18))
+                case let .code(language, code):
+                    ChatCodeBlock(content: code, language: language)
+                }
             }
-            .markdownBlockStyle(\.thematicBreak) {
-                Divider()
-                    .markdownMargin(top: 12, bottom: 12)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ChatMarkdownBlockSegment: Identifiable {
+    let id: Int
+    let kind: Kind
+
+    enum Kind {
+        case text(String)
+        case code(language: String?, code: String)
+    }
+
+    static func split(_ content: String) -> [ChatMarkdownBlockSegment] {
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var segments: [ChatMarkdownBlockSegment] = []
+        var textBuffer: [String] = []
+        var codeBuffer: [String] = []
+        var codeLanguage: String?
+        var isInsideCodeBlock = false
+
+        func appendText() {
+            guard !textBuffer.isEmpty else { return }
+            segments.append(
+                ChatMarkdownBlockSegment(
+                    id: segments.count,
+                    kind: .text(textBuffer.joined(separator: "\n"))
+                )
+            )
+            textBuffer.removeAll()
+        }
+
+        func appendCode() {
+            segments.append(
+                ChatMarkdownBlockSegment(
+                    id: segments.count,
+                    kind: .code(language: codeLanguage, code: codeBuffer.joined(separator: "\n"))
+                )
+            )
+            codeBuffer.removeAll()
+            codeLanguage = nil
+        }
+
+        for line in lines {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            if trimmedLine.hasPrefix("```") {
+                if isInsideCodeBlock {
+                    appendCode()
+                } else {
+                    appendText()
+                    let language = String(trimmedLine.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    codeLanguage = language.isEmpty ? nil : language
+                }
+                isInsideCodeBlock.toggle()
+            } else if isInsideCodeBlock {
+                codeBuffer.append(line)
+            } else {
+                textBuffer.append(line)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        if isInsideCodeBlock {
+            appendCode()
+        } else {
+            appendText()
+        }
+
+        return segments
     }
 }
 
