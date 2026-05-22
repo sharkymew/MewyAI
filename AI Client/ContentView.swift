@@ -4,9 +4,23 @@ import UIKit
 import UniformTypeIdentifiers
 import MarkdownUI
 
+private enum ChatScrollMetrics {
+    static let coordinateSpaceName = "ChatScrollCoordinateSpace"
+    static let bottomThreshold: CGFloat = 32
+}
+
+private struct ChatScrollBottomDistancePreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+    @GestureState private var isDraggingChatScroll = false
     @State private var configurations = AIConfigurationStore.loadConfigurations()
     @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
     @State private var inputText = ""
@@ -17,6 +31,7 @@ struct ContentView: View {
     @State private var showConfiguration = false
     @State private var showConversationSidebar = false
     @State private var shouldAutoScroll = true
+    @State private var isScrolledToBottom = true
     @State private var scrollVersion = 0
     @State private var pendingReasoningText = ""
     @State private var pendingContentText = ""
@@ -39,9 +54,16 @@ struct ContentView: View {
 
     let aiService = AIService()
     private let maxImageAttachmentCount = 4
+    private let inputBarBottomPadding: CGFloat = 8
+    private let inputBottomFadeHeight: CGFloat = 178
+    private let inputBottomFadeOverlap: CGFloat = 118
 
-    private var inputFieldBackground: Color {
-        colorScheme == .dark ? Color.black.opacity(0.70) : Color.white.opacity(0.82)
+    private var inputGlassTint: Color {
+        colorScheme == .dark ? Color.white.opacity(0.06) : Color.white.opacity(0.22)
+    }
+
+    private var inputGlassHighlight: Color {
+        colorScheme == .dark ? Color.white.opacity(0.18) : Color.white.opacity(0.62)
     }
 
     private var inputControlBackground: Color {
@@ -58,9 +80,48 @@ struct ContentView: View {
         Color.red.opacity(colorScheme == .dark ? 0.24 : 0.12)
     }
 
+    private func controlGlassBackground(_ tint: Color) -> some View {
+        Circle()
+            .fill(.thinMaterial)
+            .overlay(Circle().fill(tint))
+            .overlay(
+                Circle()
+                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.14 : 0.45), lineWidth: 1)
+            )
+    }
+
+    private var inputBottomFadeTint: Color {
+        colorScheme == .dark ? Color.black.opacity(0.40) : Color.white.opacity(0.62)
+    }
+
+    private var inputBottomFade: some View {
+        Rectangle()
+            .fill(.thickMaterial)
+            .overlay(inputBottomFadeTint)
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0.08), location: 0.00),
+                        .init(color: .black.opacity(0.18), location: 0.10),
+                        .init(color: .black.opacity(0.36), location: 0.24),
+                        .init(color: .black.opacity(0.66), location: 0.48),
+                        .init(color: .black.opacity(0.90), location: 0.72),
+                        .init(color: .black.opacity(1.00), location: 1.00)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .allowsHitTesting(false)
+    }
+
     private var canSendMessage: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !pendingImageAttachments.isEmpty
+    }
+
+    private var shouldShowScrollToBottomButton: Bool {
+        !shouldAutoScroll && !isScrolledToBottom
     }
 
     private var isEditingMessage: Bool {
@@ -165,6 +226,17 @@ struct ContentView: View {
                             Color.clear
                                 .frame(height: 1)
                                 .id("bottomAnchor")
+                                .background(
+                                    GeometryReader { bottomGeometry in
+                                        Color.clear.preference(
+                                            key: ChatScrollBottomDistancePreferenceKey.self,
+                                            value: chatScrollBottomDistance(
+                                                bottomGeometry: bottomGeometry,
+                                                viewportHeight: scrollGeometry.size.height
+                                            )
+                                        )
+                                    }
+                                )
                         }
                         .padding()
                         .frame(
@@ -174,10 +246,15 @@ struct ContentView: View {
                         )
                         .contentShape(Rectangle())
                     }
+                    .coordinateSpace(name: ChatScrollMetrics.coordinateSpaceName)
                     .simultaneousGesture(
-                        DragGesture().onChanged { _ in
-                            shouldAutoScroll = false
-                        }
+                        DragGesture()
+                            .updating($isDraggingChatScroll) { _, state, _ in
+                                state = true
+                            }
+                            .onChanged { _ in
+                                handleChatScrollDragChanged()
+                            }
                     )
                     .simultaneousGesture(
                         TapGesture().onEnded {
@@ -201,6 +278,9 @@ struct ContentView: View {
                     .onChange(of: scrollVersion) { _, _ in
                         scrollToBottom(proxy: proxy, animated: false)
                     }
+                    .onPreferenceChange(ChatScrollBottomDistancePreferenceKey.self) { distanceFromBottom in
+                        updateChatScrollBottomState(distanceFromBottom: distanceFromBottom)
+                    }
                 }
             }
         }
@@ -208,7 +288,7 @@ struct ContentView: View {
             inputBar
         }
         .overlay(alignment: .bottom) {
-            if !shouldAutoScroll {
+            if shouldShowScrollToBottomButton {
                 Button {
                     shouldAutoScroll = true
                     scrollVersion += 1
@@ -254,9 +334,10 @@ struct ContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
         .background(
             RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .fill(inputFieldBackground)
+                .fill(inputGlassTint)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 34, style: .continuous)
@@ -264,6 +345,11 @@ struct ContentView: View {
                     isImageDropTargeted ? Color.accentColor.opacity(0.56) : Color.secondary.opacity(0.12),
                     lineWidth: isImageDropTargeted ? 2 : 1
                 )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 34, style: .continuous)
+                .stroke(inputGlassHighlight, lineWidth: 1)
+                .blendMode(.screen)
         )
         .onDrop(
             of: [UTType.image.identifier],
@@ -276,11 +362,17 @@ struct ContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
-        .padding(.bottom, 8)
+        .padding(.bottom, inputBarBottomPadding)
+        .background(alignment: .bottom) {
+            inputBottomFade
+                .frame(height: inputBottomFadeHeight)
+                .offset(y: inputBottomFadeHeight - inputBottomFadeOverlap - inputBarBottomPadding)
+                .ignoresSafeArea(edges: .bottom)
+        }
     }
 
     private var inputComposer: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             inputOptionsMenu
 
             ImagePastingTextView(
@@ -311,7 +403,7 @@ struct ContentView: View {
                         .font(.system(size: 19, weight: .semibold))
                         .foregroundStyle(.red)
                         .frame(width: 48, height: 48)
-                        .background(Circle().fill(cancelControlBackground))
+                        .background(controlGlassBackground(cancelControlBackground))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("取消修改")
@@ -328,7 +420,7 @@ struct ContentView: View {
                     Image(systemName: "checkmark")
                         .font(.system(size: 19, weight: .semibold))
                         .frame(width: 48, height: 48)
-                        .background(Circle().fill(sendControlBackground))
+                        .background(controlGlassBackground(sendControlBackground))
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSendMessage)
@@ -344,7 +436,7 @@ struct ContentView: View {
                 Image(systemName: isGenerating ? "stop.fill" : "paperplane.fill")
                     .font(.system(size: 19, weight: .semibold))
                     .frame(width: 48, height: 48)
-                    .background(Circle().fill(sendControlBackground))
+                    .background(controlGlassBackground(sendControlBackground))
             }
             .buttonStyle(.plain)
             .disabled(!isGenerating && !canSendMessage)
@@ -488,7 +580,7 @@ struct ContentView: View {
                 .font(.system(size: 16, weight: .bold))
                 .frame(width: 34, height: 34)
                 .foregroundStyle(Color.primary)
-                .background(Circle().fill(inputControlBackground))
+                .background(controlGlassBackground(inputControlBackground))
         }
         .buttonStyle(.plain)
         .disabled(isGenerating)
@@ -1139,6 +1231,30 @@ struct ContentView: View {
         pendingImageAttachments.removeAll { $0.id == id }
         if pendingImageAttachments.isEmpty {
             selectedPhotoItems = []
+        }
+    }
+
+    private func chatScrollBottomDistance(bottomGeometry: GeometryProxy, viewportHeight: CGFloat) -> CGFloat {
+        let bottomY = bottomGeometry.frame(in: .named(ChatScrollMetrics.coordinateSpaceName)).maxY
+        return max(0, bottomY - viewportHeight)
+    }
+
+    private func handleChatScrollDragChanged() {
+        guard !isScrolledToBottom else { return }
+        shouldAutoScroll = false
+    }
+
+    private func updateChatScrollBottomState(distanceFromBottom: CGFloat) {
+        let isAtBottom = distanceFromBottom <= ChatScrollMetrics.bottomThreshold
+
+        if isScrolledToBottom != isAtBottom {
+            isScrolledToBottom = isAtBottom
+        }
+
+        if isAtBottom {
+            shouldAutoScroll = true
+        } else if isDraggingChatScroll {
+            shouldAutoScroll = false
         }
     }
 
