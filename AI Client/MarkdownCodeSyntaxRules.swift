@@ -88,8 +88,8 @@ struct ChatCodeSyntaxRules {
     private static let blockCommentLanguages: Set<String> = [
         "swift", "javascript", "typescript", "java", "kotlin", "c", "cpp", "csharp", "go", "rust", "css", "sql"
     ]
-    private static let tripleQuotedStringLanguages: Set<String> = ["python", "swift"]
-    private static let backtickStringLanguages: Set<String> = ["javascript", "typescript", "shell"]
+    private static let tripleQuotedStringLanguages: Set<String> = ["python", "swift", "kotlin"]
+    private static let backtickStringLanguages: Set<String> = ["javascript", "typescript", "shell", "go"]
     private static let preprocessorLanguages: Set<String> = ["c", "cpp", "csharp", "swift"]
 
     private static let sharedKeywords: Set<String> = [

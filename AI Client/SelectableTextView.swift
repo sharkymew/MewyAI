@@ -35,11 +35,13 @@ struct SelectableTextView: UIViewRepresentable {
 
     func updateUIView(_ textView: IntrinsicTextView, context: Context) {
         context.coordinator.onTap = onTap
-        textView.text = text
+        if textView.text != text {
+            textView.text = text
+            textView.invalidateIntrinsicContentSize()
+        }
         textView.textColor = textColor
         textView.font = font
         textView.textAlignment = textAlignment
-        textView.invalidateIntrinsicContentSize()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -119,9 +121,11 @@ struct SelectableAttributedTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: IntrinsicTextView, context: Context) {
-        textView.attributedText = attributedText
+        if textView.attributedText?.isEqual(to: attributedText) != true {
+            textView.attributedText = attributedText
+            textView.invalidateIntrinsicContentSize()
+        }
         textView.textAlignment = textAlignment
-        textView.invalidateIntrinsicContentSize()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: IntrinsicTextView, context: Context) -> CGSize? {

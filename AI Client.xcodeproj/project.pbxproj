@@ -102,7 +102,7 @@
 			mainGroup = DF1124292FBD5F56007131D0;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				DF11246F2FBF49A9007131D0 /* XCLocalSwiftPackageReference "../../../../../Downloads/swift-markdown-ui-2.4.1" */,
+				DF11246F2FBF49A9007131D0 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DF1124332FBD5F56007131D0 /* Products */;
@@ -357,16 +357,21 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCLocalSwiftPackageReference section */
-		DF11246F2FBF49A9007131D0 /* XCLocalSwiftPackageReference "../../../../../Downloads/swift-markdown-ui-2.4.1" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "../../../../../Downloads/swift-markdown-ui-2.4.1";
+/* Begin XCRemoteSwiftPackageReference section */
+		DF11246F2FBF49A9007131D0 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
+			requirement = {
+				kind = exactVersion;
+				version = 2.4.1;
+			};
 		};
-/* End XCLocalSwiftPackageReference section */
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		DF1124702FBF49A9007131D0 /* MarkdownUI */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = DF11246F2FBF49A9007131D0 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
 			productName = MarkdownUI;
 		};
 /* End XCSwiftPackageProductDependency section */

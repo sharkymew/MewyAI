@@ -33,6 +33,11 @@ private struct ChatCodeLineHighlighter {
         var plainBuffer = ""
         var segmentCount = 0
 
+        func highlightedPrefixWithPlainRemainder(from remainderIndex: Int) -> Text {
+            let remainingText = String(characters[remainderIndex...])
+            return output + Text(plainBuffer + remainingText)
+        }
+
         func appendPlainBuffer() -> Bool {
             guard !plainBuffer.isEmpty else { return true }
             guard append(Text(plainBuffer)) else { return false }
@@ -52,7 +57,7 @@ private struct ChatCodeLineHighlighter {
                 let range = blockCommentRange(in: characters, from: index)
                 guard appendPlainBuffer(),
                       append(Text(String(characters[range])).foregroundColor(Self.commentColor)) else {
-                    return Text(code)
+                    return highlightedPrefixWithPlainRemainder(from: index)
                 }
                 index = range.upperBound
                 continue
@@ -64,7 +69,7 @@ private struct ChatCodeLineHighlighter {
                 let range = preprocessorDirectiveRange(in: characters, from: index)
                 guard appendPlainBuffer(),
                       append(Text(String(characters[range])).foregroundColor(Self.keywordColor)) else {
-                    return Text(code)
+                    return highlightedPrefixWithPlainRemainder(from: index)
                 }
                 index = range.upperBound
                 continue
@@ -74,7 +79,7 @@ private struct ChatCodeLineHighlighter {
                 let range = lineCommentRange(in: characters, from: index)
                 guard appendPlainBuffer(),
                       append(Text(String(characters[range])).foregroundColor(Self.commentColor)) else {
-                    return Text(code)
+                    return highlightedPrefixWithPlainRemainder(from: index)
                 }
                 index = range.upperBound
                 continue
@@ -86,7 +91,7 @@ private struct ChatCodeLineHighlighter {
                 let range = stringRange(in: characters, from: index, delimiter: delimiter)
                 guard appendPlainBuffer(),
                       append(Text(String(characters[range])).foregroundColor(Self.stringColor)) else {
-                    return Text(code)
+                    return highlightedPrefixWithPlainRemainder(from: index)
                 }
                 index = range.upperBound
                 continue
@@ -96,7 +101,7 @@ private struct ChatCodeLineHighlighter {
                 let range = numberRange(in: characters, from: index)
                 guard appendPlainBuffer(),
                       append(Text(String(characters[range])).foregroundColor(Self.numberColor)) else {
-                    return Text(code)
+                    return highlightedPrefixWithPlainRemainder(from: index)
                 }
                 index = range.upperBound
                 continue
@@ -109,7 +114,9 @@ private struct ChatCodeLineHighlighter {
                 if styledToken.isPlain {
                     plainBuffer += token
                 } else {
-                    guard appendPlainBuffer(), append(styledToken.text) else { return Text(code) }
+                    guard appendPlainBuffer(), append(styledToken.text) else {
+                        return highlightedPrefixWithPlainRemainder(from: index)
+                    }
                 }
                 index = range.upperBound
                 continue
@@ -119,7 +126,7 @@ private struct ChatCodeLineHighlighter {
             index += 1
         }
 
-        guard appendPlainBuffer() else { return Text(code) }
+        guard appendPlainBuffer() else { return output + Text(plainBuffer) }
         return output
     }
 
@@ -275,9 +282,12 @@ private struct ChatCodeLineHighlighter {
 
 private extension Array where Element == Character {
     func matches(_ marker: String, at index: Int) -> Bool {
-        let markerCharacters = Array(marker)
-        guard index + markerCharacters.count <= count else { return false }
-        return Array(self[index..<(index + markerCharacters.count)]) == markerCharacters
+        var cursor = index
+        for character in marker {
+            guard cursor < count, self[cursor] == character else { return false }
+            cursor += 1
+        }
+        return true
     }
 }
 

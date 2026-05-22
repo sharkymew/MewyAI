@@ -2,7 +2,6 @@ import SwiftUI
 import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
-import MarkdownUI
 
 private enum ChatScrollMetrics {
     static let coordinateSpaceName = "ChatScrollCoordinateSpace"
@@ -35,8 +34,12 @@ struct ContentView: View {
     @State private var scrollVersion = 0
     @State private var pendingReasoningText = ""
     @State private var pendingContentText = ""
+    @State private var liveAssistantReasoningText = ""
+    @State private var liveAssistantContentText = ""
     @State private var isFlushScheduled = false
     @State private var flushTask: Task<Void, Never>?
+    @State private var isAutoScrollScheduled = false
+    @State private var autoScrollTask: Task<Void, Never>?
     @State private var activeAssistantMessageID: UUID?
     @State private var markdownRenderCache: [UUID: MarkdownRenderCacheEntry] = [:]
     @State private var markdownRenderTasks: [UUID: Task<Void, Never>] = [:]
@@ -205,9 +208,12 @@ struct ContentView: View {
                     ScrollView {
                         VStack(spacing: 12) {
                             ForEach($messages) { $message in
+                                let isStreamingMessage = isGenerating && activeAssistantMessageID == message.id
                                 MessageBubble(
                                     message: $message,
-                                    isStreaming: isGenerating && activeAssistantMessageID == message.id,
+                                    isStreaming: isStreamingMessage,
+                                    streamingContentOverride: isStreamingMessage ? liveAssistantContentText : nil,
+                                    streamingReasoningOverride: isStreamingMessage ? liveAssistantReasoningText : nil,
                                     markdownRenderCache: markdownRenderCache[message.id],
                                     showsActions: activeMessageActionID == message.id,
                                     onSelect: {
@@ -273,7 +279,7 @@ struct ContentView: View {
                         }
                     )
                     .onChange(of: messages.count) { _, _ in
-                        forceScrollToBottom(proxy: proxy, animated: true)
+                        scrollToBottom(proxy: proxy, animated: true)
                     }
                     .onChange(of: scrollVersion) { _, _ in
                         scrollToBottom(proxy: proxy, animated: false)
@@ -291,7 +297,7 @@ struct ContentView: View {
             if shouldShowScrollToBottomButton {
                 Button {
                     shouldAutoScroll = true
-                    scrollVersion += 1
+                    requestImmediateAutoScroll()
                 } label: {
                     Image(systemName: "arrow.down")
                         .font(.system(size: 15, weight: .semibold))
@@ -1786,7 +1792,7 @@ struct AssistantMessageContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if isStreaming {
-                PlainAssistantText(streamingContent)
+                StreamingAssistantText(streamingContent)
             } else if showsFullText {
                 PlainAssistantText(content)
             } else if let markdownRenderCache {
@@ -1824,8 +1830,25 @@ struct AssistantMessageContent: View {
         return String(content.prefix(Self.fallbackCharacterLimit))
     }
 
-    private static let streamingCharacterLimit = 8_000
+    private static let streamingCharacterLimit = 4_000
     private static let fallbackCharacterLimit = 5_000
+}
+
+struct StreamingAssistantText: View {
+    let content: String
+
+    init(_ content: String) {
+        self.content = content
+    }
+
+    var body: some View {
+        Text(content)
+            .font(.body)
+            .foregroundStyle(.primary)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }
 
 struct PlainAssistantText: View {
@@ -1848,7 +1871,7 @@ struct PlainAssistantText: View {
 nonisolated struct MarkdownRenderCacheEntry: @unchecked Sendable {
     let signature: String
     let renderedMarkdown: String
-    let markdownContent: MarkdownContent
+    let segments: [ChatMarkdownBlockSegment]
     let isTruncated: Bool
 
     nonisolated init(content: String) {
@@ -1863,7 +1886,7 @@ nonisolated struct MarkdownRenderCacheEntry: @unchecked Sendable {
             renderedMarkdown = processedContent
         }
 
-        markdownContent = MarkdownContent(renderedMarkdown)
+        segments = ChatMarkdownBlockSegment.split(renderedMarkdown)
     }
 
     nonisolated static func signature(for content: String) -> String {
@@ -1879,7 +1902,7 @@ struct AssistantMarkdownText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(ChatMarkdownBlockSegment.split(renderCache.renderedMarkdown)) { segment in
+            ForEach(renderCache.segments) { segment in
                 switch segment.kind {
                 case let .text(text):
                     if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1908,13 +1931,13 @@ struct ChatMarkdownBlockSegment: Identifiable {
         case code(language: String?, code: String)
     }
 
-    static func split(_ content: String) -> [ChatMarkdownBlockSegment] {
+    nonisolated static func split(_ content: String) -> [ChatMarkdownBlockSegment] {
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var segments: [ChatMarkdownBlockSegment] = []
         var textBuffer: [String] = []
         var codeBuffer: [String] = []
         var codeLanguage: String?
-        var isInsideCodeBlock = false
+        var activeCodeFence: ChatMarkdownCodeFence?
 
         func appendText() {
             guard !textBuffer.isEmpty else { return }
@@ -1939,24 +1962,23 @@ struct ChatMarkdownBlockSegment: Identifiable {
         }
 
         for line in lines {
-            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            if trimmedLine.hasPrefix("```") {
-                if isInsideCodeBlock {
+            if let codeFence = activeCodeFence {
+                if codeFence.isClosing(line) {
                     appendCode()
+                    activeCodeFence = nil
                 } else {
-                    appendText()
-                    let language = String(trimmedLine.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    codeLanguage = language.isEmpty ? nil : language
+                    codeBuffer.append(line)
                 }
-                isInsideCodeBlock.toggle()
-            } else if isInsideCodeBlock {
-                codeBuffer.append(line)
+            } else if let codeFence = ChatMarkdownCodeFence.opening(in: line) {
+                appendText()
+                activeCodeFence = codeFence
+                codeLanguage = codeFence.language
             } else {
                 textBuffer.append(line)
             }
         }
 
-        if isInsideCodeBlock {
+        if activeCodeFence != nil {
             appendCode()
         } else {
             appendText()
@@ -1966,29 +1988,33 @@ struct ChatMarkdownBlockSegment: Identifiable {
     }
 }
 
-struct ChatMarkdownHeading: View {
-    let configuration: BlockConfiguration
-    let fontSize: RelativeSize
-    let top: CGFloat
-    let bottom: CGFloat
-    let showsDivider: Bool
+private struct ChatMarkdownCodeFence {
+    let marker: Character
+    let length: Int
+    let language: String?
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            configuration.label
-                .fixedSize(horizontal: false, vertical: true)
-                .relativeLineSpacing(.em(0.08))
-                .markdownTextStyle {
-                    FontWeight(.semibold)
-                    FontSize(fontSize)
-                }
+    nonisolated static func opening(in line: String) -> ChatMarkdownCodeFence? {
+        let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+        guard let marker = trimmedLine.first, marker == "`" || marker == "~" else { return nil }
 
-            if showsDivider {
-                Divider()
-                    .padding(.top, 6)
-            }
-        }
-        .markdownMargin(top: top, bottom: bottom)
+        let length = trimmedLine.prefix { $0 == marker }.count
+        guard length >= 3 else { return nil }
+
+        let language = trimmedLine
+            .dropFirst(length)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+            .first
+            .map(String.init)
+
+        return ChatMarkdownCodeFence(marker: marker, length: length, language: language)
+    }
+
+    nonisolated func isClosing(_ line: String) -> Bool {
+        let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+        let closingLength = trimmedLine.prefix { $0 == marker }.count
+        guard closingLength >= length else { return false }
+        return trimmedLine.dropFirst(closingLength).trimmingCharacters(in: .whitespaces).isEmpty
     }
 }
 
@@ -2020,16 +2046,25 @@ enum ChatMarkdownPreprocessor {
         let lines = content.components(separatedBy: "\n")
         var segments: [(text: String, isCode: Bool)] = []
         var buffer: [String] = []
-        var isCode = false
+        var activeCodeFence: ChatMarkdownCodeFence?
+
+        func appendBuffer(isCode: Bool, appendsTrailingNewline: Bool) {
+            guard !buffer.isEmpty else { return }
+            let text = buffer.joined(separator: "\n") + (appendsTrailingNewline ? "\n" : "")
+            segments.append((text, isCode))
+            buffer = []
+        }
 
         for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                if !buffer.isEmpty {
-                    segments.append((buffer.joined(separator: "\n") + "\n", isCode))
-                    buffer = []
+            if let codeFence = activeCodeFence {
+                buffer.append(line)
+                if codeFence.isClosing(line) {
+                    appendBuffer(isCode: true, appendsTrailingNewline: true)
+                    activeCodeFence = nil
                 }
-                isCode.toggle()
+            } else if let codeFence = ChatMarkdownCodeFence.opening(in: line) {
+                appendBuffer(isCode: false, appendsTrailingNewline: true)
+                activeCodeFence = codeFence
                 buffer.append(line)
             } else {
                 buffer.append(line)
@@ -2037,7 +2072,7 @@ enum ChatMarkdownPreprocessor {
         }
 
         if !buffer.isEmpty {
-            segments.append((buffer.joined(separator: "\n"), isCode))
+            segments.append((buffer.joined(separator: "\n"), activeCodeFence != nil))
         }
         return segments
     }
@@ -2267,10 +2302,10 @@ enum ChatMarkdownPreprocessor {
         var footnotes: [(id: String, body: String)] = []
         var bodyLines: [String] = []
         let pattern = #"^\[\^([^\]]+)\]:\s*(.*)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
 
         for line in text.components(separatedBy: "\n") {
-            guard let regex = try? NSRegularExpression(pattern: pattern),
-                  let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)),
+            guard let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)),
                   match.numberOfRanges == 3,
                   let idRange = Range(match.range(at: 1), in: line),
                   let bodyRange = Range(match.range(at: 2), in: line) else {
