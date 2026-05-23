@@ -60,6 +60,93 @@ private struct ChatScrollBottomDistancePreferenceKey: PreferenceKey {
     }
 }
 
+private struct FixedTopGlassButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    let tint: Color
+    let highlight: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                if #available(iOS 26.0, *) {
+                    Capsule()
+                        .fill(.clear)
+                        .glassEffect(.regular.tint(tint), in: Capsule())
+                } else {
+                    Capsule()
+                        .fill(.ultraThinMaterial)
+                        .overlay(Capsule().fill(tint))
+                        .overlay(
+                            Capsule()
+                                .stroke(highlight, lineWidth: 1)
+                                .blendMode(.screen)
+                        )
+                }
+            }
+            .scaleEffect(configuration.isPressed ? 1.05 : 1)
+            .opacity(isEnabled ? 1 : 0.46)
+            .animation(.spring(response: 0.18, dampingFraction: 0.72), value: configuration.isPressed)
+    }
+}
+
+private struct FunctionOpacityMask: View {
+    let topOpacity: Double
+    let maxOpacity: Double
+    let fadeInEnd: Double
+    let holdEnd: Double
+    let fadeOutEnd: Double
+
+    var body: some View {
+        Canvas { context, size in
+            let scale = max(UIScreen.main.scale, 1)
+            let rowHeight = 1 / scale
+            let rowCount = max(Int(ceil(size.height / rowHeight)), 1)
+
+            for row in 0..<rowCount {
+                let y = min(CGFloat(row) * rowHeight, size.height)
+                let nextY = min(y + rowHeight, size.height)
+                guard nextY > y else { continue }
+
+                let midpoint = (y + nextY) * 0.5
+                let progress = size.height > 0 ? Double(midpoint / size.height) : 0
+                let opacity = opacity(at: progress)
+                guard opacity > 0.001 else { continue }
+
+                context.fill(
+                    Path(CGRect(x: 0, y: y, width: size.width, height: nextY - y)),
+                    with: .color(.black.opacity(opacity))
+                )
+            }
+        }
+    }
+
+    private func opacity(at rawProgress: Double) -> Double {
+        let progress = min(max(rawProgress, 0), 1)
+
+        if progress <= fadeInEnd {
+            let phase = smootherStep(progress / fadeInEnd)
+            return topOpacity + (maxOpacity - topOpacity) * phase
+        }
+
+        if progress <= holdEnd {
+            return maxOpacity
+        }
+
+        if progress <= fadeOutEnd {
+            let phase = smootherStep((progress - holdEnd) / (fadeOutEnd - holdEnd))
+            return maxOpacity * (1 - phase)
+        }
+
+        return 0
+    }
+
+    private func smootherStep(_ value: Double) -> Double {
+        let x = min(max(value, 0), 1)
+        return x * x * x * (x * (x * 6 - 15) + 10)
+    }
+}
+
 private extension View {
     @ViewBuilder
     func observeChatScrollBottomDistance(_ action: @escaping (CGFloat) -> Void) -> some View {
@@ -363,6 +450,11 @@ struct ContentView: View {
     private let inputBarBottomPadding: CGFloat = 8
     private let inputBottomFadeHeight: CGFloat = 178
     private let inputBottomFadeOverlap: CGFloat = 118
+    private let topControlSize: CGFloat = 44
+    private let topControlsTopPadding: CGFloat = 8
+    private let topControlsHorizontalPadding: CGFloat = 16
+    private let topConversationTitleButtonWidth: CGFloat = 148
+    private let topFadeBottomPadding: CGFloat = 155
 
     private var inputGlassTint: Color {
         colorScheme == .dark ? Color.white.opacity(0.06) : Color.white.opacity(0.22)
@@ -384,6 +476,18 @@ struct ContentView: View {
 
     private var inputBottomFadeTint: Color {
         colorScheme == .dark ? Color.black.opacity(0.40) : Color.white.opacity(0.62)
+    }
+
+    private var topFadeTint: Color {
+        colorScheme == .dark ? Color.black.opacity(0.28) : Color.white.opacity(0.48)
+    }
+
+    private var topFadeHeight: CGFloat {
+        topControlsTopPadding + topControlSize + topFadeBottomPadding
+    }
+
+    private var topScrollContentPadding: CGFloat {
+        topFadeHeight + 18
     }
 
     @ViewBuilder
@@ -485,6 +589,41 @@ struct ContentView: View {
             .allowsHitTesting(false)
     }
 
+    private var topFade: some View {
+        Rectangle()
+            .fill(.thickMaterial)
+            .overlay(topFadeTint)
+            .mask(
+                FunctionOpacityMask(
+                    topOpacity: 0.28,
+                    maxOpacity: 0.90,
+                    fadeInEnd: 0.22,
+                    holdEnd: 0.48,
+                    fadeOutEnd: 0.88
+                )
+            )
+            .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func topGlassControl<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .buttonStyle(
+                FixedTopGlassButtonStyle(
+                    tint: inputGlassTint,
+                    highlight: inputGlassHighlight
+                )
+            )
+    }
+
+    private func topIconLabel(systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: topControlSize, height: topControlSize)
+            .contentShape(Circle())
+    }
+
     private var canSendMessage: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !pendingImageAttachments.isEmpty
@@ -497,7 +636,7 @@ struct ContentView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                mainContent
+                mainContent(topSafeAreaInset: geometry.safeAreaInsets.top)
                     .disabled(showConversationSidebar)
                     .offset(x: showConversationSidebar ? min(geometry.size.width * 0.72, 320) : 0)
                     .animation(.easeOut(duration: 0.22), value: showConversationSidebar)
@@ -566,12 +705,8 @@ struct ContentView: View {
         }
     }
 
-    private var mainContent: some View {
-        VStack(spacing: 0) {
-            configurationBar
-
-            Divider()
-
+    private func mainContent(topSafeAreaInset: CGFloat) -> some View {
+        ZStack(alignment: .top) {
             ScrollViewReader { proxy in
                 GeometryReader { scrollGeometry in
                     ScrollView {
@@ -628,7 +763,9 @@ struct ContentView: View {
                                     )
                             }
                         }
-                        .padding()
+                        .padding(.horizontal)
+                        .padding(.bottom)
+                        .padding(.top, topScrollContentPadding)
                         .frame(
                             maxWidth: .infinity,
                             minHeight: scrollGeometry.size.height,
@@ -677,6 +814,14 @@ struct ContentView: View {
                     }
                 }
             }
+
+            topFade
+                .frame(maxWidth: .infinity)
+                .frame(height: topSafeAreaInset + topFadeHeight)
+                .offset(y: -topSafeAreaInset)
+                .ignoresSafeArea(edges: .top)
+
+            topFloatingControls
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             inputBar
@@ -739,6 +884,39 @@ struct ContentView: View {
                 .offset(y: inputBottomFadeHeight - inputBottomFadeOverlap - inputBarBottomPadding)
                 .ignoresSafeArea(edges: .bottom)
         }
+    }
+
+    private var topFloatingControls: some View {
+        ZStack {
+            HStack(spacing: 8) {
+                topGlassControl {
+                    Button {
+                        hideKeyboard()
+                        showConversationSidebar = true
+                    } label: {
+                        topIconLabel(systemName: "sidebar.left")
+                    }
+                }
+                .accessibilityLabel("打开对话列表")
+
+                Spacer(minLength: 0)
+
+                topGlassControl {
+                    Button {
+                        hideKeyboard()
+                        createConversation()
+                    } label: {
+                        topIconLabel(systemName: "square.and.pencil")
+                    }
+                }
+                .disabled(isGenerating || !canCreateConversation)
+                .accessibilityLabel("新建对话")
+            }
+
+            topConversationTitleMenu
+        }
+        .padding(.horizontal, topControlsHorizontalPadding)
+        .padding(.top, topControlsTopPadding)
     }
 
     @ViewBuilder
@@ -852,28 +1030,33 @@ struct ContentView: View {
         }
     }
 
-    private var modelMenu: some View {
-        Menu {
-            ForEach(currentConfiguration.models) { model in
-                Button {
-                    selectModel(model.name)
-                } label: {
-                    if model.name == currentConfiguration.selectedModel {
-                        Label(model.name, systemImage: "checkmark")
-                    } else {
-                        Text(model.name)
-                    }
+    @ViewBuilder
+    private var modelSelectionMenuItems: some View {
+        ForEach(currentConfiguration.models) { model in
+            Button {
+                selectModel(model.name)
+            } label: {
+                if model.name == currentConfiguration.selectedModel {
+                    Label(model.name, systemImage: "checkmark")
+                } else {
+                    Text(model.name)
                 }
             }
+        }
 
-            Divider()
+        Divider()
 
-            Button {
-                hideKeyboard()
-                showConfiguration = true
-            } label: {
-                Label("管理模型", systemImage: "slider.horizontal.3")
-            }
+        Button {
+            hideKeyboard()
+            showConfiguration = true
+        } label: {
+            Label("管理模型", systemImage: "slider.horizontal.3")
+        }
+    }
+
+    private var modelMenu: some View {
+        Menu {
+            modelSelectionMenuItems
         } label: {
             controlGlassIcon(
                 systemName: "cube.transparent",
@@ -886,41 +1069,31 @@ struct ContentView: View {
         .disabled(isGenerating)
     }
 
-    private var topModelMenu: some View {
-        Menu {
-            ForEach(currentConfiguration.models) { model in
-                Button {
-                    selectModel(model.name)
-                } label: {
-                    if model.name == currentConfiguration.selectedModel {
-                        Label(model.name, systemImage: "checkmark")
-                    } else {
-                        Text(model.name)
-                    }
-                }
-            }
+    private var topConversationTitleMenu: some View {
+        let title = currentConversationTitle
 
-            Divider()
-
-            Button {
-                hideKeyboard()
-                showConfiguration = true
+        return topGlassControl {
+            Menu {
+                modelSelectionMenuItems
             } label: {
-                Label("管理模型", systemImage: "slider.horizontal.3")
+                HStack(spacing: 5) {
+                    Text(title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(width: topConversationTitleButtonWidth - 38, alignment: .center)
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(width: topConversationTitleButtonWidth, height: topControlSize)
+                .contentShape(Capsule())
             }
-        } label: {
-            HStack(spacing: 4) {
-                Text(configurationSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
         }
         .disabled(isGenerating)
+        .accessibilityLabel("当前对话：\(title)")
     }
 
     private var inputOptionsMenu: some View {
@@ -972,50 +1145,6 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("更多输入选项")
-    }
-
-    private var configurationBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                hideKeyboard()
-                showConversationSidebar = true
-            } label: {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: 18, weight: .semibold))
-            }
-            .buttonStyle(.bordered)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(currentConversationTitle)
-                    .font(.headline)
-                    .lineLimit(1)
-
-                topModelMenu
-            }
-
-            Spacer()
-
-            Button {
-                hideKeyboard()
-                createConversation()
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 18, weight: .semibold))
-            }
-            .buttonStyle(.bordered)
-            .disabled(isGenerating || !canCreateConversation)
-
-            Button {
-                hideKeyboard()
-                showConfiguration = true
-            } label: {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 18, weight: .semibold))
-            }
-            .buttonStyle(.bordered)
-        }
-        .padding()
-        .background(.regularMaterial)
     }
 
     private var openSidebarGesture: some Gesture {
