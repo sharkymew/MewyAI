@@ -124,19 +124,34 @@ private struct MarkdownTableView: View {
     let textColor: UIColor
     let baseFont: UIFont
 
+    private let minimumColumnWidth: CGFloat = 72
+    private let maximumColumnWidth: CGFloat = 320
+    private let horizontalPadding: CGFloat = 8
+    private let verticalPadding: CGFloat = 7
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
             Grid(horizontalSpacing: 0, verticalSpacing: 0) {
-                GridRow {
-                    ForEach(table.headers.indices, id: \.self) { index in
-                        cell(table.headers[index], isHeader: true)
+                GridRow(alignment: .top) {
+                    ForEach(0..<table.columnCount, id: \.self) { index in
+                        cell(
+                            table.headers.value(at: index),
+                            isHeader: true,
+                            width: columnWidth(at: index),
+                            height: headerRowHeight()
+                        )
                     }
                 }
 
                 ForEach(table.rows.indices, id: \.self) { rowIndex in
-                    GridRow {
+                    GridRow(alignment: .top) {
                         ForEach(0..<table.columnCount, id: \.self) { columnIndex in
-                            cell(table.rows[rowIndex].value(at: columnIndex), isHeader: false)
+                            cell(
+                                table.rows[rowIndex].value(at: columnIndex),
+                                isHeader: false,
+                                width: columnWidth(at: columnIndex),
+                                height: rowHeight(at: rowIndex)
+                            )
                         }
                     }
                 }
@@ -146,14 +161,109 @@ private struct MarkdownTableView: View {
         .padding(.vertical, 4)
     }
 
-    private func cell(_ text: String, isHeader: Bool) -> some View {
-        Text(text)
-            .font(.system(size: baseFont.pointSize, weight: isHeader ? .semibold : .regular))
-            .foregroundStyle(Color(textColor))
-            .lineLimit(nil)
-            .frame(minWidth: 72, maxWidth: 180, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+    private func cell(_ text: String, isHeader: Bool, width: CGFloat, height: CGFloat) -> some View {
+        MarkdownTableCell(
+            text: text,
+            textColor: textColor,
+            font: font(isHeader: isHeader),
+            width: width,
+            height: height,
+            horizontalPadding: horizontalPadding,
+            verticalPadding: verticalPadding,
+            isHeader: isHeader
+        )
+    }
+
+    private func columnWidth(at index: Int) -> CGFloat {
+        let headerWidth = measuredWidth(for: table.headers.value(at: index), font: font(isHeader: true))
+        let rowWidth = table.rows
+            .map { measuredWidth(for: $0.value(at: index), font: font(isHeader: false)) }
+            .max() ?? minimumColumnWidth
+        return min(max(max(headerWidth, rowWidth), minimumColumnWidth), maximumColumnWidth)
+    }
+
+    private func measuredWidth(for markdown: String, font: UIFont) -> CGFloat {
+        let attributedText = MarkdownInlineFormatter.attributedString(
+            from: markdown,
+            font: font,
+            textColor: textColor,
+            textAlignment: .left
+        )
+        let bounds = attributedText.boundingRect(
+            with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        )
+        return ceil(bounds.width)
+    }
+
+    private func headerRowHeight() -> CGFloat {
+        rowHeight(for: table.headers, isHeader: true)
+    }
+
+    private func rowHeight(at index: Int) -> CGFloat {
+        rowHeight(for: table.rows[index], isHeader: false)
+    }
+
+    private func rowHeight(for cells: [String], isHeader: Bool) -> CGFloat {
+        let font = font(isHeader: isHeader)
+        let contentHeight = (0..<table.columnCount)
+            .map { columnIndex in
+                measuredHeight(
+                    for: cells.value(at: columnIndex),
+                    font: font,
+                    width: columnWidth(at: columnIndex)
+                )
+            }
+            .max() ?? font.lineHeight
+        return ceil(max(contentHeight, font.lineHeight) + verticalPadding * 2)
+    }
+
+    private func measuredHeight(for markdown: String, font: UIFont, width: CGFloat) -> CGFloat {
+        let attributedText = MarkdownInlineFormatter.attributedString(
+            from: markdown.isEmpty ? " " : markdown,
+            font: font,
+            textColor: textColor,
+            textAlignment: .left
+        )
+        let bounds = attributedText.boundingRect(
+            with: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        )
+        return ceil(bounds.height)
+    }
+
+    private func font(isHeader: Bool) -> UIFont {
+        isHeader ? .boldSystemFont(ofSize: baseFont.pointSize) : baseFont
+    }
+}
+
+private struct MarkdownTableCell: View {
+    let text: String
+    let textColor: UIColor
+    let font: UIFont
+    let width: CGFloat
+    let height: CGFloat
+    let horizontalPadding: CGFloat
+    let verticalPadding: CGFloat
+    let isHeader: Bool
+
+    private var attributedText: NSAttributedString {
+        MarkdownInlineFormatter.attributedString(
+            from: text,
+            font: font,
+            textColor: textColor,
+            textAlignment: .left
+        )
+    }
+
+    var body: some View {
+        SelectableAttributedTextView(attributedText: attributedText, textAlignment: .left)
+            .frame(width: width, alignment: .leading)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .frame(height: height, alignment: .topLeading)
             .background(isHeader ? Color.secondary.opacity(0.10) : Color.clear)
             .overlay(
                 Rectangle()
