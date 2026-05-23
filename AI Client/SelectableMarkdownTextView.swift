@@ -116,34 +116,103 @@ nonisolated struct PreparedMarkdownTableCell: Identifiable, @unchecked Sendable 
     let isHeader: Bool
 }
 
+nonisolated struct PreparedMarkdownBlockCache: @unchecked Sendable {
+    fileprivate var blocksBySignature: [String: PreparedMarkdownBlock] = [:]
+    fileprivate var textBlocksBySignature: [String: [PreparedMarkdownBlock]] = [:]
+
+    nonisolated init() {}
+
+    private static let maximumBlockEntryCount = 180
+    private static let maximumTextEntryCount = 96
+}
+
+nonisolated struct PreparedMarkdownBlockRenderResult: @unchecked Sendable {
+    let blocks: [PreparedMarkdownBlock]
+    let cache: PreparedMarkdownBlockCache
+}
+
 enum PreparedMarkdownBlockRenderer {
     nonisolated static func renderBlocks(
         markdown: String,
         style: MarkdownRenderStyle
     ) async -> [PreparedMarkdownBlock] {
+        await renderBlocks(markdown: markdown, style: style, cache: PreparedMarkdownBlockCache()).blocks
+    }
+
+    nonisolated static func renderBlocks(
+        markdown: String,
+        style: MarkdownRenderStyle,
+        cache previousCache: PreparedMarkdownBlockCache
+    ) async -> PreparedMarkdownBlockRenderResult {
         var preparedBlocks: [PreparedMarkdownBlock] = []
+        var nextCache = PreparedMarkdownBlockCache()
         for block in MarkdownBlockParser.parse(markdown) {
+            let signature = signature(for: block, style: style)
+            if let cachedBlock = previousCache.blocksBySignature[signature] {
+                let preparedBlock = PreparedMarkdownBlock(id: block.id, kind: cachedBlock.kind)
+                preparedBlocks.append(preparedBlock)
+                nextCache.store(preparedBlock, for: signature)
+                continue
+            }
+
+            let preparedBlock: PreparedMarkdownBlock
             switch block.kind {
             case let .text(text, textStyle):
-                preparedBlocks.append(PreparedMarkdownBlock(
+                preparedBlock = PreparedMarkdownBlock(
                     id: block.id,
                     kind: .text(await renderLine(text: text, textStyle: textStyle, renderStyle: style))
-                ))
+                )
             case let .quote(text):
-                preparedBlocks.append(PreparedMarkdownBlock(
+                preparedBlock = PreparedMarkdownBlock(
                     id: block.id,
                     kind: .quote(await renderQuote(text, renderStyle: style))
-                ))
+                )
             case let .table(table):
-                preparedBlocks.append(PreparedMarkdownBlock(
+                preparedBlock = PreparedMarkdownBlock(
                     id: block.id,
                     kind: .table(await renderTable(table, renderStyle: style))
-                ))
+                )
             case .divider:
-                preparedBlocks.append(PreparedMarkdownBlock(id: block.id, kind: .divider))
+                preparedBlock = PreparedMarkdownBlock(id: block.id, kind: .divider)
             }
+            preparedBlocks.append(preparedBlock)
+            nextCache.store(preparedBlock, for: signature)
         }
-        return preparedBlocks
+
+        return PreparedMarkdownBlockRenderResult(blocks: preparedBlocks, cache: nextCache)
+    }
+
+    private nonisolated static func signature(
+        for block: MarkdownBlock,
+        style: MarkdownRenderStyle
+    ) -> String {
+        switch block.kind {
+        case let .text(text, textStyle):
+            return [
+                style.signature,
+                "text",
+                textStyle.signature,
+                "\(text.count)",
+                "\(text.hashValue)"
+            ].joined(separator: ":")
+        case let .quote(text):
+            return [
+                style.signature,
+                "quote",
+                "\(text.count)",
+                "\(text.hashValue)"
+            ].joined(separator: ":")
+        case let .table(table):
+            let value = table.signature
+            return [
+                style.signature,
+                "table",
+                "\(value.count)",
+                "\(value.hashValue)"
+            ].joined(separator: ":")
+        case .divider:
+            return [style.signature, "divider"].joined(separator: ":")
+        }
     }
 
     private nonisolated static func renderLine(
@@ -355,6 +424,49 @@ enum PreparedMarkdownBlockRenderer {
     }
 }
 
+nonisolated extension PreparedMarkdownBlockCache {
+    func blocks(forTextSignature signature: String) -> [PreparedMarkdownBlock]? {
+        textBlocksBySignature[signature]
+    }
+
+    fileprivate mutating func store(_ block: PreparedMarkdownBlock, for signature: String) {
+        if blocksBySignature.count >= Self.maximumBlockEntryCount,
+           let key = blocksBySignature.keys.first {
+            blocksBySignature.removeValue(forKey: key)
+        }
+        blocksBySignature[signature] = block
+    }
+
+    mutating func store(_ blocks: [PreparedMarkdownBlock], forTextSignature signature: String) {
+        if textBlocksBySignature.count >= Self.maximumTextEntryCount,
+           let key = textBlocksBySignature.keys.first {
+            textBlocksBySignature.removeValue(forKey: key)
+        }
+        textBlocksBySignature[signature] = blocks
+    }
+
+    mutating func merge(_ cache: PreparedMarkdownBlockCache) {
+        for (signature, block) in cache.blocksBySignature {
+            store(block, for: signature)
+        }
+        for (signature, blocks) in cache.textBlocksBySignature {
+            store(blocks, forTextSignature: signature)
+        }
+    }
+}
+
+#if DEBUG
+nonisolated extension PreparedMarkdownBlockCache {
+    var diagnosticBlockEntryCount: Int {
+        blocksBySignature.count
+    }
+
+    var diagnosticTextEntryCount: Int {
+        textBlocksBySignature.count
+    }
+}
+#endif
+
 struct SelectableMarkdownTextView: View {
     let blocks: [PreparedMarkdownBlock]
 
@@ -511,6 +623,17 @@ private nonisolated enum MarkdownTextStyle {
     case heading(Int)
     case list
 
+    nonisolated var signature: String {
+        switch self {
+        case .paragraph:
+            return "paragraph"
+        case let .heading(level):
+            return "heading:\(level)"
+        case .list:
+            return "list"
+        }
+    }
+
     nonisolated func font(baseFont: UIFont) -> UIFont {
         switch self {
         case .paragraph, .list:
@@ -528,6 +651,12 @@ private nonisolated struct MarkdownTable {
 
     nonisolated var columnCount: Int {
         max(headers.count, rows.map(\.count).max() ?? 0)
+    }
+
+    nonisolated var signature: String {
+        ([headers] + rows)
+            .map { $0.joined(separator: "\u{1F}") }
+            .joined(separator: "\u{1E}")
     }
 }
 

@@ -9,6 +9,12 @@ import SwiftUI
 
 @main
 struct AI_ClientApp: App {
+    init() {
+        #if DEBUG
+        StreamingMarkdownRenderSelfCheck.runIfRequested()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

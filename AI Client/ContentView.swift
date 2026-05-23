@@ -2335,17 +2335,20 @@ private struct ReasoningPlainText: View {
 struct StreamingAssistantMarkdownText: View {
     let content: String
     let streamingChannel: StreamingTextUpdateChannel?
+    @Environment(\.colorScheme) private var colorScheme
     @State private var renderedContent: String
     @State private var pendingAppendChunks: [String] = []
-    @State private var renderedSegments: [ChatMarkdownBlockSegment]
+    @State private var renderedSegments: [StreamingChatMarkdownSegment]
+    @State private var renderCache = PreparedMarkdownBlockCache()
     @State private var renderTask: Task<Void, Never>?
+    @State private var needsRenderAfterCurrentTask = false
     @State private var streamingObserverID: UUID?
 
     init(_ content: String) {
         self.content = content
         streamingChannel = nil
         _renderedContent = State(initialValue: content)
-        _renderedSegments = State(initialValue: Self.renderSegments(for: content))
+        _renderedSegments = State(initialValue: Self.fallbackSegments(for: content))
     }
 
     init(streamingChannel: StreamingTextUpdateChannel) {
@@ -2359,7 +2362,11 @@ struct StreamingAssistantMarkdownText: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(renderedSegments) { segment in
                 switch segment.kind {
-                case let .text(text):
+                case let .text(blocks):
+                    if !blocks.isEmpty {
+                        SelectableMarkdownTextView(blocks: blocks)
+                    }
+                case let .fallbackText(text):
                     let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmedText.isEmpty {
                         StreamingMarkdownText(trimmedText)
@@ -2376,11 +2383,18 @@ struct StreamingAssistantMarkdownText: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             attachStreamingChannelIfNeeded()
+            if streamingChannel == nil, !renderedContent.isEmpty {
+                scheduleRender(delay: .zero)
+            }
         }
         .onChange(of: content) { _, newContent in
             guard streamingChannel == nil else { return }
             renderedContent = newContent
             scheduleRender()
+        }
+        .onChange(of: colorScheme) { _, _ in
+            renderCache = PreparedMarkdownBlockCache()
+            scheduleRender(delay: .zero)
         }
         .onDisappear {
             cancelRenderTask()
@@ -2388,22 +2402,56 @@ struct StreamingAssistantMarkdownText: View {
         }
     }
 
-    private func scheduleRender() {
-        guard renderTask == nil else { return }
+    private var renderStyle: MarkdownRenderStyle {
+        MarkdownRenderStyle(
+            textColor: .label,
+            baseFont: .preferredFont(forTextStyle: .body),
+            textAlignment: .left,
+            userInterfaceStyle: colorScheme == .dark ? .dark : .light,
+            displayScale: UIScreen.main.scale
+        )
+    }
+
+    private func scheduleRender(delay: Duration = Self.renderInterval) {
+        guard renderTask == nil else {
+            needsRenderAfterCurrentTask = true
+            return
+        }
 
         renderTask = Task { @MainActor in
-            try? await Task.sleep(for: Self.renderInterval)
+            try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             applyPendingChunks()
-            renderedSegments = Self.renderSegments(for: renderedContent)
+            let contentSnapshot = renderedContent
+            let style = renderStyle
+            let cacheSnapshot = renderCache
+            let result = await Task.detached(priority: .userInitiated) {
+                await Self.renderSegments(
+                    for: contentSnapshot,
+                    style: style,
+                    cache: cacheSnapshot
+                )
+            }.value
+            guard !Task.isCancelled else { return }
+            if renderedContent == contentSnapshot {
+                renderedSegments = result.segments
+                renderCache = result.cache
+            } else {
+                needsRenderAfterCurrentTask = true
+            }
             renderTask = nil
+            let shouldRenderAgain = needsRenderAfterCurrentTask || !pendingAppendChunks.isEmpty
+            needsRenderAfterCurrentTask = false
+            if shouldRenderAgain {
+                scheduleRender()
+            }
         }
     }
 
     private func renderImmediately() {
         cancelRenderTask()
         applyPendingChunks()
-        renderedSegments = Self.renderSegments(for: renderedContent)
+        scheduleRender(delay: .zero)
     }
 
     private func applyPendingChunks() {
@@ -2416,8 +2464,13 @@ struct StreamingAssistantMarkdownText: View {
         if update.resetsText {
             cancelRenderTask()
             pendingAppendChunks.removeAll(keepingCapacity: true)
+            needsRenderAfterCurrentTask = false
             renderedContent = update.chunks.joined()
-            renderedSegments = Self.renderSegments(for: renderedContent)
+            renderCache = PreparedMarkdownBlockCache()
+            renderedSegments = Self.fallbackSegments(for: renderedContent)
+            if !renderedContent.isEmpty {
+                scheduleRender(delay: .zero)
+            }
             return
         }
 
@@ -2449,14 +2502,456 @@ struct StreamingAssistantMarkdownText: View {
     private func cancelRenderTask() {
         renderTask?.cancel()
         renderTask = nil
+        needsRenderAfterCurrentTask = false
     }
 
-    private static func renderSegments(for content: String) -> [ChatMarkdownBlockSegment] {
-        ChatMarkdownBlockSegment.split(content)
+    private nonisolated static func fallbackSegments(for content: String) -> [StreamingChatMarkdownSegment] {
+        ChatMarkdownBlockSegment.split(content).map { segment in
+            switch segment.kind {
+            case let .text(text):
+                return StreamingChatMarkdownSegment(id: segment.id, kind: .fallbackText(text))
+            case let .code(language, code):
+                return StreamingChatMarkdownSegment(id: segment.id, kind: .code(language: language, code: code))
+            case let .math(formula, displayMode):
+                return StreamingChatMarkdownSegment(id: segment.id, kind: .math(formula: formula, displayMode: displayMode))
+            }
+        }
+    }
+
+    private nonisolated static func renderSegments(
+        for content: String,
+        style: MarkdownRenderStyle,
+        cache: PreparedMarkdownBlockCache
+    ) async -> StreamingMarkdownRenderResult {
+        let previousBlockCache = cache
+        var nextBlockCache = PreparedMarkdownBlockCache()
+        var segments: [StreamingChatMarkdownSegment] = []
+
+        for segment in ChatMarkdownBlockSegment.split(content) {
+            switch segment.kind {
+            case let .text(text):
+                let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmedText.isEmpty {
+                    segments.append(StreamingChatMarkdownSegment(
+                        id: stableSegmentID(sourceID: segment.id, groupIndex: 0),
+                        kind: .text([])
+                    ))
+                } else {
+                    for (groupIndex, group) in splitStreamingTextGroups(trimmedText).enumerated() {
+                        let textSignature = textSegmentSignature(for: group, style: style)
+                        if let blocks = previousBlockCache.blocks(forTextSignature: textSignature) {
+                            nextBlockCache.store(blocks, forTextSignature: textSignature)
+                            segments.append(StreamingChatMarkdownSegment(
+                                id: stableSegmentID(sourceID: segment.id, groupIndex: groupIndex),
+                                kind: .text(blocks)
+                            ))
+                            continue
+                        }
+
+                        let preprocessedText = ChatMarkdownPreprocessor.preprocess(group)
+                        let result = await PreparedMarkdownBlockRenderer.renderBlocks(
+                            markdown: preprocessedText,
+                            style: style,
+                            cache: previousBlockCache
+                        )
+                        nextBlockCache.merge(result.cache)
+                        nextBlockCache.store(result.blocks, forTextSignature: textSignature)
+                        segments.append(StreamingChatMarkdownSegment(
+                            id: stableSegmentID(sourceID: segment.id, groupIndex: groupIndex),
+                            kind: .text(result.blocks)
+                        ))
+                    }
+                }
+            case let .code(language, code):
+                segments.append(StreamingChatMarkdownSegment(
+                    id: stableSegmentID(sourceID: segment.id, groupIndex: 0),
+                    kind: .code(language: language, code: code)
+                ))
+            case let .math(formula, displayMode):
+                segments.append(StreamingChatMarkdownSegment(
+                    id: stableSegmentID(sourceID: segment.id, groupIndex: 0),
+                    kind: .math(formula: formula, displayMode: displayMode)
+                ))
+            }
+        }
+
+        return StreamingMarkdownRenderResult(segments: segments, cache: nextBlockCache)
+    }
+
+    #if DEBUG
+    nonisolated static func renderSegmentsForDiagnostics(
+        for content: String,
+        style: MarkdownRenderStyle,
+        cache: PreparedMarkdownBlockCache
+    ) async -> StreamingMarkdownRenderResult {
+        await renderSegments(for: content, style: style, cache: cache)
+    }
+    #endif
+
+    private nonisolated static func splitStreamingTextGroups(_ text: String) -> [String] {
+        let lines = text.components(separatedBy: .newlines)
+        var groups: [String] = []
+        var index = 0
+
+        func appendGroup(_ groupLines: [String]) {
+            let group = groupLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !group.isEmpty {
+                groups.append(group)
+            }
+        }
+
+        while index < lines.count {
+            if lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
+                index += 1
+            } else if let table = streamingTableGroup(in: lines, at: index) {
+                appendGroup(Array(lines[index..<table]))
+                index = table
+            } else if isStreamingSingletonLine(lines[index]) {
+                appendGroup([lines[index]])
+                index += 1
+            } else if isStreamingQuoteLine(lines[index]) {
+                let nextIndex = collectStreamingLines(in: lines, from: index, while: isStreamingQuoteLine(_:))
+                appendGroup(Array(lines[index..<nextIndex]))
+                index = nextIndex
+            } else {
+                let nextIndex = collectStreamingParagraph(in: lines, from: index)
+                appendGroup(Array(lines[index..<nextIndex]))
+                index = nextIndex
+            }
+        }
+
+        return groups.isEmpty ? [text] : groups
+    }
+
+    private nonisolated static func stableSegmentID(sourceID: Int, groupIndex: Int) -> Int {
+        sourceID * 10_000 + groupIndex
+    }
+
+    private nonisolated static func collectStreamingParagraph(in lines: [String], from start: Int) -> Int {
+        var index = start
+        while index < lines.count {
+            let line = lines[index]
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty,
+                  streamingTableGroup(in: lines, at: index) == nil,
+                  !isStreamingSingletonLine(line),
+                  !isStreamingQuoteLine(line) else {
+                break
+            }
+            index += 1
+        }
+        return max(index, start + 1)
+    }
+
+    private nonisolated static func collectStreamingLines(
+        in lines: [String],
+        from start: Int,
+        while shouldInclude: (String) -> Bool
+    ) -> Int {
+        var index = start
+        while index < lines.count, shouldInclude(lines[index]) {
+            index += 1
+        }
+        return index
+    }
+
+    private nonisolated static func isStreamingSingletonLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let headingLevel = trimmed.prefix { $0 == "#" }.count
+        let isHeading = (1...6).contains(headingLevel) && trimmed.dropFirst(headingLevel).first == " "
+        let isDivider = trimmed.count >= 3 && (
+            trimmed.allSatisfy { $0 == "-" } ||
+            trimmed.allSatisfy { $0 == "*" } ||
+            trimmed.allSatisfy { $0 == "_" }
+        )
+        return isHeading || isDivider || isStreamingListLine(trimmed)
+    }
+
+    private nonisolated static func isStreamingQuoteLine(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces).hasPrefix(">")
+    }
+
+    private nonisolated static func isStreamingListLine(_ trimmedLine: String) -> Bool {
+        trimmedLine.range(of: #"^[-*+]\s+"#, options: .regularExpression) != nil
+            || trimmedLine.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
+    }
+
+    private nonisolated static func streamingTableGroup(
+        in lines: [String],
+        at index: Int
+    ) -> Int? {
+        guard index + 1 < lines.count,
+              isStreamingTableSeparator(lines[index + 1]),
+              streamingTableCells(in: lines[index]).count >= 2 else {
+            return nil
+        }
+
+        var cursor = index + 2
+        while cursor < lines.count, lines[cursor].contains("|") {
+            cursor += 1
+        }
+        return cursor
+    }
+
+    private nonisolated static func isStreamingTableSeparator(_ line: String) -> Bool {
+        let parts = streamingTableCells(in: line)
+        guard parts.count >= 2 else { return false }
+        return parts.allSatisfy { part in
+            let trimmed = part.trimmingCharacters(in: .whitespaces)
+            return trimmed.count >= 3 && trimmed.allSatisfy { $0 == "-" || $0 == ":" }
+        }
+    }
+
+    private nonisolated static func streamingTableCells(in line: String) -> [String] {
+        var value = line.trimmingCharacters(in: .whitespaces)
+        if value.first == "|" { value.removeFirst() }
+        if value.last == "|" { value.removeLast() }
+        return value.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+    }
+
+    private nonisolated static func textSegmentSignature(
+        for text: String,
+        style: MarkdownRenderStyle
+    ) -> String {
+        [
+            style.signature,
+            "text-segment",
+            "\(text.count)",
+            "\(text.hashValue)"
+        ].joined(separator: ":")
     }
 
     private static let renderInterval: Duration = .milliseconds(50)
 }
+
+nonisolated struct StreamingChatMarkdownSegment: Identifiable, @unchecked Sendable {
+    let id: Int
+    let kind: Kind
+
+    enum Kind {
+        case text([PreparedMarkdownBlock])
+        case fallbackText(String)
+        case code(language: String?, code: String)
+        case math(formula: String, displayMode: Bool)
+    }
+}
+
+nonisolated struct StreamingMarkdownRenderResult: @unchecked Sendable {
+    let segments: [StreamingChatMarkdownSegment]
+    let cache: PreparedMarkdownBlockCache
+}
+
+#if DEBUG
+private struct StreamingMarkdownRenderSelfCheckSnapshot: Codable {
+    let index: Int
+    let contentLength: Int
+    let segmentCount: Int
+    let attributedTextReferenceCount: Int
+    let previousAttributedTextReferenceCount: Int
+    let reusedAttributedTextReferenceCount: Int
+    let cacheBlockEntryCount: Int
+    let cacheTextEntryCount: Int
+}
+
+private struct StreamingMarkdownRenderSelfCheckReport: Codable {
+    let passed: Bool
+    let elapsedMilliseconds: Int
+    let snapshots: [StreamingMarkdownRenderSelfCheckSnapshot]
+    let failures: [String]
+}
+
+enum StreamingMarkdownRenderSelfCheck {
+    private static let environmentKey = "AI_CLIENT_STREAMING_MARKDOWN_SELF_CHECK"
+    private static let reportFileName = "streaming-markdown-self-check.json"
+
+    @MainActor
+    static func runIfRequested() {
+        guard ProcessInfo.processInfo.environment[environmentKey] == "1" else { return }
+
+        Task { @MainActor in
+            let report = await run()
+            do {
+                let url = try write(report)
+                print("\(environmentKey)=\(report.passed ? "passed" : "failed") \(url.path)")
+            } catch {
+                print("\(environmentKey)=failed write_error=\(error)")
+            }
+        }
+    }
+
+    @MainActor
+    private static func run() async -> StreamingMarkdownRenderSelfCheckReport {
+        let startedAt = Date()
+        let style = MarkdownRenderStyle(
+            textColor: .label,
+            baseFont: .preferredFont(forTextStyle: .body),
+            textAlignment: .left,
+            userInterfaceStyle: .light,
+            displayScale: UIScreen.main.scale
+        )
+        let snapshots = makeSnapshots()
+        var cache = PreparedMarkdownBlockCache()
+        var previousReferences = Set<ObjectIdentifier>()
+        var snapshotReports: [StreamingMarkdownRenderSelfCheckSnapshot] = []
+        var failures: [String] = []
+
+        for (index, content) in snapshots.enumerated() {
+            let result = await StreamingAssistantMarkdownText.renderSegmentsForDiagnostics(
+                for: content,
+                style: style,
+                cache: cache
+            )
+            let references = attributedTextReferences(in: result)
+            let reusedCount = references.intersection(previousReferences).count
+
+            snapshotReports.append(StreamingMarkdownRenderSelfCheckSnapshot(
+                index: index,
+                contentLength: content.count,
+                segmentCount: result.segments.count,
+                attributedTextReferenceCount: references.count,
+                previousAttributedTextReferenceCount: previousReferences.count,
+                reusedAttributedTextReferenceCount: reusedCount,
+                cacheBlockEntryCount: result.cache.diagnosticBlockEntryCount,
+                cacheTextEntryCount: result.cache.diagnosticTextEntryCount
+            ))
+
+            if references.isEmpty {
+                failures.append("snapshot \(index) produced no attributed text references")
+            }
+            if index > 0, reusedCount == 0 {
+                failures.append("snapshot \(index) did not reuse any prepared Markdown references")
+            }
+            if index > 0 {
+                let minimumReuseCount = Int(Double(previousReferences.count) * 0.85)
+                if reusedCount < minimumReuseCount {
+                    failures.append("snapshot \(index) reused \(reusedCount) of \(previousReferences.count) previous references")
+                }
+            }
+
+            cache = result.cache
+            previousReferences = references
+        }
+
+        if cache.diagnosticTextEntryCount == 0 {
+            failures.append("final cache has no text entries")
+        }
+
+        return StreamingMarkdownRenderSelfCheckReport(
+            passed: failures.isEmpty,
+            elapsedMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1000),
+            snapshots: snapshotReports,
+            failures: failures
+        )
+    }
+
+    private static func makeSnapshots() -> [String] {
+        var snapshots: [String] = []
+        var content = ""
+
+        for index in 1...12 {
+            if !content.isEmpty {
+                content += "\n\n"
+            }
+            content += makeSection(index)
+            snapshots.append(content)
+        }
+
+        return snapshots
+    }
+
+    private static func makeSection(_ index: Int) -> String {
+        var section = """
+        ## Streaming Markdown Section \(index)
+
+        This paragraph has **bold text \(index)**, `inline code \(index)`, and stable words that should keep their prepared render output when later chunks arrive.
+
+        - first item \(index)
+        - second item \(index)
+        - third item \(index)
+
+        > quoted line one \(index)
+        > quoted line two \(index)
+
+        | metric | value |
+        | --- | ---: |
+        | cache hit \(index) | **yes** |
+        | render work \(index) | new tail only |
+
+        The closing paragraph for section \(index) is intentionally plain so the streaming renderer can reuse every earlier paragraph, list, quote, and table.
+        """
+
+        if index.isMultiple(of: 4) {
+            section += """
+
+            ```swift
+            let value\(index) = \(index)
+            ```
+            """
+        }
+
+        return section
+    }
+
+    private static func attributedTextReferences(
+        in result: StreamingMarkdownRenderResult
+    ) -> Set<ObjectIdentifier> {
+        var references = Set<ObjectIdentifier>()
+        for segment in result.segments {
+            guard case let .text(blocks) = segment.kind else { continue }
+            for block in blocks {
+                collectAttributedTextReferences(from: block, into: &references)
+            }
+        }
+        return references
+    }
+
+    private static func collectAttributedTextReferences(
+        from block: PreparedMarkdownBlock,
+        into references: inout Set<ObjectIdentifier>
+    ) {
+        switch block.kind {
+        case let .text(line):
+            references.insert(ObjectIdentifier(line.attributedText))
+        case let .quote(quote):
+            for line in quote.lines {
+                references.insert(ObjectIdentifier(line.line.attributedText))
+            }
+        case let .table(table):
+            collectAttributedTextReferences(from: table.header, into: &references)
+            for row in table.rows {
+                collectAttributedTextReferences(from: row, into: &references)
+            }
+        case .divider:
+            break
+        }
+    }
+
+    private static func collectAttributedTextReferences(
+        from row: PreparedMarkdownTableRow,
+        into references: inout Set<ObjectIdentifier>
+    ) {
+        for cell in row.cells {
+            references.insert(ObjectIdentifier(cell.attributedText))
+        }
+    }
+
+    private static func write(_ report: StreamingMarkdownRenderSelfCheckReport) throws -> URL {
+        let url = try reportURL()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(report)
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    private static func reportURL() throws -> URL {
+        let urls = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+        guard let directory = urls.first else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        return directory.appendingPathComponent(reportFileName, isDirectory: false)
+    }
+}
+#endif
 
 private struct StreamingMarkdownText: View, Equatable {
     let markdown: String
