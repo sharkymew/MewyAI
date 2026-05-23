@@ -743,7 +743,7 @@ nonisolated enum LaTeXInlineAttributedRenderer {
 
 actor LaTeXSVGRenderer {
     static let shared = LaTeXSVGRenderer()
-    private static let imageRenderingEnabled = false
+    private static let imageRenderingEnabled = true
 
     private var context: JSContext?
     private var rendererFunction: JSValue?
@@ -908,22 +908,22 @@ actor LaTeXSVGRenderer {
     }
 
     private static func attribute(_ name: String, in svg: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: #"\#(name)="([^"]+)""#) else { return nil }
+        guard let regex = try? NSRegularExpression(pattern: #"(^|\s)\#(name)="([^"]+)""#) else { return nil }
         let range = NSRange(svg.startIndex..<svg.endIndex, in: svg)
         guard let match = regex.firstMatch(in: svg, range: range),
-              let valueRange = Range(match.range(at: 1), in: svg) else {
+              let valueRange = Range(match.range(at: 2), in: svg) else {
             return nil
         }
         return String(svg[valueRange])
     }
 
     private static func replaceAttribute(_ name: String, with value: String, in svg: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: #"\#(name)="[^"]+""#) else { return svg }
+        guard let regex = try? NSRegularExpression(pattern: #"(^|\s)\#(name)="[^"]+""#) else { return svg }
         let range = NSRange(svg.startIndex..<svg.endIndex, in: svg)
         return regex.stringByReplacingMatches(
             in: svg,
             range: range,
-            withTemplate: "\(name)=\"\(value)\""
+            withTemplate: "$1\(name)=\"\(value)\""
         )
     }
 
