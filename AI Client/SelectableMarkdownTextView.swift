@@ -455,18 +455,6 @@ nonisolated extension PreparedMarkdownBlockCache {
     }
 }
 
-#if DEBUG
-nonisolated extension PreparedMarkdownBlockCache {
-    var diagnosticBlockEntryCount: Int {
-        blocksBySignature.count
-    }
-
-    var diagnosticTextEntryCount: Int {
-        textBlocksBySignature.count
-    }
-}
-#endif
-
 struct SelectableMarkdownTextView: View {
     let blocks: [PreparedMarkdownBlock]
 

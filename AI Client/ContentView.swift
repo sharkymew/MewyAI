@@ -255,6 +255,7 @@ struct ContentView: View {
     @State private var isFlushScheduled = false
     @State private var flushTask: Task<Void, Never>?
     @State private var activeAssistantMessageID: UUID?
+    @State private var liveAssistantMessageID: UUID?
     @State private var markdownRenderCache: [UUID: MarkdownRenderCacheEntry] = [:]
     @State private var markdownRenderTasks: [UUID: Task<Void, Never>] = [:]
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
@@ -462,16 +463,16 @@ struct ContentView: View {
                     ScrollView {
                         VStack(spacing: 12) {
                             ForEach($messages) { $message in
-                                let isStreamingMessage = isGenerating && activeAssistantMessageID == message.id
-                                let liveReasoningChannel = isStreamingMessage && activeAssistantReasoningIsExpanded
+                                let showsLiveAssistantDisplay = liveAssistantMessageID == message.id
+                                let liveReasoningChannel = showsLiveAssistantDisplay && activeAssistantReasoningIsExpanded
                                     ? liveAssistantReasoningChannel
                                     : nil
                                 MessageBubble(
                                     message: $message,
-                                    isStreaming: isStreamingMessage,
-                                    hasStreamingReasoning: isStreamingMessage && activeAssistantHasReasoning,
-                                    hasStreamingContent: isStreamingMessage && activeAssistantHasContent,
-                                    streamingContentChannel: isStreamingMessage ? liveAssistantContentChannel : nil,
+                                    isStreaming: showsLiveAssistantDisplay,
+                                    hasStreamingReasoning: showsLiveAssistantDisplay && activeAssistantHasReasoning,
+                                    hasStreamingContent: showsLiveAssistantDisplay && activeAssistantHasContent,
+                                    streamingContentChannel: showsLiveAssistantDisplay ? liveAssistantContentChannel : nil,
                                     streamingReasoningChannel: liveReasoningChannel,
                                     markdownRenderCache: markdownRenderCache[message.id],
                                     showsActions: activeMessageActionID == message.id,
@@ -1020,6 +1021,7 @@ struct ContentView: View {
         aiService.resetConversation(with: contextMessages, systemPrompt: configuration.systemPrompt)
         clearInputState()
         isGenerating = true
+        liveAssistantMessageID = nil
         chatScrollController.returnToBottom()
         streamingTokenBuffer.reset()
         activeAssistantHasReasoning = false
@@ -1048,6 +1050,7 @@ struct ContentView: View {
 
         let assistantMessageID = assistantMessage.id
         activeAssistantMessageID = assistantMessageID
+        liveAssistantMessageID = assistantMessageID
 
         aiService.sendStreamingMessage(
             message: userText,
@@ -1095,8 +1098,9 @@ struct ContentView: View {
                 activeAssistantHasContent = false
                 activeAssistantReasoningIsExpanded = false
                 activeAssistantDidCollapseReasoningAfterThinking = false
-                clearLiveStreamingText()
-                prepareMarkdownCache(for: assistantMessageID)
+                prepareMarkdownCache(for: assistantMessageID) {
+                    finishLiveAssistantDisplay(for: assistantMessageID)
+                }
                 persistCurrentConversation()
                 generateTitleIfNeeded()
             },
@@ -1116,8 +1120,9 @@ struct ContentView: View {
                 activeAssistantHasContent = false
                 activeAssistantReasoningIsExpanded = false
                 activeAssistantDidCollapseReasoningAfterThinking = false
-                clearLiveStreamingText()
-                prepareMarkdownCache(for: assistantMessageID)
+                prepareMarkdownCache(for: assistantMessageID) {
+                    finishLiveAssistantDisplay(for: assistantMessageID)
+                }
                 persistCurrentConversation()
             }
         )
@@ -1410,28 +1415,53 @@ struct ContentView: View {
         clearLiveContentDisplay()
     }
 
+    private func finishLiveAssistantDisplay(for messageID: UUID) {
+        guard liveAssistantMessageID == messageID else { return }
+        liveAssistantMessageID = nil
+        clearLiveStreamingText()
+    }
+
     private func scheduleStreamingAutoScroll() {
         chatScrollController.scheduleStreamingAutoScroll()
     }
 
     private static let liveReasoningProgressiveAppendThreshold = 720
 
-    private func prepareMarkdownCaches(for messages: [ChatMessage]) {
+    private func prepareMarkdownCaches(
+        for messages: [ChatMessage],
+        finishingLiveMessageID: UUID? = nil
+    ) {
         messages
             .filter { $0.role == "assistant" && !$0.content.isEmpty }
-            .forEach { prepareMarkdownCache(for: $0.id, content: $0.content) }
+            .forEach { message in
+                if message.id == finishingLiveMessageID {
+                    prepareMarkdownCache(for: message.id, content: message.content) {
+                        finishLiveAssistantDisplay(for: message.id)
+                    }
+                } else {
+                    prepareMarkdownCache(for: message.id, content: message.content)
+                }
+            }
     }
 
-    private func prepareMarkdownCache(for messageID: UUID) {
+    private func prepareMarkdownCache(
+        for messageID: UUID,
+        onPrepared: (() -> Void)? = nil
+    ) {
         guard let message = messages.first(where: { $0.id == messageID && $0.role == "assistant" }),
               !message.content.isEmpty else {
             invalidateMarkdownCache(for: messageID)
+            onPrepared?()
             return
         }
-        prepareMarkdownCache(for: messageID, content: message.content)
+        prepareMarkdownCache(for: messageID, content: message.content, onPrepared: onPrepared)
     }
 
-    private func prepareMarkdownCache(for messageID: UUID, content: String) {
+    private func prepareMarkdownCache(
+        for messageID: UUID,
+        content: String,
+        onPrepared: (() -> Void)? = nil
+    ) {
         let style = MarkdownRenderStyle(
             textColor: .label,
             baseFont: .preferredFont(forTextStyle: .body),
@@ -1440,7 +1470,10 @@ struct ContentView: View {
             displayScale: UIScreen.main.scale
         )
         let signature = MarkdownRenderCacheEntry.signature(for: content, style: style)
-        guard markdownRenderCache[messageID]?.signature != signature else { return }
+        guard markdownRenderCache[messageID]?.signature != signature else {
+            onPrepared?()
+            return
+        }
 
         markdownRenderTasks[messageID]?.cancel()
         markdownRenderTasks[messageID] = Task { @MainActor in
@@ -1451,6 +1484,7 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             markdownRenderCache[messageID] = entry
             markdownRenderTasks[messageID] = nil
+            onPrepared?()
         }
     }
 
@@ -1461,10 +1495,11 @@ struct ContentView: View {
     }
 
     private func resetMarkdownCache(for messages: [ChatMessage]) {
+        let finishingLiveMessageID = activeAssistantMessageID == nil ? liveAssistantMessageID : nil
         markdownRenderTasks.values.forEach { $0.cancel() }
         markdownRenderTasks = [:]
         markdownRenderCache = [:]
-        prepareMarkdownCaches(for: messages)
+        prepareMarkdownCaches(for: messages, finishingLiveMessageID: finishingLiveMessageID)
     }
 
     private func pruneMarkdownCache() {
@@ -1478,6 +1513,7 @@ struct ContentView: View {
 
     func stopGenerating() {
         let stoppedMessageID = activeAssistantMessageID
+        var keepsLiveDisplayUntilCachePrepared = false
 
         aiService.cancelStreaming()
         cancelScheduledFlush()
@@ -1487,7 +1523,10 @@ struct ContentView: View {
 
             if let index = messages.firstIndex(where: { $0.id == stoppedMessageID }) {
                 messages[index].isStopped = true
-                prepareMarkdownCache(for: stoppedMessageID)
+                keepsLiveDisplayUntilCachePrepared = true
+                prepareMarkdownCache(for: stoppedMessageID) {
+                    finishLiveAssistantDisplay(for: stoppedMessageID)
+                }
             }
         }
 
@@ -1498,7 +1537,10 @@ struct ContentView: View {
         activeAssistantDidCollapseReasoningAfterThinking = false
         isGenerating = false
         streamingTokenBuffer.reset()
-        clearLiveStreamingText()
+        if !keepsLiveDisplayUntilCachePrepared {
+            liveAssistantMessageID = nil
+            clearLiveStreamingText()
+        }
         isFlushScheduled = false
         persistCurrentConversation()
     }
@@ -1731,6 +1773,7 @@ struct ContentView: View {
             activeAssistantHasContent = false
             activeAssistantReasoningIsExpanded = false
             activeAssistantDidCollapseReasoningAfterThinking = false
+            liveAssistantMessageID = nil
             clearLiveStreamingText()
             aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
             ConversationStore.saveSelectedConversationID(conversation.id)
@@ -1772,6 +1815,7 @@ struct ContentView: View {
         selectedPhotoItems = []
         imageSelectionError = nil
         activeAssistantMessageID = nil
+        liveAssistantMessageID = nil
         activeAssistantHasReasoning = false
         activeAssistantHasContent = false
         activeAssistantReasoningIsExpanded = false
@@ -1832,6 +1876,7 @@ struct ContentView: View {
         selectedPhotoItems = []
         imageSelectionError = nil
         activeAssistantMessageID = nil
+        liveAssistantMessageID = nil
         activeAssistantHasReasoning = false
         activeAssistantHasContent = false
         activeAssistantReasoningIsExpanded = false
@@ -1867,6 +1912,7 @@ struct ContentView: View {
             selectedPhotoItems = []
             imageSelectionError = nil
             activeAssistantMessageID = nil
+            liveAssistantMessageID = nil
             activeAssistantHasReasoning = false
             activeAssistantHasContent = false
             activeAssistantReasoningIsExpanded = false
@@ -1898,6 +1944,7 @@ struct ContentView: View {
             selectedPhotoItems = []
             imageSelectionError = nil
             activeAssistantMessageID = nil
+            liveAssistantMessageID = nil
             activeAssistantHasReasoning = false
             activeAssistantHasContent = false
             activeAssistantReasoningIsExpanded = false
@@ -2578,16 +2625,6 @@ struct StreamingAssistantMarkdownText: View {
         return StreamingMarkdownRenderResult(segments: segments, cache: nextBlockCache)
     }
 
-    #if DEBUG
-    nonisolated static func renderSegmentsForDiagnostics(
-        for content: String,
-        style: MarkdownRenderStyle,
-        cache: PreparedMarkdownBlockCache
-    ) async -> StreamingMarkdownRenderResult {
-        await renderSegments(for: content, style: style, cache: cache)
-    }
-    #endif
-
     private nonisolated static func splitStreamingTextGroups(_ text: String) -> [String] {
         let lines = text.components(separatedBy: .newlines)
         var groups: [String] = []
@@ -2739,219 +2776,6 @@ nonisolated struct StreamingMarkdownRenderResult: @unchecked Sendable {
     let segments: [StreamingChatMarkdownSegment]
     let cache: PreparedMarkdownBlockCache
 }
-
-#if DEBUG
-private struct StreamingMarkdownRenderSelfCheckSnapshot: Codable {
-    let index: Int
-    let contentLength: Int
-    let segmentCount: Int
-    let attributedTextReferenceCount: Int
-    let previousAttributedTextReferenceCount: Int
-    let reusedAttributedTextReferenceCount: Int
-    let cacheBlockEntryCount: Int
-    let cacheTextEntryCount: Int
-}
-
-private struct StreamingMarkdownRenderSelfCheckReport: Codable {
-    let passed: Bool
-    let elapsedMilliseconds: Int
-    let snapshots: [StreamingMarkdownRenderSelfCheckSnapshot]
-    let failures: [String]
-}
-
-enum StreamingMarkdownRenderSelfCheck {
-    private static let environmentKey = "AI_CLIENT_STREAMING_MARKDOWN_SELF_CHECK"
-    private static let reportFileName = "streaming-markdown-self-check.json"
-
-    @MainActor
-    static func runIfRequested() {
-        guard ProcessInfo.processInfo.environment[environmentKey] == "1" else { return }
-
-        Task { @MainActor in
-            let report = await run()
-            do {
-                let url = try write(report)
-                print("\(environmentKey)=\(report.passed ? "passed" : "failed") \(url.path)")
-            } catch {
-                print("\(environmentKey)=failed write_error=\(error)")
-            }
-        }
-    }
-
-    @MainActor
-    private static func run() async -> StreamingMarkdownRenderSelfCheckReport {
-        let startedAt = Date()
-        let style = MarkdownRenderStyle(
-            textColor: .label,
-            baseFont: .preferredFont(forTextStyle: .body),
-            textAlignment: .left,
-            userInterfaceStyle: .light,
-            displayScale: UIScreen.main.scale
-        )
-        let snapshots = makeSnapshots()
-        var cache = PreparedMarkdownBlockCache()
-        var previousReferences = Set<ObjectIdentifier>()
-        var snapshotReports: [StreamingMarkdownRenderSelfCheckSnapshot] = []
-        var failures: [String] = []
-
-        for (index, content) in snapshots.enumerated() {
-            let result = await StreamingAssistantMarkdownText.renderSegmentsForDiagnostics(
-                for: content,
-                style: style,
-                cache: cache
-            )
-            let references = attributedTextReferences(in: result)
-            let reusedCount = references.intersection(previousReferences).count
-
-            snapshotReports.append(StreamingMarkdownRenderSelfCheckSnapshot(
-                index: index,
-                contentLength: content.count,
-                segmentCount: result.segments.count,
-                attributedTextReferenceCount: references.count,
-                previousAttributedTextReferenceCount: previousReferences.count,
-                reusedAttributedTextReferenceCount: reusedCount,
-                cacheBlockEntryCount: result.cache.diagnosticBlockEntryCount,
-                cacheTextEntryCount: result.cache.diagnosticTextEntryCount
-            ))
-
-            if references.isEmpty {
-                failures.append("snapshot \(index) produced no attributed text references")
-            }
-            if index > 0, reusedCount == 0 {
-                failures.append("snapshot \(index) did not reuse any prepared Markdown references")
-            }
-            if index > 0 {
-                let minimumReuseCount = Int(Double(previousReferences.count) * 0.85)
-                if reusedCount < minimumReuseCount {
-                    failures.append("snapshot \(index) reused \(reusedCount) of \(previousReferences.count) previous references")
-                }
-            }
-
-            cache = result.cache
-            previousReferences = references
-        }
-
-        if cache.diagnosticTextEntryCount == 0 {
-            failures.append("final cache has no text entries")
-        }
-
-        return StreamingMarkdownRenderSelfCheckReport(
-            passed: failures.isEmpty,
-            elapsedMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1000),
-            snapshots: snapshotReports,
-            failures: failures
-        )
-    }
-
-    private static func makeSnapshots() -> [String] {
-        var snapshots: [String] = []
-        var content = ""
-
-        for index in 1...12 {
-            if !content.isEmpty {
-                content += "\n\n"
-            }
-            content += makeSection(index)
-            snapshots.append(content)
-        }
-
-        return snapshots
-    }
-
-    private static func makeSection(_ index: Int) -> String {
-        var section = """
-        ## Streaming Markdown Section \(index)
-
-        This paragraph has **bold text \(index)**, `inline code \(index)`, and stable words that should keep their prepared render output when later chunks arrive.
-
-        - first item \(index)
-        - second item \(index)
-        - third item \(index)
-
-        > quoted line one \(index)
-        > quoted line two \(index)
-
-        | metric | value |
-        | --- | ---: |
-        | cache hit \(index) | **yes** |
-        | render work \(index) | new tail only |
-
-        The closing paragraph for section \(index) is intentionally plain so the streaming renderer can reuse every earlier paragraph, list, quote, and table.
-        """
-
-        if index.isMultiple(of: 4) {
-            section += """
-
-            ```swift
-            let value\(index) = \(index)
-            ```
-            """
-        }
-
-        return section
-    }
-
-    private static func attributedTextReferences(
-        in result: StreamingMarkdownRenderResult
-    ) -> Set<ObjectIdentifier> {
-        var references = Set<ObjectIdentifier>()
-        for segment in result.segments {
-            guard case let .text(blocks) = segment.kind else { continue }
-            for block in blocks {
-                collectAttributedTextReferences(from: block, into: &references)
-            }
-        }
-        return references
-    }
-
-    private static func collectAttributedTextReferences(
-        from block: PreparedMarkdownBlock,
-        into references: inout Set<ObjectIdentifier>
-    ) {
-        switch block.kind {
-        case let .text(line):
-            references.insert(ObjectIdentifier(line.attributedText))
-        case let .quote(quote):
-            for line in quote.lines {
-                references.insert(ObjectIdentifier(line.line.attributedText))
-            }
-        case let .table(table):
-            collectAttributedTextReferences(from: table.header, into: &references)
-            for row in table.rows {
-                collectAttributedTextReferences(from: row, into: &references)
-            }
-        case .divider:
-            break
-        }
-    }
-
-    private static func collectAttributedTextReferences(
-        from row: PreparedMarkdownTableRow,
-        into references: inout Set<ObjectIdentifier>
-    ) {
-        for cell in row.cells {
-            references.insert(ObjectIdentifier(cell.attributedText))
-        }
-    }
-
-    private static func write(_ report: StreamingMarkdownRenderSelfCheckReport) throws -> URL {
-        let url = try reportURL()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(report)
-        try data.write(to: url, options: .atomic)
-        return url
-    }
-
-    private static func reportURL() throws -> URL {
-        let urls = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-        guard let directory = urls.first else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-        return directory.appendingPathComponent(reportFileName, isDirectory: false)
-    }
-}
-#endif
 
 private struct StreamingMarkdownText: View, Equatable {
     let markdown: String
