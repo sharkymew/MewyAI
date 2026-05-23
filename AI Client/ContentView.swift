@@ -60,7 +60,7 @@ private struct ChatScrollBottomDistancePreferenceKey: PreferenceKey {
     }
 }
 
-private struct FixedTopGlassButtonStyle: ButtonStyle {
+struct FixedTopGlassButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     let tint: Color
@@ -90,12 +90,14 @@ private struct FixedTopGlassButtonStyle: ButtonStyle {
     }
 }
 
-private struct FunctionOpacityMask: View {
+struct FunctionOpacityMask: View {
     let topOpacity: Double
     let maxOpacity: Double
     let fadeInEnd: Double
     let holdEnd: Double
     let fadeOutEnd: Double
+    var progressStartOffset: CGFloat = 0
+    var progressLength: CGFloat?
 
     var body: some View {
         Canvas { context, size in
@@ -109,7 +111,8 @@ private struct FunctionOpacityMask: View {
                 guard nextY > y else { continue }
 
                 let midpoint = (y + nextY) * 0.5
-                let progress = size.height > 0 ? Double(midpoint / size.height) : 0
+                let length = max(progressLength ?? size.height, 1)
+                let progress = Double((midpoint - progressStartOffset) / length)
                 let opacity = opacity(at: progress)
                 guard opacity > 0.001 else { continue }
 
@@ -457,21 +460,25 @@ struct ContentView: View {
     private let topFadeBottomPadding: CGFloat = 155
 
     private var inputGlassTint: Color {
-        colorScheme == .dark ? Color.white.opacity(0.06) : Color.white.opacity(0.22)
+        colorScheme == .dark ? Color.white.opacity(0.04) : Color.white.opacity(0.14)
     }
 
     private var inputGlassHighlight: Color {
-        colorScheme == .dark ? Color.white.opacity(0.18) : Color.white.opacity(0.62)
+        colorScheme == .dark ? Color.white.opacity(0.26) : Color.white.opacity(0.74)
+    }
+
+    private var controlGlassHighlight: Color {
+        colorScheme == .dark ? Color.white.opacity(0.24) : Color.white.opacity(0.58)
     }
 
     private var sendControlBackground: Color {
         !canSendMessage && !isGenerating
             ? inputGlassTint
-            : Color.accentColor.opacity(colorScheme == .dark ? 0.26 : 0.16)
+            : Color.accentColor.opacity(colorScheme == .dark ? 0.20 : 0.11)
     }
 
     private var cancelControlBackground: Color {
-        Color.red.opacity(colorScheme == .dark ? 0.24 : 0.12)
+        Color.red.opacity(colorScheme == .dark ? 0.18 : 0.09)
     }
 
     private var inputBottomFadeTint: Color {
@@ -488,6 +495,17 @@ struct ContentView: View {
 
     private var topScrollContentPadding: CGFloat {
         topFadeHeight + 18
+    }
+
+    @ViewBuilder
+    private var fadeBase: some View {
+        if colorScheme == .dark {
+            Rectangle()
+                .fill(Color.black)
+        } else {
+            Rectangle()
+                .fill(.thickMaterial)
+        }
     }
 
     @ViewBuilder
@@ -516,11 +534,11 @@ struct ContentView: View {
     @ViewBuilder
     private func controlGlassBackground(_ tint: Color, isInteractive: Bool = true) -> some View {
         Circle()
-            .fill(.thinMaterial)
+            .fill(.ultraThinMaterial)
             .overlay(Circle().fill(tint))
             .overlay(
                 Circle()
-                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.14 : 0.45), lineWidth: 1)
+                    .stroke(controlGlassHighlight, lineWidth: 1)
             )
     }
 
@@ -569,8 +587,7 @@ struct ContentView: View {
     }
 
     private var inputBottomFade: some View {
-        Rectangle()
-            .fill(.thickMaterial)
+        fadeBase
             .overlay(inputBottomFadeTint)
             .mask(
                 LinearGradient(
@@ -590,8 +607,7 @@ struct ContentView: View {
     }
 
     private var topFade: some View {
-        Rectangle()
-            .fill(.thickMaterial)
+        fadeBase
             .overlay(topFadeTint)
             .mask(
                 FunctionOpacityMask(
@@ -635,10 +651,12 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let sidebarWidth = min(geometry.size.width * 0.72, 320)
+
             ZStack(alignment: .leading) {
                 mainContent(topSafeAreaInset: geometry.safeAreaInsets.top)
                     .disabled(showConversationSidebar)
-                    .offset(x: showConversationSidebar ? min(geometry.size.width * 0.72, 320) : 0)
+                    .offset(x: showConversationSidebar ? sidebarWidth : 0)
                     .animation(.easeOut(duration: 0.22), value: showConversationSidebar)
 
                 if showConversationSidebar {
@@ -660,14 +678,18 @@ struct ContentView: View {
                 ConversationSidebarView(
                     conversations: conversations,
                     selectedConversationID: selectedConversationID,
+                    topSafeAreaInset: geometry.safeAreaInsets.top,
                     onSelect: selectConversation,
                     onCreate: createConversation,
                     onDelete: deleteConversation,
                     canCreateConversation: canCreateConversation
                 )
-                .frame(width: min(geometry.size.width * 0.72, 320))
-                .offset(x: showConversationSidebar ? 0 : -min(geometry.size.width * 0.72, 320))
+                .frame(width: sidebarWidth)
+                .ignoresSafeArea(edges: [.top, .bottom])
+                .offset(x: showConversationSidebar ? 0 : -sidebarWidth)
                 .animation(.easeOut(duration: 0.22), value: showConversationSidebar)
+
+                sidebarToggleControl
             }
             .simultaneousGesture(closeSidebarGesture)
         }
@@ -889,16 +911,6 @@ struct ContentView: View {
     private var topFloatingControls: some View {
         ZStack {
             HStack(spacing: 8) {
-                topGlassControl {
-                    Button {
-                        hideKeyboard()
-                        showConversationSidebar = true
-                    } label: {
-                        topIconLabel(systemName: "sidebar.left")
-                    }
-                }
-                .accessibilityLabel("打开对话列表")
-
                 Spacer(minLength: 0)
 
                 topGlassControl {
@@ -914,6 +926,28 @@ struct ContentView: View {
             }
 
             topConversationTitleMenu
+        }
+        .padding(.horizontal, topControlsHorizontalPadding)
+        .padding(.top, topControlsTopPadding)
+    }
+
+    private var sidebarToggleControl: some View {
+        VStack {
+            HStack {
+                topGlassControl {
+                    Button {
+                        hideKeyboard()
+                        showConversationSidebar.toggle()
+                    } label: {
+                        topIconLabel(systemName: "sidebar.left")
+                    }
+                }
+                .accessibilityLabel(showConversationSidebar ? "关闭对话列表" : "打开对话列表")
+
+                Spacer(minLength: 0)
+            }
+
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, topControlsHorizontalPadding)
         .padding(.top, topControlsTopPadding)
