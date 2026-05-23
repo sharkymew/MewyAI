@@ -798,7 +798,8 @@ class AIService {
             "sensevoice",
             "funaudio",
             "cosyvoice",
-            "fish-speech"
+            "fish-speech",
+            "ocr"
         ]
         
         return !nonChatKeywords.contains { lowercasedID.contains($0) }
@@ -810,7 +811,6 @@ class AIService {
             "deepseek-r1",
             "qwq",
             "qvq",
-            "qwen3",
             "glm-z1",
             "glm-4.5",
             "glm-5",
@@ -821,7 +821,8 @@ class AIService {
             "grok-3-mini",
             "grok-4",
             "magistral",
-            "thinking"
+            "thinking",
+            "deepseek-v4-pro"
         ]
         
         return reasoningKeywords.contains { lowercasedID.contains($0) }
@@ -837,6 +838,7 @@ class AIService {
             "qwen2-vl",
             "qwen2.5-vl",
             "qwen3-vl",
+            "qwen3.5",
             "glm-4v",
             "glm-4.1v",
             "gpt-4o",
