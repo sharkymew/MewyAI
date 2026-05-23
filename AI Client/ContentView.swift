@@ -231,6 +231,12 @@ private final class StreamingTokenBuffer {
     }
 }
 
+@MainActor
+private final class AssistantLiveDisplay {
+    let reasoningChannel = StreamingTextUpdateChannel()
+    let contentChannel = StreamingTextUpdateChannel()
+}
+
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
@@ -250,12 +256,10 @@ struct ContentView: View {
     @State private var activeAssistantHasContent = false
     @State private var activeAssistantReasoningIsExpanded = false
     @State private var activeAssistantDidCollapseReasoningAfterThinking = false
-    @State private var liveAssistantReasoningChannel = StreamingTextUpdateChannel()
-    @State private var liveAssistantContentChannel = StreamingTextUpdateChannel()
+    @State private var liveAssistantDisplays: [UUID: AssistantLiveDisplay] = [:]
     @State private var isFlushScheduled = false
     @State private var flushTask: Task<Void, Never>?
     @State private var activeAssistantMessageID: UUID?
-    @State private var liveAssistantMessageID: UUID?
     @State private var markdownRenderCache: [UUID: MarkdownRenderCacheEntry] = [:]
     @State private var markdownRenderTasks: [UUID: Task<Void, Never>] = [:]
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
@@ -463,16 +467,17 @@ struct ContentView: View {
                     ScrollView {
                         VStack(spacing: 12) {
                             ForEach($messages) { $message in
-                                let showsLiveAssistantDisplay = liveAssistantMessageID == message.id
-                                let liveReasoningChannel = showsLiveAssistantDisplay && activeAssistantReasoningIsExpanded
-                                    ? liveAssistantReasoningChannel
+                                let liveAssistantDisplay = liveAssistantDisplays[message.id]
+                                let isStreamingMessage = activeAssistantMessageID == message.id
+                                let liveReasoningChannel = isStreamingMessage && activeAssistantReasoningIsExpanded
+                                    ? liveAssistantDisplay?.reasoningChannel
                                     : nil
                                 MessageBubble(
                                     message: $message,
-                                    isStreaming: showsLiveAssistantDisplay,
-                                    hasStreamingReasoning: showsLiveAssistantDisplay && activeAssistantHasReasoning,
-                                    hasStreamingContent: showsLiveAssistantDisplay && activeAssistantHasContent,
-                                    streamingContentChannel: showsLiveAssistantDisplay ? liveAssistantContentChannel : nil,
+                                    isStreaming: isStreamingMessage,
+                                    hasStreamingReasoning: isStreamingMessage && activeAssistantHasReasoning,
+                                    hasStreamingContent: isStreamingMessage && activeAssistantHasContent,
+                                    streamingContentChannel: liveAssistantDisplay?.contentChannel,
                                     streamingReasoningChannel: liveReasoningChannel,
                                     markdownRenderCache: markdownRenderCache[message.id],
                                     showsActions: activeMessageActionID == message.id,
@@ -1021,15 +1026,12 @@ struct ContentView: View {
         aiService.resetConversation(with: contextMessages, systemPrompt: configuration.systemPrompt)
         clearInputState()
         isGenerating = true
-        liveAssistantMessageID = nil
         chatScrollController.returnToBottom()
         streamingTokenBuffer.reset()
         activeAssistantHasReasoning = false
         activeAssistantHasContent = false
         activeAssistantReasoningIsExpanded = false
         activeAssistantDidCollapseReasoningAfterThinking = false
-        clearLiveReasoningDisplay()
-        clearLiveContentDisplay()
         isFlushScheduled = false
         activeMessageActionID = nil
 
@@ -1050,7 +1052,7 @@ struct ContentView: View {
 
         let assistantMessageID = assistantMessage.id
         activeAssistantMessageID = assistantMessageID
-        liveAssistantMessageID = assistantMessageID
+        liveAssistantDisplays[assistantMessageID] = AssistantLiveDisplay()
 
         aiService.sendStreamingMessage(
             message: userText,
@@ -1079,7 +1081,7 @@ struct ContentView: View {
                 guard isGenerating else { return }
 
                 collapseReasoningAfterThinkingIfNeeded(for: assistantMessageID)
-                appendLiveContentToken(token)
+                appendLiveContentToken(token, for: assistantMessageID)
                 if !activeAssistantHasContent {
                     activeAssistantHasContent = true
                 }
@@ -1098,9 +1100,7 @@ struct ContentView: View {
                 activeAssistantHasContent = false
                 activeAssistantReasoningIsExpanded = false
                 activeAssistantDidCollapseReasoningAfterThinking = false
-                prepareMarkdownCache(for: assistantMessageID) {
-                    finishLiveAssistantDisplay(for: assistantMessageID)
-                }
+                prepareMarkdownCache(for: assistantMessageID)
                 persistCurrentConversation()
                 generateTitleIfNeeded()
             },
@@ -1112,6 +1112,7 @@ struct ContentView: View {
 
                 if let index = messages.firstIndex(where: { $0.id == assistantMessageID }) {
                     messages[index].content = error
+                    publishLiveContentUpdate(for: assistantMessageID, chunks: [error], resetsText: true)
                 }
 
                 isGenerating = false
@@ -1120,9 +1121,7 @@ struct ContentView: View {
                 activeAssistantHasContent = false
                 activeAssistantReasoningIsExpanded = false
                 activeAssistantDidCollapseReasoningAfterThinking = false
-                prepareMarkdownCache(for: assistantMessageID) {
-                    finishLiveAssistantDisplay(for: assistantMessageID)
-                }
+                prepareMarkdownCache(for: assistantMessageID)
                 persistCurrentConversation()
             }
         )
@@ -1322,8 +1321,8 @@ struct ContentView: View {
         isFlushScheduled = false
     }
 
-    private func appendLiveContentToken(_ token: String) {
-        publishLiveContentUpdate(chunks: [token], resetsText: false)
+    private func appendLiveContentToken(_ token: String, for messageID: UUID) {
+        publishLiveContentUpdate(for: messageID, chunks: [token], resetsText: false)
     }
 
     private func updateLiveReasoningDisplayIfNeeded(for messageID: UUID, token: String) {
@@ -1331,6 +1330,7 @@ struct ContentView: View {
               activeAssistantReasoningIsExpanded else { return }
 
         publishLiveReasoningUpdate(
+            for: messageID,
             chunks: [token],
             resetsText: false,
             appendsProgressively: token.utf16.count > Self.liveReasoningProgressiveAppendThreshold
@@ -1349,9 +1349,9 @@ struct ContentView: View {
         if let index = messages.firstIndex(where: { $0.id == messageID }),
            messages[index].isReasoningExpanded {
             messages[index].isReasoningExpanded = false
-            clearLiveReasoningDisplay()
+            clearLiveReasoningDisplay(for: messageID)
         } else if wasReasoningExpanded {
-            clearLiveReasoningDisplay()
+            clearLiveReasoningDisplay(for: messageID)
         }
     }
 
@@ -1362,7 +1362,7 @@ struct ContentView: View {
         if isExpanded {
             publishLiveReasoningReset(for: messageID, appendsProgressively: true)
         } else {
-            clearLiveReasoningDisplay()
+            clearLiveReasoningDisplay(for: messageID)
         }
     }
 
@@ -1380,6 +1380,7 @@ struct ContentView: View {
         chunks.append(contentsOf: streamingTokenBuffer.reasoningChunksSnapshot)
 
         publishLiveReasoningUpdate(
+            for: messageID,
             chunks: chunks,
             resetsText: true,
             appendsProgressively: appendsProgressively
@@ -1387,38 +1388,29 @@ struct ContentView: View {
     }
 
     private func publishLiveReasoningUpdate(
+        for messageID: UUID,
         chunks: [String],
         resetsText: Bool,
         appendsProgressively: Bool = false
     ) {
-        liveAssistantReasoningChannel.publish(
+        liveAssistantDisplays[messageID]?.reasoningChannel.publish(
             chunks: chunks,
             resetsText: resetsText,
             appendsProgressively: appendsProgressively
         )
     }
 
-    private func clearLiveReasoningDisplay() {
-        publishLiveReasoningUpdate(chunks: [], resetsText: true)
+    private func clearLiveReasoningDisplay(for messageID: UUID) {
+        publishLiveReasoningUpdate(for: messageID, chunks: [], resetsText: true)
     }
 
-    private func publishLiveContentUpdate(chunks: [String], resetsText: Bool) {
-        liveAssistantContentChannel.publish(chunks: chunks, resetsText: resetsText)
+    private func publishLiveContentUpdate(for messageID: UUID, chunks: [String], resetsText: Bool) {
+        liveAssistantDisplays[messageID]?.contentChannel.publish(chunks: chunks, resetsText: resetsText)
     }
 
-    private func clearLiveContentDisplay() {
-        publishLiveContentUpdate(chunks: [], resetsText: true)
-    }
-
-    private func clearLiveStreamingText() {
-        clearLiveReasoningDisplay()
-        clearLiveContentDisplay()
-    }
-
-    private func finishLiveAssistantDisplay(for messageID: UUID) {
-        guard liveAssistantMessageID == messageID else { return }
-        liveAssistantMessageID = nil
-        clearLiveStreamingText()
+    private func pruneLiveAssistantDisplays() {
+        let messageIDs = Set(messages.map(\.id))
+        liveAssistantDisplays = liveAssistantDisplays.filter { messageIDs.contains($0.key) }
     }
 
     private func scheduleStreamingAutoScroll() {
@@ -1427,21 +1419,10 @@ struct ContentView: View {
 
     private static let liveReasoningProgressiveAppendThreshold = 720
 
-    private func prepareMarkdownCaches(
-        for messages: [ChatMessage],
-        finishingLiveMessageID: UUID? = nil
-    ) {
+    private func prepareMarkdownCaches(for messages: [ChatMessage]) {
         messages
             .filter { $0.role == "assistant" && !$0.content.isEmpty }
-            .forEach { message in
-                if message.id == finishingLiveMessageID {
-                    prepareMarkdownCache(for: message.id, content: message.content) {
-                        finishLiveAssistantDisplay(for: message.id)
-                    }
-                } else {
-                    prepareMarkdownCache(for: message.id, content: message.content)
-                }
-            }
+            .forEach { prepareMarkdownCache(for: $0.id, content: $0.content) }
     }
 
     private func prepareMarkdownCache(
@@ -1495,11 +1476,10 @@ struct ContentView: View {
     }
 
     private func resetMarkdownCache(for messages: [ChatMessage]) {
-        let finishingLiveMessageID = activeAssistantMessageID == nil ? liveAssistantMessageID : nil
         markdownRenderTasks.values.forEach { $0.cancel() }
         markdownRenderTasks = [:]
         markdownRenderCache = [:]
-        prepareMarkdownCaches(for: messages, finishingLiveMessageID: finishingLiveMessageID)
+        prepareMarkdownCaches(for: messages)
     }
 
     private func pruneMarkdownCache() {
@@ -1509,11 +1489,11 @@ struct ContentView: View {
             task.cancel()
             markdownRenderTasks[messageID] = nil
         }
+        pruneLiveAssistantDisplays()
     }
 
     func stopGenerating() {
         let stoppedMessageID = activeAssistantMessageID
-        var keepsLiveDisplayUntilCachePrepared = false
 
         aiService.cancelStreaming()
         cancelScheduledFlush()
@@ -1523,10 +1503,7 @@ struct ContentView: View {
 
             if let index = messages.firstIndex(where: { $0.id == stoppedMessageID }) {
                 messages[index].isStopped = true
-                keepsLiveDisplayUntilCachePrepared = true
-                prepareMarkdownCache(for: stoppedMessageID) {
-                    finishLiveAssistantDisplay(for: stoppedMessageID)
-                }
+                prepareMarkdownCache(for: stoppedMessageID)
             }
         }
 
@@ -1537,10 +1514,6 @@ struct ContentView: View {
         activeAssistantDidCollapseReasoningAfterThinking = false
         isGenerating = false
         streamingTokenBuffer.reset()
-        if !keepsLiveDisplayUntilCachePrepared {
-            liveAssistantMessageID = nil
-            clearLiveStreamingText()
-        }
         isFlushScheduled = false
         persistCurrentConversation()
     }
@@ -1773,8 +1746,7 @@ struct ContentView: View {
             activeAssistantHasContent = false
             activeAssistantReasoningIsExpanded = false
             activeAssistantDidCollapseReasoningAfterThinking = false
-            liveAssistantMessageID = nil
-            clearLiveStreamingText()
+            liveAssistantDisplays = [:]
             aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
             ConversationStore.saveSelectedConversationID(conversation.id)
             ConversationStore.saveConversations(conversations)
@@ -1815,7 +1787,7 @@ struct ContentView: View {
         selectedPhotoItems = []
         imageSelectionError = nil
         activeAssistantMessageID = nil
-        liveAssistantMessageID = nil
+        liveAssistantDisplays = [:]
         activeAssistantHasReasoning = false
         activeAssistantHasContent = false
         activeAssistantReasoningIsExpanded = false
@@ -1823,7 +1795,6 @@ struct ContentView: View {
         activeMessageActionID = nil
         editingMessageID = nil
         streamingTokenBuffer.reset()
-        clearLiveStreamingText()
         isFlushScheduled = false
         chatScrollController.returnToBottom()
         aiService.resetConversation(with: messages, systemPrompt: currentConfiguration.systemPrompt)
@@ -1876,7 +1847,7 @@ struct ContentView: View {
         selectedPhotoItems = []
         imageSelectionError = nil
         activeAssistantMessageID = nil
-        liveAssistantMessageID = nil
+        liveAssistantDisplays = [:]
         activeAssistantHasReasoning = false
         activeAssistantHasContent = false
         activeAssistantReasoningIsExpanded = false
@@ -1884,7 +1855,6 @@ struct ContentView: View {
         activeMessageActionID = nil
         editingMessageID = nil
         streamingTokenBuffer.reset()
-        clearLiveStreamingText()
         isFlushScheduled = false
         aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
         ConversationStore.saveSelectedConversationID(conversation.id)
@@ -1912,7 +1882,7 @@ struct ContentView: View {
             selectedPhotoItems = []
             imageSelectionError = nil
             activeAssistantMessageID = nil
-            liveAssistantMessageID = nil
+            liveAssistantDisplays = [:]
             activeAssistantHasReasoning = false
             activeAssistantHasContent = false
             activeAssistantReasoningIsExpanded = false
@@ -1920,7 +1890,6 @@ struct ContentView: View {
             activeMessageActionID = nil
             editingMessageID = nil
             streamingTokenBuffer.reset()
-            clearLiveStreamingText()
             isFlushScheduled = false
             showConversationSidebar = false
             aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
@@ -1944,7 +1913,7 @@ struct ContentView: View {
             selectedPhotoItems = []
             imageSelectionError = nil
             activeAssistantMessageID = nil
-            liveAssistantMessageID = nil
+            liveAssistantDisplays = [:]
             activeAssistantHasReasoning = false
             activeAssistantHasContent = false
             activeAssistantReasoningIsExpanded = false
@@ -1952,7 +1921,6 @@ struct ContentView: View {
             activeMessageActionID = nil
             editingMessageID = nil
             streamingTokenBuffer.reset()
-            clearLiveStreamingText()
             isFlushScheduled = false
             aiService.resetConversation(with: messages, systemPrompt: currentConfiguration.systemPrompt)
             ConversationStore.saveSelectedConversationID(nextConversation.id)
