@@ -21,11 +21,10 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         if message.content.isEmpty, !message.contentChunks.isEmpty {
             message.content = message.contentChunks.joined()
         }
-        if message.reasoningContent.isEmpty, !message.reasoningChunks.isEmpty {
-            message.reasoningContent = message.reasoningChunks.joined()
+        if !message.reasoningContent.isEmpty {
+            message.reasoningChunks = []
         }
         message.contentChunks = []
-        message.reasoningChunks = []
         return message
     }
 }

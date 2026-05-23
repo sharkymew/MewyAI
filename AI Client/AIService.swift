@@ -494,9 +494,10 @@ class AIService {
         model: String,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
+        isReasoningDisplayActive: @escaping @MainActor () -> Bool,
         onReasoningToken: @escaping (String) -> Void,
         onContentToken: @escaping (String) -> Void,
-        onComplete: @escaping (_ reasoningText: String, _ contentText: String) -> Void,
+        onComplete: @escaping (_ contentText: String) -> Void,
         onError: @escaping (String) -> Void
     ) {
         cancelStreaming()
@@ -548,9 +549,78 @@ class AIService {
                     return
                 }
                 
-                var fullReasoningText = ""
-                var fullContentText = ""
+                var fullContentChunks: [String] = []
+                var pendingReasoningCallbackChunks: [String] = []
+                var pendingContentCallbackChunks: [String] = []
+                var lastReasoningCallbackFlushDate = Date.distantPast
+                var lastContentCallbackFlushDate = Date.distantPast
+                var lastReasoningVisibilityCheckDate = Date.distantPast
+                var cachedIsReasoningDisplayActive = false
+                let visibleReasoningCallbackFlushInterval: TimeInterval = 0.016
+                let hiddenReasoningCallbackFlushInterval: TimeInterval = 0.50
+                let contentCallbackFlushInterval: TimeInterval = 0.016
+                let reasoningVisibilityCheckInterval: TimeInterval = 0.05
                 let streamDecoder = JSONDecoder()
+
+                func refreshReasoningVisibilityIfNeeded(force: Bool = false, now: Date) async {
+                    guard force
+                            || now.timeIntervalSince(lastReasoningVisibilityCheckDate) >= reasoningVisibilityCheckInterval else {
+                        return
+                    }
+
+                    cachedIsReasoningDisplayActive = await MainActor.run {
+                        isReasoningDisplayActive()
+                    }
+                    lastReasoningVisibilityCheckDate = now
+                }
+
+                func flushTokenCallbacks(force: Bool = false) async {
+                    guard !pendingReasoningCallbackChunks.isEmpty || !pendingContentCallbackChunks.isEmpty else {
+                        return
+                    }
+
+                    let now = Date()
+
+                    if !pendingReasoningCallbackChunks.isEmpty {
+                        await refreshReasoningVisibilityIfNeeded(force: force, now: now)
+                    }
+
+                    var reasoningText = ""
+                    var contentText = ""
+
+                    if !pendingReasoningCallbackChunks.isEmpty {
+                        let reasoningFlushInterval = cachedIsReasoningDisplayActive
+                            ? visibleReasoningCallbackFlushInterval
+                            : hiddenReasoningCallbackFlushInterval
+
+                        if force || now.timeIntervalSince(lastReasoningCallbackFlushDate) >= reasoningFlushInterval {
+                            reasoningText = pendingReasoningCallbackChunks.joined()
+                            pendingReasoningCallbackChunks.removeAll(keepingCapacity: true)
+                            lastReasoningCallbackFlushDate = now
+                        }
+                    }
+
+                    if !pendingContentCallbackChunks.isEmpty,
+                       force || now.timeIntervalSince(lastContentCallbackFlushDate) >= contentCallbackFlushInterval {
+                        contentText = pendingContentCallbackChunks.joined()
+                        pendingContentCallbackChunks.removeAll(keepingCapacity: true)
+                        lastContentCallbackFlushDate = now
+                    }
+
+                    guard !reasoningText.isEmpty || !contentText.isEmpty else { return }
+
+                    let reasoningTextToDeliver = reasoningText
+                    let contentTextToDeliver = contentText
+                    await MainActor.run {
+                        if !reasoningTextToDeliver.isEmpty {
+                            onReasoningToken(reasoningTextToDeliver)
+                        }
+
+                        if !contentTextToDeliver.isEmpty {
+                            onContentToken(contentTextToDeliver)
+                        }
+                    }
+                }
                 
                 for try await line in bytes.lines {
                     if Task.isCancelled {
@@ -561,12 +631,14 @@ class AIService {
                     let jsonString = String(line.dropFirst(6))
                     
                     if jsonString == "[DONE]" {
+                        let fullContentText = fullContentChunks.joined()
                         conversationHistory.append(ChatRequestMessage(role: "assistant", text: fullContentText))
-                        
+
+                        await flushTokenCallbacks(force: true)
                         await MainActor.run {
-                            onComplete(fullReasoningText, fullContentText)
+                            onComplete(fullContentText)
                         }
-                        
+
                         streamingTask = nil
                         return
                     }
@@ -581,32 +653,27 @@ class AIService {
                     let contentToken = delta?.content
                     
                     if let reasoningToken, !reasoningToken.isEmpty {
-                        fullReasoningText += reasoningToken
+                        pendingReasoningCallbackChunks.append(reasoningToken)
                     }
                     
                     if let contentToken, !contentToken.isEmpty {
-                        fullContentText += contentToken
+                        fullContentChunks.append(contentToken)
+                        pendingContentCallbackChunks.append(contentToken)
                     }
 
                     if reasoningToken?.isEmpty == false || contentToken?.isEmpty == false {
-                        await MainActor.run {
-                            if let reasoningToken, !reasoningToken.isEmpty {
-                                onReasoningToken(reasoningToken)
-                            }
-
-                            if let contentToken, !contentToken.isEmpty {
-                                onContentToken(contentToken)
-                            }
-                        }
+                        await flushTokenCallbacks()
                     }
                 }
                 
+                let fullContentText = fullContentChunks.joined()
                 conversationHistory.append(ChatRequestMessage(role: "assistant", text: fullContentText))
-                
+
+                await flushTokenCallbacks(force: true)
                 await MainActor.run {
-                    onComplete(fullReasoningText, fullContentText)
+                    onComplete(fullContentText)
                 }
-                
+
                 streamingTask = nil
             } catch {
                 if Task.isCancelled {
@@ -616,7 +683,7 @@ class AIService {
                 await MainActor.run {
                     onError("流式请求失败：\(error.localizedDescription)")
                 }
-                
+
                 streamingTask = nil
             }
         }

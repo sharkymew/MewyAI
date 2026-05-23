@@ -158,6 +158,53 @@ private struct ScrollToBottomButtonOverlay<Label: View>: View {
     }
 }
 
+@MainActor
+private final class StreamingTokenBuffer {
+    private var pendingReasoningChunks: [String] = []
+    private var pendingContentChunks: [String] = []
+
+    var hasPendingReasoningText: Bool {
+        !pendingReasoningChunks.isEmpty
+    }
+
+    var hasPendingContentText: Bool {
+        !pendingContentChunks.isEmpty
+    }
+
+    var reasoningChunksSnapshot: [String] {
+        pendingReasoningChunks
+    }
+
+    func appendReasoning(_ text: String) {
+        pendingReasoningChunks.append(text)
+    }
+
+    func appendContent(_ text: String) {
+        pendingContentChunks.append(text)
+    }
+
+    func consumePendingReasoningChunks() -> [String] {
+        let chunks = pendingReasoningChunks
+        pendingReasoningChunks.removeAll(keepingCapacity: true)
+        return chunks
+    }
+
+    func consumePendingContentText() -> String {
+        let text = pendingContentChunks.joined()
+        pendingContentChunks.removeAll(keepingCapacity: true)
+        return text
+    }
+
+    func clearPendingTokens() {
+        pendingReasoningChunks.removeAll(keepingCapacity: true)
+        pendingContentChunks.removeAll(keepingCapacity: true)
+    }
+
+    func reset() {
+        clearPendingTokens()
+    }
+}
+
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
@@ -171,10 +218,13 @@ struct ContentView: View {
     @State private var showConfiguration = false
     @State private var showConversationSidebar = false
     @State private var chatScrollController = ChatScrollController()
-    @State private var pendingReasoningText = ""
-    @State private var pendingContentText = ""
-    @State private var liveAssistantReasoningText = ""
-    @State private var liveAssistantContentText = ""
+    @State private var streamingTokenBuffer = StreamingTokenBuffer()
+    @State private var activeAssistantHasReasoning = false
+    @State private var activeAssistantHasContent = false
+    @State private var activeAssistantReasoningIsExpanded = false
+    @State private var activeAssistantDidCollapseReasoningAfterThinking = false
+    @State private var liveAssistantReasoningChannel = StreamingTextUpdateChannel()
+    @State private var liveAssistantContentChannel = StreamingTextUpdateChannel()
     @State private var isFlushScheduled = false
     @State private var flushTask: Task<Void, Never>?
     @State private var activeAssistantMessageID: UUID?
@@ -380,15 +430,23 @@ struct ContentView: View {
                         VStack(spacing: 12) {
                             ForEach($messages) { $message in
                                 let isStreamingMessage = isGenerating && activeAssistantMessageID == message.id
+                                let liveReasoningChannel = isStreamingMessage && activeAssistantReasoningIsExpanded
+                                    ? liveAssistantReasoningChannel
+                                    : nil
                                 MessageBubble(
                                     message: $message,
                                     isStreaming: isStreamingMessage,
-                                    streamingContentOverride: isStreamingMessage ? liveAssistantContentText : nil,
-                                    streamingReasoningOverride: isStreamingMessage ? liveAssistantReasoningText : nil,
+                                    hasStreamingReasoning: isStreamingMessage && activeAssistantHasReasoning,
+                                    hasStreamingContent: isStreamingMessage && activeAssistantHasContent,
+                                    streamingContentChannel: isStreamingMessage ? liveAssistantContentChannel : nil,
+                                    streamingReasoningChannel: liveReasoningChannel,
                                     markdownRenderCache: markdownRenderCache[message.id],
                                     showsActions: activeMessageActionID == message.id,
                                     onSelect: {
                                         selectMessageAction(for: message.id)
+                                    },
+                                    onReasoningExpansionChanged: { isExpanded in
+                                        handleReasoningExpansionChange(for: message.id, isExpanded: isExpanded)
                                     },
                                     onRegenerate: {
                                         regenerateAssistantResponse(message.id)
@@ -927,10 +985,13 @@ struct ContentView: View {
         clearInputState()
         isGenerating = true
         chatScrollController.returnToBottom()
-        pendingReasoningText = ""
-        pendingContentText = ""
-        liveAssistantReasoningText = ""
-        liveAssistantContentText = ""
+        streamingTokenBuffer.reset()
+        activeAssistantHasReasoning = false
+        activeAssistantHasContent = false
+        activeAssistantReasoningIsExpanded = false
+        activeAssistantDidCollapseReasoningAfterThinking = false
+        clearLiveReasoningDisplay()
+        clearLiveContentDisplay()
         isFlushScheduled = false
         activeMessageActionID = nil
 
@@ -961,31 +1022,43 @@ struct ContentView: View {
             model: model,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
+            isReasoningDisplayActive: {
+                activeAssistantMessageID == assistantMessageID && activeAssistantReasoningIsExpanded
+            },
             onReasoningToken: { token in
                 guard activeAssistantMessageID == assistantMessageID else { return }
                 guard isGenerating else { return }
 
-                appendLiveReasoningToken(token)
-                pendingReasoningText += token
-                scheduleTokenFlush(for: assistantMessageID)
-                scheduleStreamingAutoScroll()
+                streamingTokenBuffer.appendReasoning(token)
+                if !activeAssistantHasReasoning {
+                    activeAssistantHasReasoning = true
+                }
+                updateLiveReasoningDisplayIfNeeded(for: assistantMessageID, token: token)
             },
             onContentToken: { token in
                 guard activeAssistantMessageID == assistantMessageID else { return }
                 guard isGenerating else { return }
 
+                collapseReasoningAfterThinkingIfNeeded(for: assistantMessageID)
                 appendLiveContentToken(token)
-                pendingContentText += token
+                if !activeAssistantHasContent {
+                    activeAssistantHasContent = true
+                }
+                streamingTokenBuffer.appendContent(token)
                 scheduleTokenFlush(for: assistantMessageID)
                 scheduleStreamingAutoScroll()
             },
-            onComplete: { _, _ in
+            onComplete: { _ in
                 guard activeAssistantMessageID == assistantMessageID else { return }
 
                 cancelScheduledFlush()
                 flushPendingTokens(for: assistantMessageID, invalidatesMarkdownCache: true, requestsAutoScroll: true)
                 isGenerating = false
                 activeAssistantMessageID = nil
+                activeAssistantHasReasoning = false
+                activeAssistantHasContent = false
+                activeAssistantReasoningIsExpanded = false
+                activeAssistantDidCollapseReasoningAfterThinking = false
                 clearLiveStreamingText()
                 prepareMarkdownCache(for: assistantMessageID)
                 persistCurrentConversation()
@@ -1003,6 +1076,10 @@ struct ContentView: View {
 
                 isGenerating = false
                 activeAssistantMessageID = nil
+                activeAssistantHasReasoning = false
+                activeAssistantHasContent = false
+                activeAssistantReasoningIsExpanded = false
+                activeAssistantDidCollapseReasoningAfterThinking = false
                 clearLiveStreamingText()
                 prepareMarkdownCache(for: assistantMessageID)
                 persistCurrentConversation()
@@ -1149,18 +1226,23 @@ struct ContentView: View {
         flushTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled else { return }
-            flushPendingTokens(for: messageID, invalidatesMarkdownCache: false, requestsAutoScroll: false)
+            flushPendingTokens(
+                for: messageID,
+                flushesReasoning: false,
+                invalidatesMarkdownCache: false,
+                requestsAutoScroll: false
+            )
         }
     }
 
     func flushPendingTokens(
         for messageID: UUID,
+        flushesReasoning: Bool = true,
         invalidatesMarkdownCache: Bool = true,
         requestsAutoScroll: Bool = true
     ) {
         guard let index = messages.firstIndex(where: { $0.id == messageID }) else {
-            pendingReasoningText = ""
-            pendingContentText = ""
+            streamingTokenBuffer.clearPendingTokens()
             isFlushScheduled = false
             flushTask = nil
             return
@@ -1170,15 +1252,15 @@ struct ContentView: View {
         transaction.animation = nil
 
         withTransaction(transaction) {
-            if !pendingReasoningText.isEmpty {
-                messages[index].reasoningContent += pendingReasoningText
-                pendingReasoningText = ""
+            if flushesReasoning, streamingTokenBuffer.hasPendingReasoningText {
+                messages[index].reasoningChunks.append(
+                    contentsOf: streamingTokenBuffer.consumePendingReasoningChunks()
+                )
             }
 
-            if !pendingContentText.isEmpty {
-                messages[index].content += pendingContentText
-                messages[index].isReasoningExpanded = false
-                pendingContentText = ""
+            if streamingTokenBuffer.hasPendingContentText {
+                messages[index].content += streamingTokenBuffer.consumePendingContentText()
+                activeAssistantHasContent = true
                 if invalidatesMarkdownCache {
                     invalidateMarkdownCache(for: messageID)
                 }
@@ -1199,32 +1281,104 @@ struct ContentView: View {
         isFlushScheduled = false
     }
 
-    private func appendLiveReasoningToken(_ token: String) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
+    private func appendLiveContentToken(_ token: String) {
+        publishLiveContentUpdate(chunks: [token], resetsText: false)
+    }
 
-        withTransaction(transaction) {
-            liveAssistantReasoningText += token
+    private func updateLiveReasoningDisplayIfNeeded(for messageID: UUID, token: String) {
+        guard activeAssistantMessageID == messageID,
+              activeAssistantReasoningIsExpanded else { return }
+
+        publishLiveReasoningUpdate(
+            chunks: [token],
+            resetsText: false,
+            appendsProgressively: token.utf16.count > Self.liveReasoningProgressiveAppendThreshold
+        )
+    }
+
+    private func collapseReasoningAfterThinkingIfNeeded(for messageID: UUID) {
+        guard activeAssistantMessageID == messageID,
+              activeAssistantHasReasoning,
+              !activeAssistantDidCollapseReasoningAfterThinking else { return }
+
+        activeAssistantDidCollapseReasoningAfterThinking = true
+        let wasReasoningExpanded = activeAssistantReasoningIsExpanded
+        activeAssistantReasoningIsExpanded = false
+
+        if let index = messages.firstIndex(where: { $0.id == messageID }),
+           messages[index].isReasoningExpanded {
+            messages[index].isReasoningExpanded = false
+            clearLiveReasoningDisplay()
+        } else if wasReasoningExpanded {
+            clearLiveReasoningDisplay()
         }
     }
 
-    private func appendLiveContentToken(_ token: String) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
+    private func handleReasoningExpansionChange(for messageID: UUID, isExpanded: Bool) {
+        guard activeAssistantMessageID == messageID else { return }
 
-        withTransaction(transaction) {
-            liveAssistantContentText += token
+        activeAssistantReasoningIsExpanded = isExpanded
+        if isExpanded {
+            publishLiveReasoningReset(for: messageID, appendsProgressively: true)
+        } else {
+            clearLiveReasoningDisplay()
         }
+    }
+
+    private func publishLiveReasoningReset(
+        for messageID: UUID,
+        appendsProgressively: Bool
+    ) {
+        guard let message = messages.first(where: { $0.id == messageID }) else { return }
+
+        var chunks: [String] = []
+        if !message.reasoningContent.isEmpty {
+            chunks.append(message.reasoningContent)
+        }
+        chunks.append(contentsOf: message.reasoningChunks)
+        chunks.append(contentsOf: streamingTokenBuffer.reasoningChunksSnapshot)
+
+        publishLiveReasoningUpdate(
+            chunks: chunks,
+            resetsText: true,
+            appendsProgressively: appendsProgressively
+        )
+    }
+
+    private func publishLiveReasoningUpdate(
+        chunks: [String],
+        resetsText: Bool,
+        appendsProgressively: Bool = false
+    ) {
+        liveAssistantReasoningChannel.publish(
+            chunks: chunks,
+            resetsText: resetsText,
+            appendsProgressively: appendsProgressively
+        )
+    }
+
+    private func clearLiveReasoningDisplay() {
+        publishLiveReasoningUpdate(chunks: [], resetsText: true)
+    }
+
+    private func publishLiveContentUpdate(chunks: [String], resetsText: Bool) {
+        liveAssistantContentChannel.publish(chunks: chunks, resetsText: resetsText)
+    }
+
+    private func clearLiveContentDisplay() {
+        publishLiveContentUpdate(chunks: [], resetsText: true)
     }
 
     private func clearLiveStreamingText() {
-        liveAssistantReasoningText = ""
-        liveAssistantContentText = ""
+        clearLiveReasoningDisplay()
+        clearLiveContentDisplay()
     }
 
     private func scheduleStreamingAutoScroll() {
         chatScrollController.scheduleStreamingAutoScroll()
     }
+
+    private static let liveReasoningProgressiveAppendThreshold = 720
 
     private func prepareMarkdownCaches(for messages: [ChatMessage]) {
         messages
@@ -1295,9 +1449,12 @@ struct ContentView: View {
         }
 
         activeAssistantMessageID = nil
+        activeAssistantHasReasoning = false
+        activeAssistantHasContent = false
+        activeAssistantReasoningIsExpanded = false
+        activeAssistantDidCollapseReasoningAfterThinking = false
         isGenerating = false
-        pendingReasoningText = ""
-        pendingContentText = ""
+        streamingTokenBuffer.reset()
         clearLiveStreamingText()
         isFlushScheduled = false
         persistCurrentConversation()
@@ -1531,6 +1688,10 @@ struct ContentView: View {
             selectedConversationID = conversation.id
             messages = []
             resetMarkdownCache(for: messages)
+            activeAssistantHasReasoning = false
+            activeAssistantHasContent = false
+            activeAssistantReasoningIsExpanded = false
+            activeAssistantDidCollapseReasoningAfterThinking = false
             clearLiveStreamingText()
             aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
             ConversationStore.saveSelectedConversationID(conversation.id)
@@ -1572,10 +1733,13 @@ struct ContentView: View {
         selectedPhotoItems = []
         imageSelectionError = nil
         activeAssistantMessageID = nil
+        activeAssistantHasReasoning = false
+        activeAssistantHasContent = false
+        activeAssistantReasoningIsExpanded = false
+        activeAssistantDidCollapseReasoningAfterThinking = false
         activeMessageActionID = nil
         editingMessageID = nil
-        pendingReasoningText = ""
-        pendingContentText = ""
+        streamingTokenBuffer.reset()
         clearLiveStreamingText()
         isFlushScheduled = false
         chatScrollController.returnToBottom()
@@ -1629,10 +1793,13 @@ struct ContentView: View {
         selectedPhotoItems = []
         imageSelectionError = nil
         activeAssistantMessageID = nil
+        activeAssistantHasReasoning = false
+        activeAssistantHasContent = false
+        activeAssistantReasoningIsExpanded = false
+        activeAssistantDidCollapseReasoningAfterThinking = false
         activeMessageActionID = nil
         editingMessageID = nil
-        pendingReasoningText = ""
-        pendingContentText = ""
+        streamingTokenBuffer.reset()
         clearLiveStreamingText()
         isFlushScheduled = false
         aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
@@ -1661,10 +1828,13 @@ struct ContentView: View {
             selectedPhotoItems = []
             imageSelectionError = nil
             activeAssistantMessageID = nil
+            activeAssistantHasReasoning = false
+            activeAssistantHasContent = false
+            activeAssistantReasoningIsExpanded = false
+            activeAssistantDidCollapseReasoningAfterThinking = false
             activeMessageActionID = nil
             editingMessageID = nil
-            pendingReasoningText = ""
-            pendingContentText = ""
+            streamingTokenBuffer.reset()
             clearLiveStreamingText()
             isFlushScheduled = false
             showConversationSidebar = false
@@ -1688,8 +1858,16 @@ struct ContentView: View {
             pendingImageAttachments = []
             selectedPhotoItems = []
             imageSelectionError = nil
+            activeAssistantMessageID = nil
+            activeAssistantHasReasoning = false
+            activeAssistantHasContent = false
+            activeAssistantReasoningIsExpanded = false
+            activeAssistantDidCollapseReasoningAfterThinking = false
             activeMessageActionID = nil
             editingMessageID = nil
+            streamingTokenBuffer.reset()
+            clearLiveStreamingText()
+            isFlushScheduled = false
             aiService.resetConversation(with: messages, systemPrompt: currentConfiguration.systemPrompt)
             ConversationStore.saveSelectedConversationID(nextConversation.id)
         }
@@ -1768,16 +1946,20 @@ struct ContentView: View {
             ConversationStore.saveConversations(conversations)
         }
     }
+
 }
 
 struct MessageBubble: View {
     @Binding var message: ChatMessage
     let isStreaming: Bool
-    let streamingContentOverride: String?
-    let streamingReasoningOverride: String?
+    let hasStreamingReasoning: Bool
+    let hasStreamingContent: Bool
+    let streamingContentChannel: StreamingTextUpdateChannel?
+    let streamingReasoningChannel: StreamingTextUpdateChannel?
     let markdownRenderCache: MarkdownRenderCacheEntry?
     let showsActions: Bool
     let onSelect: () -> Void
+    let onReasoningExpansionChanged: (Bool) -> Void
     let onRegenerate: () -> Void
     let onEdit: () -> Void
     @Environment(\.colorScheme) private var colorScheme
@@ -1799,35 +1981,54 @@ struct MessageBubble: View {
     }
 
     private var displayContent: String {
-        streamingContentOverride ?? message.content
+        message.content
     }
 
     private var displayReasoningContent: String {
-        streamingReasoningOverride ?? message.reasoningContent
+        message.reasoningContent
+    }
+
+    private var displayReasoningChunks: [String] {
+        message.reasoningChunks
+    }
+
+    private var hasReasoningContent: Bool {
+        hasStreamingReasoning || !displayReasoningContent.isEmpty || !displayReasoningChunks.isEmpty
+    }
+
+    private var shouldShowMessageContentBubble: Bool {
+        if isUser {
+            return !displayContent.isEmpty
+        }
+
+        if !displayContent.isEmpty || hasStreamingContent || message.isStopped {
+            return true
+        }
+
+        return !isStreaming && !hasReasoningContent
     }
 
     private var messageContentBubble: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if displayContent.isEmpty, !isUser {
+            if isUser {
+                SelectableTextView(
+                    text: displayContent,
+                    textColor: .white,
+                    font: .preferredFont(forTextStyle: .body),
+                    textAlignment: .left,
+                    sizing: .natural,
+                    onTap: onSelect
+                )
+            } else if displayContent.isEmpty, !hasStreamingContent {
                 Text(message.isStopped ? "已停止生成。" : "正在生成回答...")
-            } else if !displayContent.isEmpty {
-                if isUser {
-                    SelectableTextView(
-                        text: displayContent,
-                        textColor: .white,
-                        font: .preferredFont(forTextStyle: .body),
-                        textAlignment: .left,
-                        sizing: .natural,
-                        onTap: onSelect
-                    )
-                } else {
-                    AssistantMessageContent(
-                        content: displayContent,
-                        isStreaming: isStreaming,
-                        isStopped: message.isStopped,
-                        markdownRenderCache: markdownRenderCache
-                    )
-                }
+            } else {
+                AssistantMessageContent(
+                    content: displayContent,
+                    isStreaming: isStreaming,
+                    streamingContentChannel: streamingContentChannel,
+                    isStopped: message.isStopped,
+                    markdownRenderCache: markdownRenderCache
+                )
             }
         }
         .font(.body)
@@ -1887,11 +2088,13 @@ struct MessageBubble: View {
 
     private var assistantMessageStack: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !displayReasoningContent.isEmpty {
+            if hasReasoningContent {
                 reasoningBlock
             }
 
-            messageContentBubble
+            if shouldShowMessageContentBubble {
+                messageContentBubble
+            }
 
             if showsActions, !displayContent.isEmpty {
                 Button {
@@ -1943,6 +2146,7 @@ struct MessageBubble: View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
                 message.isReasoningExpanded.toggle()
+                onReasoningExpansionChanged(message.isReasoningExpanded)
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: message.isReasoningExpanded ? "chevron.down" : "chevron.right")
@@ -1960,11 +2164,11 @@ struct MessageBubble: View {
 
             if message.isReasoningExpanded {
                 VStack(alignment: .leading, spacing: 0) {
-                    SelectableTextView(
-                        text: displayReasoningContent,
-                        textColor: .secondaryLabel,
-                        font: .preferredFont(forTextStyle: .caption1),
-                        textAlignment: .left
+                    ReasoningMessageContent(
+                        content: displayReasoningContent,
+                        chunks: displayReasoningChunks,
+                        isStreaming: isStreaming,
+                        streamingChannel: streamingReasoningChannel
                     )
                 }
                 .font(.caption)
@@ -1995,31 +2199,20 @@ struct MessageBubble: View {
 struct AssistantMessageContent: View {
     let content: String
     let isStreaming: Bool
+    let streamingContentChannel: StreamingTextUpdateChannel?
     let isStopped: Bool
     let markdownRenderCache: MarkdownRenderCacheEntry?
-    @State private var showsFullText = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if isStreaming {
-                StreamingAssistantMarkdownText(streamingContent)
-            } else if showsFullText {
-                PlainAssistantText(content)
+            if let streamingContentChannel {
+                StreamingAssistantMarkdownText(streamingChannel: streamingContentChannel)
+            } else if isStreaming {
+                StreamingAssistantMarkdownText(content)
             } else if let markdownRenderCache {
                 AssistantMarkdownText(renderCache: markdownRenderCache)
             } else {
-                PlainAssistantText(fallbackContent)
-            }
-
-            if let markdownRenderCache, markdownRenderCache.isTruncated {
-                Button {
-                    showsFullText.toggle()
-                } label: {
-                    Label(showsFullText ? "收起" : "展开全文", systemImage: showsFullText ? "chevron.up" : "chevron.down")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
+                PlainAssistantText(content)
             }
 
             if isStopped {
@@ -2029,22 +2222,61 @@ struct AssistantMessageContent: View {
             }
         }
     }
-
-    private var streamingContent: String {
-        guard content.count > Self.streamingCharacterLimit else { return content }
-        return "...\n" + String(content.suffix(Self.streamingCharacterLimit))
-    }
-
-    private var fallbackContent: String {
-        guard content.count > Self.fallbackCharacterLimit else { return content }
-        return String(content.prefix(Self.fallbackCharacterLimit))
-    }
-
-    private static let streamingCharacterLimit = 4_000
-    private static let fallbackCharacterLimit = 5_000
 }
 
-struct StreamingAssistantMarkdownText: View {
+struct ReasoningMessageContent: View {
+    let content: String
+    let chunks: [String]
+    let isStreaming: Bool
+    let streamingChannel: StreamingTextUpdateChannel?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let streamingChannel {
+                ScrollableSelectableTextView(
+                    text: "",
+                    streamingChannel: streamingChannel,
+                    textColor: .secondaryLabel,
+                    font: .preferredFont(forTextStyle: .caption1),
+                    textAlignment: .left,
+                    height: 340,
+                    scrollsToBottom: true
+                )
+            } else if !chunks.isEmpty {
+                ScrollableSelectableTextView(
+                    text: "",
+                    chunks: chunks,
+                    appendsChunksProgressively: true,
+                    textColor: .secondaryLabel,
+                    font: .preferredFont(forTextStyle: .caption1),
+                    textAlignment: .left,
+                    height: 340,
+                    scrollsToBottom: false
+                )
+            } else if usesScrollableTextView {
+                ScrollableSelectableTextView(
+                    text: content,
+                    textColor: .secondaryLabel,
+                    font: .preferredFont(forTextStyle: .caption1),
+                    textAlignment: .left,
+                    height: 340,
+                    scrollsToBottom: isStreaming
+                )
+            } else {
+                ReasoningPlainText(content)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var usesScrollableTextView: Bool {
+        isStreaming || !chunks.isEmpty || content.utf16.count > Self.inlineCharacterLimit
+    }
+
+    private static let inlineCharacterLimit = 1_800
+}
+
+private struct ReasoningPlainText: View {
     let content: String
 
     init(_ content: String) {
@@ -2052,13 +2284,47 @@ struct StreamingAssistantMarkdownText: View {
     }
 
     var body: some View {
+        SelectableTextView(
+            text: content,
+            textColor: .secondaryLabel,
+            font: .preferredFont(forTextStyle: .caption1),
+            textAlignment: .left
+        )
+    }
+}
+
+struct StreamingAssistantMarkdownText: View {
+    let content: String
+    let streamingChannel: StreamingTextUpdateChannel?
+    @State private var renderedContent: String
+    @State private var pendingAppendChunks: [String] = []
+    @State private var renderedSegments: [ChatMarkdownBlockSegment]
+    @State private var renderTask: Task<Void, Never>?
+    @State private var streamingObserverID: UUID?
+
+    init(_ content: String) {
+        self.content = content
+        streamingChannel = nil
+        _renderedContent = State(initialValue: content)
+        _renderedSegments = State(initialValue: Self.renderSegments(for: content))
+    }
+
+    init(streamingChannel: StreamingTextUpdateChannel) {
+        content = ""
+        self.streamingChannel = streamingChannel
+        _renderedContent = State(initialValue: "")
+        _renderedSegments = State(initialValue: [])
+    }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(ChatMarkdownBlockSegment.split(content)) { segment in
+            ForEach(renderedSegments) { segment in
                 switch segment.kind {
                 case let .text(text):
                     let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmedText.isEmpty {
                         StreamingMarkdownText(trimmedText)
+                            .equatable()
                     }
                 case let .code(language, code):
                     StreamingCodeBlock(content: code, language: language)
@@ -2066,14 +2332,99 @@ struct StreamingAssistantMarkdownText: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            attachStreamingChannelIfNeeded()
+        }
+        .onChange(of: content) { _, newContent in
+            guard streamingChannel == nil else { return }
+            renderedContent = newContent
+            scheduleRender()
+        }
+        .onDisappear {
+            cancelRenderTask()
+            detachStreamingChannel()
+        }
     }
+
+    private func scheduleRender() {
+        guard renderTask == nil else { return }
+
+        renderTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.renderInterval)
+            guard !Task.isCancelled else { return }
+            applyPendingChunks()
+            renderedSegments = Self.renderSegments(for: renderedContent)
+            renderTask = nil
+        }
+    }
+
+    private func renderImmediately() {
+        cancelRenderTask()
+        applyPendingChunks()
+        renderedSegments = Self.renderSegments(for: renderedContent)
+    }
+
+    private func applyPendingChunks() {
+        guard !pendingAppendChunks.isEmpty else { return }
+        renderedContent += pendingAppendChunks.joined()
+        pendingAppendChunks.removeAll(keepingCapacity: true)
+    }
+
+    private func applyStreamingUpdate(_ update: StreamingTextUpdate) {
+        if update.resetsText {
+            cancelRenderTask()
+            pendingAppendChunks.removeAll(keepingCapacity: true)
+            renderedContent = update.chunks.joined()
+            renderedSegments = Self.renderSegments(for: renderedContent)
+            return
+        }
+
+        guard !update.chunks.isEmpty else { return }
+        pendingAppendChunks.append(contentsOf: update.chunks)
+        if renderedContent.isEmpty {
+            renderImmediately()
+        } else {
+            scheduleRender()
+        }
+    }
+
+    private func attachStreamingChannelIfNeeded() {
+        guard let streamingChannel, streamingObserverID == nil else { return }
+
+        applyStreamingUpdate(streamingChannel.latest)
+        streamingObserverID = streamingChannel.addObserver { update in
+            applyStreamingUpdate(update)
+        }
+    }
+
+    private func detachStreamingChannel() {
+        if let streamingObserverID {
+            streamingChannel?.removeObserver(streamingObserverID)
+        }
+        streamingObserverID = nil
+    }
+
+    private func cancelRenderTask() {
+        renderTask?.cancel()
+        renderTask = nil
+    }
+
+    private static func renderSegments(for content: String) -> [ChatMarkdownBlockSegment] {
+        ChatMarkdownBlockSegment.split(content)
+    }
+
+    private static let renderInterval: Duration = .milliseconds(50)
 }
 
-private struct StreamingMarkdownText: View {
+private struct StreamingMarkdownText: View, Equatable {
     let markdown: String
 
     init(_ markdown: String) {
         self.markdown = markdown
+    }
+
+    static func == (lhs: StreamingMarkdownText, rhs: StreamingMarkdownText) -> Bool {
+        lhs.markdown == rhs.markdown
     }
 
     var body: some View {
@@ -2158,29 +2509,16 @@ nonisolated struct MarkdownRenderCacheEntry: @unchecked Sendable {
     let signature: String
     let renderedMarkdown: String
     let segments: [ChatMarkdownBlockSegment]
-    let isTruncated: Bool
 
     nonisolated init(content: String) {
         signature = Self.signature(for: content)
-        let processedContent = ChatMarkdownPreprocessor.preprocess(content)
-        isTruncated = processedContent.count > Self.maximumRenderedCharacterCount
-
-        if processedContent.count > Self.maximumRenderedCharacterCount {
-            let preview = processedContent.prefix(Self.previewCharacterCount)
-            renderedMarkdown = String(preview).trimmingCharacters(in: .whitespacesAndNewlines)
-        } else {
-            renderedMarkdown = processedContent
-        }
-
+        renderedMarkdown = ChatMarkdownPreprocessor.preprocess(content)
         segments = ChatMarkdownBlockSegment.split(renderedMarkdown)
     }
 
     nonisolated static func signature(for content: String) -> String {
         "\(content.count):\(content.hashValue)"
     }
-
-    private nonisolated static let maximumRenderedCharacterCount = 12_000
-    private nonisolated static let previewCharacterCount = 5_000
 }
 
 struct AssistantMarkdownText: View {
