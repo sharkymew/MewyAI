@@ -2321,6 +2321,9 @@ struct StreamingAssistantMarkdownText: View {
                     }
                 case let .code(language, code):
                     StreamingCodeBlock(content: code, language: language)
+                case let .math(formula, displayMode):
+                    LaTeXFormulaView(formula: formula, displayMode: displayMode)
+                        .equatable()
                 }
             }
         }
@@ -2421,12 +2424,21 @@ private struct StreamingMarkdownText: View, Equatable {
     }
 
     var body: some View {
-        Text(Self.attributedString(from: markdown))
-            .font(.body)
-            .foregroundStyle(.primary)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        if ChatLaTeXSegmentParser.containsInlineMath(in: markdown) {
+            LaTeXInlineTextView(
+                text: markdown,
+                textColor: .label,
+                font: .preferredFont(forTextStyle: .body),
+                textAlignment: .left
+            )
+        } else {
+            Text(Self.attributedString(from: markdown))
+                .font(.body)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private static func attributedString(from markdown: String) -> AttributedString {
@@ -2532,6 +2544,9 @@ struct AssistantMarkdownText: View {
                     }
                 case let .code(language, code):
                     ChatCodeBlock(content: code, language: language)
+                case let .math(formula, displayMode):
+                    LaTeXFormulaView(formula: formula, displayMode: displayMode)
+                        .equatable()
                 }
             }
         }
@@ -2546,6 +2561,7 @@ struct ChatMarkdownBlockSegment: Identifiable {
     enum Kind {
         case text(String)
         case code(language: String?, code: String)
+        case math(formula: String, displayMode: Bool)
     }
 
     nonisolated static func split(_ content: String) -> [ChatMarkdownBlockSegment] {
@@ -2558,13 +2574,29 @@ struct ChatMarkdownBlockSegment: Identifiable {
 
         func appendText() {
             guard !textBuffer.isEmpty else { return }
-            segments.append(
-                ChatMarkdownBlockSegment(
-                    id: segments.count,
-                    kind: .text(textBuffer.joined(separator: "\n"))
-                )
-            )
+            appendTextSegments(textBuffer.joined(separator: "\n"))
             textBuffer.removeAll()
+        }
+
+        func appendTextSegments(_ text: String) {
+            for segment in ChatLaTeXSegmentParser.split(text) {
+                switch segment {
+                case let .text(text):
+                    segments.append(
+                        ChatMarkdownBlockSegment(
+                            id: segments.count,
+                            kind: .text(text)
+                        )
+                    )
+                case let .math(formula, displayMode):
+                    segments.append(
+                        ChatMarkdownBlockSegment(
+                            id: segments.count,
+                            kind: .math(formula: formula, displayMode: displayMode)
+                        )
+                    )
+                }
+            }
         }
 
         func appendCode() {
@@ -2648,10 +2680,10 @@ enum ChatMarkdownPreprocessor {
 
     private nonisolated static func preprocessMarkdownText(_ text: String) -> String {
         var processed = text
+        processed = stripLaTeXDocumentShell(from: processed)
         processed = removeHTMLComments(from: processed)
         processed = removeTOCLines(from: processed)
         processed = transformCustomContainers(in: processed)
-        processed = transformBlockMath(in: processed)
         processed = normalizeTables(in: processed)
         processed = transformInlineExtensions(in: processed)
         processed = stripAttributeLists(from: processed)
@@ -2692,6 +2724,38 @@ enum ChatMarkdownPreprocessor {
             segments.append((buffer.joined(separator: "\n"), activeCodeFence != nil))
         }
         return segments
+    }
+
+    private nonisolated static func stripLaTeXDocumentShell(from text: String) -> String {
+        var result = text
+
+        if let beginRange = result.range(
+            of: #"\\begin\{document\}"#,
+            options: .regularExpression
+        ) {
+            let bodyStart = beginRange.upperBound
+            if let endRange = result.range(
+                of: #"\\end\{document\}"#,
+                options: .regularExpression,
+                range: bodyStart..<result.endIndex
+            ) {
+                result = String(result[bodyStart..<endRange.lowerBound])
+            } else {
+                result = String(result[bodyStart...])
+            }
+        }
+
+        result = result.replacingOccurrences(
+            of: #"(?m)^\s*\\(?:documentclass|usepackage)\b(?:\[[^\]]*\])?\{[^}]*\}\s*$\n?"#,
+            with: "",
+            options: .regularExpression
+        )
+        result = result.replacingOccurrences(
+            of: #"(?m)^\s*\\(?:begin|end)\{document\}\s*$\n?"#,
+            with: "",
+            options: .regularExpression
+        )
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private nonisolated static func removeHTMLComments(from text: String) -> String {
@@ -2746,14 +2810,6 @@ enum ChatMarkdownPreprocessor {
 
         flushContainer()
         return result.joined(separator: "\n")
-    }
-
-    private nonisolated static func transformBlockMath(in text: String) -> String {
-        text.replacingOccurrences(
-            of: #"(?s)\$\$\s*(.*?)\s*\$\$"#,
-            with: "\n```math\n$1\n```\n",
-            options: .regularExpression
-        )
     }
 
     private nonisolated static func normalizeTables(in text: String) -> String {
@@ -2898,11 +2954,6 @@ enum ChatMarkdownPreprocessor {
             of: #"<u>(.*?)</u>"#,
             with: "_$1_",
             options: [.regularExpression, .caseInsensitive]
-        )
-        processed = processed.replacingOccurrences(
-            of: #"(?<!\\)\$([^\n$]+?)\$"#,
-            with: "`$1`",
-            options: .regularExpression
         )
         return processed
     }

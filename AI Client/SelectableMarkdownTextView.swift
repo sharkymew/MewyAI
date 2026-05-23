@@ -54,15 +54,26 @@ private struct MarkdownSelectableLine: View {
     let textAlignment: NSTextAlignment
 
     var body: some View {
-        SelectableAttributedTextView(
-            attributedText: MarkdownInlineFormatter.attributedString(
-                from: text,
-                font: style.font(baseFont: baseFont),
+        let font = style.font(baseFont: baseFont)
+
+        if ChatLaTeXSegmentParser.containsInlineMath(in: text) {
+            LaTeXInlineTextView(
+                text: text,
                 textColor: textColor,
+                font: font,
                 textAlignment: textAlignment
-            ),
-            textAlignment: textAlignment
-        )
+            )
+        } else {
+            SelectableAttributedTextView(
+                attributedText: MarkdownInlineFormatter.attributedString(
+                    from: text,
+                    font: font,
+                    textColor: textColor,
+                    textAlignment: textAlignment
+                ),
+                textAlignment: textAlignment
+            )
+        }
     }
 }
 
