@@ -1,6 +1,67 @@
+import Foundation
+import JavaScriptCore
 import SwiftUI
 import UIKit
 import WebKit
+
+nonisolated struct PreparedLaTeXFormula: @unchecked Sendable {
+    let formula: String
+    let displayMode: Bool
+    let image: UIImage?
+    let imageSize: CGSize
+    let fallbackText: String
+    let errorMessage: String?
+
+    var hasImage: Bool {
+        image != nil && imageSize.width > 0 && imageSize.height > 0
+    }
+}
+
+struct PreparedLaTeXFormulaView: View {
+    let formula: PreparedLaTeXFormula
+
+    @Environment(\.colorScheme) private var colorScheme
+    @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 17
+    @State private var webHeight: CGFloat = 48
+
+    var body: some View {
+        Group {
+            if let image = formula.image, formula.hasImage {
+                ScrollView(.horizontal, showsIndicators: formula.displayMode) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .interpolation(.high)
+                        .antialiased(true)
+                        .frame(width: formula.imageSize.width, height: formula.imageSize.height)
+                        .accessibilityLabel(Text(formula.formula))
+                }
+                .scrollDisabled(!formula.displayMode)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: formula.imageSize.height)
+            } else {
+                LaTeXFormulaWebView(
+                    formula: formula.formula,
+                    displayMode: formula.displayMode,
+                    textColor: resolvedTextColor,
+                    fontSize: fontSize,
+                    height: $webHeight
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: webHeight)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
+    }
+
+    private var resolvedTextColor: String {
+        let style: UIUserInterfaceStyle = colorScheme == .dark ? .dark : .light
+        return UIColor.label.resolvedColor(with: UITraitCollection(userInterfaceStyle: style)).cssHex
+    }
+}
 
 struct LaTeXFormulaView: View, Equatable {
     let formula: String
@@ -8,13 +69,7 @@ struct LaTeXFormulaView: View, Equatable {
 
     @Environment(\.colorScheme) private var colorScheme
     @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 17
-    @State private var height: CGFloat
-
-    init(formula: String, displayMode: Bool) {
-        self.formula = formula
-        self.displayMode = displayMode
-        _height = State(initialValue: displayMode ? 48 : 28)
-    }
+    @State private var webHeight: CGFloat = 48
 
     static func == (lhs: LaTeXFormulaView, rhs: LaTeXFormulaView) -> Bool {
         lhs.formula == rhs.formula && lhs.displayMode == rhs.displayMode
@@ -24,12 +79,12 @@ struct LaTeXFormulaView: View, Equatable {
         LaTeXFormulaWebView(
             formula: formula,
             displayMode: displayMode,
-            textColor: textColor,
+            textColor: resolvedTextColor,
             fontSize: fontSize,
-            height: $height
+            height: $webHeight
         )
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: height)
+        .frame(height: webHeight)
         .fixedSize(horizontal: false, vertical: true)
         .transaction { transaction in
             transaction.animation = nil
@@ -37,109 +92,9 @@ struct LaTeXFormulaView: View, Equatable {
         }
     }
 
-    private var textColor: String {
-        colorScheme == .dark ? "#F2F2F7" : "#1C1C1E"
-    }
-}
-
-private struct LaTeXFormulaWebView: UIViewRepresentable {
-    let formula: String
-    let displayMode: Bool
-    let textColor: String
-    let fontSize: CGFloat
-    @Binding var height: CGFloat
-
-    func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.userContentController.add(context.coordinator, name: LaTeXWebViewSupport.messageName)
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.backgroundColor = .clear
-        webView.isOpaque = false
-        webView.navigationDelegate = context.coordinator
-        webView.scrollView.backgroundColor = .clear
-        webView.scrollView.isScrollEnabled = displayMode
-        webView.scrollView.showsVerticalScrollIndicator = false
-        webView.scrollView.showsHorizontalScrollIndicator = displayMode
-        webView.scrollView.bounces = displayMode
-        webView.scrollView.alwaysBounceVertical = false
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        return webView
-    }
-
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        context.coordinator.height = $height
-        webView.scrollView.isScrollEnabled = displayMode
-        webView.scrollView.showsHorizontalScrollIndicator = displayMode
-
-        let signature = LaTeXFormulaHTML.signature(
-            formula: formula,
-            displayMode: displayMode,
-            textColor: textColor,
-            fontSize: fontSize
-        )
-        guard context.coordinator.signature != signature else { return }
-
-        context.coordinator.signature = signature
-        webView.loadHTMLString(
-            LaTeXFormulaHTML.html(
-                formula: formula,
-                displayMode: displayMode,
-                textColor: textColor,
-                fontSize: fontSize
-            ),
-            baseURL: LaTeXWebViewSupport.baseURL
-        )
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(height: $height)
-    }
-
-    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
-        uiView.configuration.userContentController.removeScriptMessageHandler(
-            forName: LaTeXWebViewSupport.messageName
-        )
-        uiView.navigationDelegate = nil
-    }
-
-    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-        var height: Binding<CGFloat>
-        var signature = ""
-
-        init(height: Binding<CGFloat>) {
-            self.height = height
-        }
-
-        func userContentController(
-            _ userContentController: WKUserContentController,
-            didReceive message: WKScriptMessage
-        ) {
-            guard message.name == LaTeXWebViewSupport.messageName,
-                  let body = message.body as? [String: Any],
-                  let nextHeight = body["height"] as? Double else {
-                return
-            }
-
-            let clampedHeight = min(max(CGFloat(nextHeight), 24), 720)
-            if abs(height.wrappedValue - clampedHeight) > 0.5 {
-                height.wrappedValue = clampedHeight
-            }
-        }
-
-        func webView(
-            _ webView: WKWebView,
-            decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-        ) {
-            switch navigationAction.navigationType {
-            case .other:
-                decisionHandler(.allow)
-            default:
-                decisionHandler(.cancel)
-            }
-        }
+    private var resolvedTextColor: String {
+        let style: UIUserInterfaceStyle = colorScheme == .dark ? .dark : .light
+        return UIColor.label.resolvedColor(with: UITraitCollection(userInterfaceStyle: style)).cssHex
     }
 }
 
@@ -204,6 +159,51 @@ struct LaTeXInlineTextView: View, Equatable {
     }
 }
 
+private struct LaTeXFormulaWebView: UIViewRepresentable {
+    let formula: String
+    let displayMode: Bool
+    let textColor: String
+    let fontSize: CGFloat
+    @Binding var height: CGFloat
+
+    func makeUIView(context: Context) -> WKWebView {
+        LaTeXWebViewSupport.makeWebView(coordinator: context.coordinator, scrollsHorizontally: displayMode)
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.height = $height
+        webView.scrollView.isScrollEnabled = displayMode
+        webView.scrollView.showsHorizontalScrollIndicator = displayMode
+
+        let signature = LaTeXFormulaHTML.signature(
+            formula: formula,
+            displayMode: displayMode,
+            textColor: textColor,
+            fontSize: fontSize
+        )
+        guard context.coordinator.signature != signature else { return }
+
+        context.coordinator.signature = signature
+        webView.loadHTMLString(
+            LaTeXFormulaHTML.html(
+                formula: formula,
+                displayMode: displayMode,
+                textColor: textColor,
+                fontSize: fontSize
+            ),
+            baseURL: nil
+        )
+    }
+
+    func makeCoordinator() -> LaTeXWebViewCoordinator {
+        LaTeXWebViewCoordinator(height: $height)
+    }
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: LaTeXWebViewCoordinator) {
+        LaTeXWebViewSupport.dismantle(uiView)
+    }
+}
+
 private struct LaTeXInlineTextWebView: UIViewRepresentable {
     let text: String
     let textColor: String
@@ -214,21 +214,7 @@ private struct LaTeXInlineTextWebView: UIViewRepresentable {
     @Binding var height: CGFloat
 
     func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.userContentController.add(context.coordinator, name: LaTeXWebViewSupport.messageName)
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.backgroundColor = .clear
-        webView.isOpaque = false
-        webView.navigationDelegate = context.coordinator
-        webView.scrollView.backgroundColor = .clear
-        webView.scrollView.isScrollEnabled = false
-        webView.scrollView.showsVerticalScrollIndicator = false
-        webView.scrollView.showsHorizontalScrollIndicator = false
-        webView.scrollView.bounces = false
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        return webView
+        LaTeXWebViewSupport.makeWebView(coordinator: context.coordinator, scrollsHorizontally: false)
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
@@ -254,7 +240,7 @@ private struct LaTeXInlineTextWebView: UIViewRepresentable {
                 fontStyle: fontStyle,
                 textAlignment: textAlignment
             ),
-            baseURL: LaTeXWebViewSupport.baseURL
+            baseURL: nil
         )
     }
 
@@ -263,10 +249,7 @@ private struct LaTeXInlineTextWebView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: LaTeXWebViewCoordinator) {
-        uiView.configuration.userContentController.removeScriptMessageHandler(
-            forName: LaTeXWebViewSupport.messageName
-        )
-        uiView.navigationDelegate = nil
+        LaTeXWebViewSupport.dismantle(uiView)
     }
 }
 
@@ -308,6 +291,61 @@ private final class LaTeXWebViewCoordinator: NSObject, WKScriptMessageHandler, W
     }
 }
 
+private enum LaTeXWebViewSupport {
+    static let messageName = "latexRender"
+    static let scriptURLString = "\(resourceScheme)://bundle/mathjax-headless-svg.js"
+    private static let resourceScheme = "aiclientmathjax"
+
+    static func makeWebView(coordinator: LaTeXWebViewCoordinator, scrollsHorizontally: Bool) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(coordinator, name: messageName)
+        configuration.setURLSchemeHandler(LaTeXWebViewResourceHandler(), forURLScheme: resourceScheme)
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.backgroundColor = .clear
+        webView.isOpaque = false
+        webView.navigationDelegate = coordinator
+        webView.scrollView.backgroundColor = .clear
+        webView.scrollView.isScrollEnabled = scrollsHorizontally
+        webView.scrollView.showsVerticalScrollIndicator = false
+        webView.scrollView.showsHorizontalScrollIndicator = scrollsHorizontally
+        webView.scrollView.bounces = scrollsHorizontally
+        webView.scrollView.alwaysBounceVertical = false
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        return webView
+    }
+
+    static func dismantle(_ webView: WKWebView) {
+        webView.stopLoading()
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: messageName)
+        webView.navigationDelegate = nil
+    }
+}
+
+private final class LaTeXWebViewResourceHandler: NSObject, WKURLSchemeHandler {
+    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
+        guard urlSchemeTask.request.url?.lastPathComponent == "mathjax-headless-svg.js",
+              let scriptURL = Bundle.main.url(forResource: "mathjax-headless-svg", withExtension: "js"),
+              let data = try? Data(contentsOf: scriptURL) else {
+            urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
+            return
+        }
+
+        let response = URLResponse(
+            url: urlSchemeTask.request.url ?? scriptURL,
+            mimeType: "application/javascript",
+            expectedContentLength: data.count,
+            textEncodingName: "utf-8"
+        )
+        urlSchemeTask.didReceive(response)
+        urlSchemeTask.didReceive(data)
+        urlSchemeTask.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {}
+}
+
 private enum LaTeXFormulaHTML {
     static func signature(
         formula: String,
@@ -315,7 +353,7 @@ private enum LaTeXFormulaHTML {
         textColor: String,
         fontSize: CGFloat
     ) -> String {
-        "\(displayMode):\(textColor):\(Int(fontSize * 10)):\(formula.count):\(formula.hashValue)"
+        "\(textColor):\(Int(fontSize * 10)):\(displayMode):\(formula.count):\(formula.hashValue)"
     }
 
     static func html(
@@ -327,8 +365,8 @@ private enum LaTeXFormulaHTML {
         let encodedFormula = Data(formula.utf8).base64EncodedString()
         let escapedFormula = formula.htmlEscaped
         let displayLiteral = displayMode ? "true" : "false"
-        let verticalPadding = displayMode ? "6px" : "0"
         let containerDisplay = displayMode ? "block" : "inline-block"
+        let verticalPadding = displayMode ? "6px" : "0"
 
         return """
         <!doctype html>
@@ -369,20 +407,6 @@ private enum LaTeXFormulaHTML {
         mjx-container[jax="SVG"] > svg {
             max-width: none;
         }
-        mjx-assistive-mml {
-            position: absolute !important;
-            top: 0;
-            left: 0;
-            clip: rect(1px, 1px, 1px, 1px);
-            padding: 1px 0 0 0 !important;
-            border: 0 !important;
-            height: 1px !important;
-            width: 1px !important;
-            overflow: hidden !important;
-            display: block !important;
-            user-select: none;
-            pointer-events: none;
-        }
         .fallback {
             margin: 0;
             white-space: pre-wrap;
@@ -393,92 +417,53 @@ private enum LaTeXFormulaHTML {
             color: \(textColor);
         }
         </style>
-        <script>
-        window.MathJax = {
-            startup: { typeset: false },
-            options: {
-                enableMenu: false,
-                enableAssistiveMml: false,
-                renderActions: { addMenu: [] }
-            },
-            tex: {
-                processEscapes: true,
-                processEnvironments: true,
-                tags: "ams"
-            },
-            svg: {
-                fontCache: "none"
-            }
-        };
-        </script>
-        <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg-full.js"></script>
+        <script src="\(LaTeXWebViewSupport.scriptURLString)"></script>
         </head>
         <body>
         <div id="formula"><pre class="fallback">\(escapedFormula)</pre></div>
         <script>
         const encodedFormula = "\(encodedFormula)";
         const displayMode = \(displayLiteral);
-        var didRender = false;
-        let renderPoll = window.setInterval(renderFormulaIfReady, 40);
+        \(sharedScript(targetSelector: "#formula"))
+        renderFormulaElement(document.getElementById("formula"), encodedFormula, displayMode);
+        window.setTimeout(reportHeight, 120);
+        </script>
+        </body>
+        </html>
+        """
+    }
 
+    static func sharedScript(targetSelector: String) -> String {
+        """
         function decodeFormula(value) {
-            const bytes = Uint8Array.from(atob(value), character => character.charCodeAt(0));
+            const binary = atob(value);
+            const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
             return new TextDecoder("utf-8").decode(bytes);
         }
 
         function reportHeight() {
             requestAnimationFrame(() => {
-                const formula = document.getElementById("formula");
-                const math = formula ? formula.querySelector("mjx-container") : null;
-                const target = math || formula || document.body;
+                const target = document.querySelector("\(targetSelector)") || document.body;
                 const rect = target.getBoundingClientRect();
-                const style = formula ? window.getComputedStyle(formula) : null;
-                const padding = math && style
-                    ? parseFloat(style.paddingTop || "0") + parseFloat(style.paddingBottom || "0")
-                    : 0;
-                const height = Math.ceil(Math.max(
-                    24,
-                    rect.height + padding
-                ));
+                const height = Math.ceil(Math.max(24, rect.height));
                 window.webkit.messageHandlers.\(LaTeXWebViewSupport.messageName).postMessage({ height });
             });
         }
 
-        function showFallback() {
-            window.clearInterval(renderPoll);
-            didRender = true;
-            reportHeight();
-        }
-
-        function renderFormulaIfReady() {
-            if (didRender) { return; }
-            if (!window.MathJax || !MathJax.tex2svgPromise) {
+        function renderFormulaElement(target, encoded, display) {
+            if (!target || !window.AIClientMathJax || !AIClientMathJax.renderToSVG) {
+                reportHeight();
                 return;
             }
-            window.clearInterval(renderPoll);
-
-            const source = decodeFormula(encodedFormula);
-            MathJax.tex2svgPromise(source, { display: displayMode }).then(node => {
-                const target = document.getElementById("formula");
-                target.innerHTML = "";
-                target.appendChild(node);
-                didRender = true;
-                reportHeight();
-            }).catch(() => {
-                showFallback();
-            });
+            try {
+                const source = decodeFormula(encoded);
+                const response = JSON.parse(AIClientMathJax.renderToSVG(source, display));
+                if (response.ok && response.svg) {
+                    target.innerHTML = response.svg;
+                }
+            } catch (_) {}
+            reportHeight();
         }
-
-        reportHeight();
-        if (window.MathJax && MathJax.startup && MathJax.startup.promise) {
-            MathJax.startup.promise.then(renderFormulaIfReady).catch(showFallback);
-        } else {
-            window.addEventListener("load", renderFormulaIfReady);
-        }
-        window.setTimeout(showFallback, 8000);
-        </script>
-        </body>
-        </html>
         """
     }
 }
@@ -545,19 +530,11 @@ private enum LaTeXInlineTextHTML {
         mjx-container[jax="SVG"] > svg {
             max-width: none;
         }
-        mjx-assistive-mml {
-            position: absolute !important;
-            top: 0;
-            left: 0;
-            clip: rect(1px, 1px, 1px, 1px);
-            padding: 1px 0 0 0 !important;
-            border: 0 !important;
-            height: 1px !important;
-            width: 1px !important;
-            overflow: hidden !important;
-            display: block !important;
-            user-select: none;
-            pointer-events: none;
+        .math-block {
+            display: block;
+            margin: 0.35em 0;
+            overflow-x: auto;
+            overflow-y: hidden;
         }
         code {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -566,71 +543,16 @@ private enum LaTeXInlineTextHTML {
             padding: 0 0.22em;
         }
         </style>
-        <script>
-        window.MathJax = {
-            startup: { typeset: false },
-            options: {
-                enableMenu: false,
-                enableAssistiveMml: false,
-                renderActions: { addMenu: [] }
-            },
-            tex: {
-                inlineMath: [["\\\\(", "\\\\)"], ["$", "$"]],
-                displayMath: [["\\\\[", "\\\\]"], ["$$", "$$"]],
-                processEscapes: true,
-                processEnvironments: true,
-                tags: "ams"
-            },
-            svg: {
-                fontCache: "none"
-            }
-        };
-        </script>
-        <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg-full.js"></script>
+        <script src="\(LaTeXWebViewSupport.scriptURLString)"></script>
         </head>
         <body>
         <div id="content">\(content)</div>
         <script>
-        const content = document.getElementById("content");
-        var didRender = false;
-        let renderPoll = window.setInterval(renderTextIfReady, 40);
-
-        function reportHeight() {
-            requestAnimationFrame(() => {
-                const rect = content.getBoundingClientRect();
-                const height = Math.ceil(Math.max(24, rect.height));
-                window.webkit.messageHandlers.\(LaTeXWebViewSupport.messageName).postMessage({ height });
-            });
-        }
-
-        function finishWithoutMathJax() {
-            window.clearInterval(renderPoll);
-            didRender = true;
-            reportHeight();
-        }
-
-        function renderTextIfReady() {
-            if (didRender) { return; }
-            if (!window.MathJax || !MathJax.typesetPromise) {
-                return;
-            }
-            window.clearInterval(renderPoll);
-
-            MathJax.typesetPromise([content]).then(() => {
-                didRender = true;
-                reportHeight();
-            }).catch(() => {
-                finishWithoutMathJax();
-            });
-        }
-
-        reportHeight();
-        if (window.MathJax && MathJax.startup && MathJax.startup.promise) {
-            MathJax.startup.promise.then(renderTextIfReady).catch(finishWithoutMathJax);
-        } else {
-            window.addEventListener("load", renderTextIfReady);
-        }
-        window.setTimeout(finishWithoutMathJax, 8000);
+        \(LaTeXFormulaHTML.sharedScript(targetSelector: "#content"))
+        document.querySelectorAll("[data-formula]").forEach(element => {
+            renderFormulaElement(element, element.dataset.formula, element.dataset.display === "true");
+        });
+        window.setTimeout(reportHeight, 120);
         </script>
         </body>
         </html>
@@ -638,26 +560,407 @@ private enum LaTeXInlineTextHTML {
     }
 
     private static func inlineHTML(from text: String) -> String {
-        var html = text.htmlEscaped
-        html = replace(pattern: #"(?<!\\)\*\*(.+?)(?<!\\)\*\*"#, in: html, template: "<strong>$1</strong>")
-        html = replace(pattern: #"(?<!\\)__(.+?)(?<!\\)__"#, in: html, template: "<strong>$1</strong>")
-        html = replace(pattern: #"(?<!\\)`([^`\n]+)(?<!\\)`"#, in: html, template: "<code>$1</code>")
-        html = html.replacingOccurrences(of: "\n", with: "<br>")
+        var html = ""
+        var state = InlineHTMLState()
+
+        for segment in ChatLaTeXSegmentParser.splitInlineMath(text) {
+            switch segment {
+            case let .text(value):
+                html += markdownHTML(from: value, state: &state)
+            case let .math(formula, displayMode):
+                html += mathHTML(formula: formula, displayMode: displayMode)
+            }
+        }
+
+        if state.isCode {
+            html += "</code>"
+        }
+        if state.isBold {
+            html += "</strong>"
+        }
         return html
     }
 
-    private static func replace(pattern: String, in text: String, template: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
-            return text
+    private struct InlineHTMLState {
+        var isBold = false
+        var isCode = false
+    }
+
+    private static func mathHTML(formula: String, displayMode: Bool) -> String {
+        let tag = displayMode ? "div" : "span"
+        let className = displayMode ? "math-block" : "math-inline"
+        let encoded = Data(formula.utf8).base64EncodedString()
+        return "<\(tag) class=\"\(className)\" data-display=\"\(displayMode ? "true" : "false")\" data-formula=\"\(encoded)\">\(formula.htmlEscaped)</\(tag)>"
+    }
+
+    private static func markdownHTML(from text: String, state: inout InlineHTMLState) -> String {
+        var html = ""
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            if !state.isCode && !isEscaped(index, in: text) {
+                if text[index...].hasPrefix("**") {
+                    html += toggleBold(state: &state)
+                    index = text.index(index, offsetBy: 2)
+                    continue
+                }
+                if text[index...].hasPrefix("__") {
+                    html += toggleBold(state: &state)
+                    index = text.index(index, offsetBy: 2)
+                    continue
+                }
+            }
+
+            if text[index] == "`", !isEscaped(index, in: text) {
+                html += state.isCode ? "</code>" : "<code>"
+                state.isCode.toggle()
+                index = text.index(after: index)
+                continue
+            }
+
+            if text[index] == "\n" {
+                html += "<br>"
+            } else {
+                html += String(text[index]).htmlEscaped
+            }
+            index = text.index(after: index)
         }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.stringByReplacingMatches(in: text, range: range, withTemplate: template)
+
+        return html
+    }
+
+    private static func toggleBold(state: inout InlineHTMLState) -> String {
+        let tag = state.isBold ? "</strong>" : "<strong>"
+        state.isBold.toggle()
+        return tag
+    }
+
+    private static func isEscaped(_ index: String.Index, in text: String) -> Bool {
+        var cursor = index
+        var backslashCount = 0
+
+        while cursor > text.startIndex {
+            cursor = text.index(before: cursor)
+            guard text[cursor] == "\\" else {
+                break
+            }
+            backslashCount += 1
+        }
+
+        return backslashCount % 2 == 1
     }
 }
 
-private enum LaTeXWebViewSupport {
-    static let messageName = "latexRender"
-    static let baseURL = URL(string: "https://cdn.jsdelivr.net/")!
+nonisolated enum LaTeXInlineAttributedRenderer {
+    static func attributedString(
+        from text: String,
+        font: UIFont,
+        textColor: UIColor,
+        textAlignment: NSTextAlignment,
+        renderStyle: MarkdownRenderStyle
+    ) async -> NSAttributedString {
+        guard ChatLaTeXSegmentParser.containsInlineMath(in: text) else {
+            return MarkdownInlineFormatter.attributedString(
+                from: text,
+                font: font,
+                textColor: textColor,
+                textAlignment: textAlignment
+            )
+        }
+
+        let result = NSMutableAttributedString()
+        for segment in ChatLaTeXSegmentParser.splitInlineMath(text) {
+            switch segment {
+            case let .text(value):
+                result.append(MarkdownInlineFormatter.attributedString(
+                    from: value,
+                    font: font,
+                    textColor: textColor,
+                    textAlignment: textAlignment
+                ))
+            case let .math(formula, displayMode):
+                let formulaStyle = MarkdownRenderStyle(
+                    textColor: textColor,
+                    baseFont: font,
+                    textAlignment: textAlignment,
+                    userInterfaceStyle: renderStyle.userInterfaceStyle,
+                    displayScale: renderStyle.displayScale
+                )
+                let prepared = await LaTeXSVGRenderer.shared.render(
+                    formula: formula,
+                    displayMode: displayMode,
+                    style: formulaStyle
+                )
+                result.append(attachmentString(for: prepared, font: font, textColor: textColor))
+            }
+        }
+
+        result.addAttributes(
+            baseAttributes(font: font, textColor: textColor, textAlignment: textAlignment),
+            range: NSRange(location: 0, length: result.length)
+        )
+        return result
+    }
+
+    private static func attachmentString(
+        for formula: PreparedLaTeXFormula,
+        font: UIFont,
+        textColor: UIColor
+    ) -> NSAttributedString {
+        guard let image = formula.image, formula.hasImage else {
+            return NSAttributedString(
+                string: formula.fallbackText,
+                attributes: [
+                    .font: UIFont.monospacedSystemFont(ofSize: font.pointSize * 0.92, weight: .regular),
+                    .foregroundColor: textColor
+                ]
+            )
+        }
+
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        let baselineOffset = (font.capHeight - formula.imageSize.height) / 2
+        attachment.bounds = CGRect(
+            x: 0,
+            y: baselineOffset,
+            width: formula.imageSize.width,
+            height: formula.imageSize.height
+        )
+        return NSAttributedString(attachment: attachment)
+    }
+
+    private static func baseAttributes(
+        font: UIFont,
+        textColor: UIColor,
+        textAlignment: NSTextAlignment
+    ) -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = textAlignment
+        paragraph.lineSpacing = 3
+        return [.font: font, .foregroundColor: textColor, .paragraphStyle: paragraph]
+    }
+}
+
+actor LaTeXSVGRenderer {
+    static let shared = LaTeXSVGRenderer()
+    private static let imageRenderingEnabled = false
+
+    private var context: JSContext?
+    private var rendererFunction: JSValue?
+    private var loadFailure: String?
+
+    func render(
+        formula: String,
+        displayMode: Bool,
+        style: MarkdownRenderStyle
+    ) async -> PreparedLaTeXFormula {
+        let trimmedFormula = formula.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedFormula.isEmpty else {
+            return Self.fallback(formula: formula, displayMode: displayMode, error: "Empty formula")
+        }
+
+        guard Self.imageRenderingEnabled else {
+            return Self.fallback(
+                formula: trimmedFormula,
+                displayMode: displayMode,
+                error: "Formula image rendering disabled"
+            )
+        }
+
+        guard let rendererFunction = loadRendererFunction() else {
+            return Self.fallback(
+                formula: trimmedFormula,
+                displayMode: displayMode,
+                error: loadFailure ?? "MathJax renderer unavailable"
+            )
+        }
+
+        guard let rawResult = rendererFunction.call(withArguments: [trimmedFormula, displayMode])?.toString(),
+              let response = Self.decodeResponse(rawResult),
+              response.ok,
+              let rawSVG = response.svg else {
+            let error = context?.exception?.toString() ?? "MathJax conversion failed"
+            return Self.fallback(formula: trimmedFormula, displayMode: displayMode, error: error)
+        }
+
+        guard let renderedImage = Self.renderedImage(
+            from: rawSVG,
+            textColor: style.resolvedTextColor,
+            fontSize: style.baseFont.pointSize,
+            displayScale: style.displayScale
+        ) else {
+            return Self.fallback(formula: trimmedFormula, displayMode: displayMode, error: "SVG image decoding failed")
+        }
+
+        return PreparedLaTeXFormula(
+            formula: trimmedFormula,
+            displayMode: displayMode,
+            image: renderedImage.image,
+            imageSize: renderedImage.size,
+            fallbackText: Self.fallbackText(formula: trimmedFormula, displayMode: displayMode),
+            errorMessage: nil
+        )
+    }
+
+    private func loadRendererFunction() -> JSValue? {
+        if let rendererFunction { return rendererFunction }
+        if loadFailure != nil { return nil }
+
+        guard let scriptURL = Bundle.main.url(forResource: "mathjax-headless-svg", withExtension: "js") else {
+            loadFailure = "mathjax-headless-svg.js missing from bundle"
+            return nil
+        }
+
+        do {
+            let script = try String(contentsOf: scriptURL, encoding: .utf8)
+            let nextContext = JSContext()
+            nextContext?.evaluateScript(script)
+            if let exception = nextContext?.exception?.toString() {
+                loadFailure = exception
+                return nil
+            }
+            guard let renderer = nextContext?
+                .objectForKeyedSubscript("AIClientMathJax")?
+                .objectForKeyedSubscript("renderToSVG"),
+                  !renderer.isUndefined else {
+                loadFailure = "AIClientMathJax.renderToSVG missing"
+                return nil
+            }
+            context = nextContext
+            rendererFunction = renderer
+            return renderer
+        } catch {
+            loadFailure = error.localizedDescription
+            return nil
+        }
+    }
+
+    private static func decodeResponse(_ rawResult: String) -> MathJaxRenderResponse? {
+        guard let data = rawResult.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(MathJaxRenderResponse.self, from: data)
+    }
+
+    private static func renderedImage(
+        from rawSVG: String,
+        textColor: UIColor,
+        fontSize: CGFloat,
+        displayScale: CGFloat
+    ) -> (image: UIImage, size: CGSize)? {
+        guard var svg = extractSVG(from: rawSVG) else { return nil }
+        let size = size(from: svg, fontSize: fontSize)
+        guard size.width > 0, size.height > 0 else { return nil }
+
+        svg = svg.replacingOccurrences(of: "currentColor", with: textColor.cssHex)
+        svg = replaceAttribute("width", with: Self.svgNumber(size.width), in: svg)
+        svg = replaceAttribute("height", with: Self.svgNumber(size.height), in: svg)
+
+        guard let data = svg.data(using: .utf8),
+              let sourceImage = UIImage(data: data, scale: max(displayScale, 1)) else {
+            return nil
+        }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = max(displayScale, 1)
+        format.opaque = false
+
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            sourceImage.draw(in: CGRect(origin: .zero, size: size))
+        }
+        return (image, size)
+    }
+
+    private static func extractSVG(from rawSVG: String) -> String? {
+        guard let start = rawSVG.range(of: "<svg"),
+              let end = rawSVG.range(of: "</svg>", options: .backwards) else {
+            return nil
+        }
+        return String(rawSVG[start.lowerBound..<end.upperBound])
+    }
+
+    private static func size(from svg: String, fontSize: CGFloat) -> CGSize {
+        let width = length(attribute: "width", in: svg, fontSize: fontSize)
+        let height = length(attribute: "height", in: svg, fontSize: fontSize)
+        if width > 0, height > 0 {
+            return CGSize(width: ceil(width), height: ceil(height))
+        }
+
+        guard let viewBox = attribute("viewBox", in: svg) else { return .zero }
+        let values = viewBox
+            .split(whereSeparator: { $0 == " " || $0 == "," })
+            .compactMap { Double($0) }
+        guard values.count == 4, values[2] > 0, values[3] > 0 else { return .zero }
+        return CGSize(
+            width: ceil(CGFloat(values[2]) * fontSize / 1_000),
+            height: ceil(CGFloat(values[3]) * fontSize / 1_000)
+        )
+    }
+
+    private static func length(attribute name: String, in svg: String, fontSize: CGFloat) -> CGFloat {
+        guard let value = attribute(name, in: svg) else { return 0 }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let number = CGFloat(Double(trimmed.prefix { $0.isNumber || $0 == "." || $0 == "-" }) ?? 0)
+        if trimmed.hasSuffix("ex") {
+            return number * fontSize * 0.431
+        }
+        if trimmed.hasSuffix("em") {
+            return number * fontSize
+        }
+        return number
+    }
+
+    private static func attribute(_ name: String, in svg: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"\#(name)="([^"]+)""#) else { return nil }
+        let range = NSRange(svg.startIndex..<svg.endIndex, in: svg)
+        guard let match = regex.firstMatch(in: svg, range: range),
+              let valueRange = Range(match.range(at: 1), in: svg) else {
+            return nil
+        }
+        return String(svg[valueRange])
+    }
+
+    private static func replaceAttribute(_ name: String, with value: String, in svg: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"\#(name)="[^"]+""#) else { return svg }
+        let range = NSRange(svg.startIndex..<svg.endIndex, in: svg)
+        return regex.stringByReplacingMatches(
+            in: svg,
+            range: range,
+            withTemplate: "\(name)=\"\(value)\""
+        )
+    }
+
+    private static func fallback(
+        formula: String,
+        displayMode: Bool,
+        error: String
+    ) -> PreparedLaTeXFormula {
+        PreparedLaTeXFormula(
+            formula: formula,
+            displayMode: displayMode,
+            image: nil,
+            imageSize: .zero,
+            fallbackText: fallbackText(formula: formula, displayMode: displayMode),
+            errorMessage: error
+        )
+    }
+
+    private static func fallbackText(formula: String, displayMode: Bool) -> String {
+        displayMode ? "\\[\(formula)\\]" : "\\(\(formula)\\)"
+    }
+
+    private static func svgNumber(_ value: CGFloat) -> String {
+        String(format: "%.3f", value)
+    }
+}
+
+private nonisolated struct MathJaxRenderResponse: Decodable {
+    let ok: Bool
+    let svg: String?
+    let error: String?
+}
+
+private nonisolated extension ColorScheme {
+    var userInterfaceStyle: UIUserInterfaceStyle {
+        self == .dark ? .dark : .light
+    }
 }
 
 private extension NSTextAlignment {
@@ -675,14 +978,15 @@ private extension NSTextAlignment {
     }
 }
 
-private extension UIColor {
+private nonisolated extension UIColor {
     var cssHex: String {
+        let color = resolvedColor(with: UITraitCollection.current)
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
 
-        guard getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+        guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
             return "#1C1C1E"
         }
 

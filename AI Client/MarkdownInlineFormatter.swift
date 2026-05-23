@@ -1,6 +1,6 @@
 import UIKit
 
-enum MarkdownInlineFormatter {
+nonisolated enum MarkdownInlineFormatter {
     static func attributedString(
         from markdown: String,
         font: UIFont,
@@ -145,7 +145,7 @@ enum MarkdownInlineFormatter {
     }
 }
 
-private extension Array where Element == String? {
+private nonisolated extension Array where Element == String? {
     func value(at index: Int) -> String {
         guard indices.contains(index), let value = self[index] else { return "" }
         return value

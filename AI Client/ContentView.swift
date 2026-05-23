@@ -7,6 +7,11 @@ import UniformTypeIdentifiers
 private enum ChatScrollMetrics {
     static let coordinateSpaceName = "ChatScrollCoordinateSpace"
     static let bottomThreshold: CGFloat = 32
+
+    static func roundedDistance(_ distance: CGFloat) -> CGFloat {
+        let scale = max(UIScreen.main.scale, 1)
+        return (max(distance, 0) * scale).rounded() / scale
+    }
 }
 
 private struct ChatScrollBottomDistancePreferenceKey: PreferenceKey {
@@ -14,6 +19,27 @@ private struct ChatScrollBottomDistancePreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func observeChatScrollBottomDistance(_ action: @escaping (CGFloat) -> Void) -> some View {
+        if #available(iOS 18.0, *) {
+            onScrollGeometryChange(
+                for: CGFloat.self,
+                of: { geometry in
+                    ChatScrollMetrics.roundedDistance(geometry.contentSize.height - geometry.visibleRect.maxY)
+                },
+                action: { _, distanceFromBottom in
+                    action(distanceFromBottom)
+                }
+            )
+        } else {
+            onPreferenceChange(ChatScrollBottomDistancePreferenceKey.self) { distanceFromBottom in
+                action(distanceFromBottom)
+            }
+        }
     }
 }
 
@@ -208,6 +234,7 @@ private final class StreamingTokenBuffer {
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var configurations = AIConfigurationStore.loadConfigurations()
     @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
     @State private var inputText = ""
@@ -412,6 +439,12 @@ struct ContentView: View {
         .onChange(of: selectedPhotoItems) { _, newItems in
             loadSelectedImages(from: newItems)
         }
+        .onChange(of: dynamicTypeSize) { _, _ in
+            resetMarkdownCache(for: messages)
+        }
+        .onChange(of: colorScheme) { _, _ in
+            resetMarkdownCache(for: messages)
+        }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .inactive || newPhase == .background else { return }
             persistApplicationStateForLifecycle()
@@ -458,20 +491,26 @@ struct ContentView: View {
                                     .id(message.id)
                             }
 
-                            Color.clear
-                                .frame(height: 1)
-                                .id("bottomAnchor")
-                                .background(
-                                    GeometryReader { bottomGeometry in
-                                        Color.clear.preference(
-                                            key: ChatScrollBottomDistancePreferenceKey.self,
-                                            value: chatScrollBottomDistance(
-                                                bottomGeometry: bottomGeometry,
-                                                viewportHeight: scrollGeometry.size.height
+                            if #available(iOS 18.0, *) {
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id("bottomAnchor")
+                            } else {
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id("bottomAnchor")
+                                    .background(
+                                        GeometryReader { bottomGeometry in
+                                            Color.clear.preference(
+                                                key: ChatScrollBottomDistancePreferenceKey.self,
+                                                value: chatScrollBottomDistance(
+                                                    bottomGeometry: bottomGeometry,
+                                                    viewportHeight: scrollGeometry.size.height
+                                                )
                                             )
-                                        )
-                                    }
-                                )
+                                        }
+                                    )
+                            }
                         }
                         .padding()
                         .frame(
@@ -510,7 +549,7 @@ struct ContentView: View {
                     .onChange(of: messages.count) { _, _ in
                         chatScrollController.requestImmediateAutoScroll(animated: true)
                     }
-                    .onPreferenceChange(ChatScrollBottomDistancePreferenceKey.self) { distanceFromBottom in
+                    .observeChatScrollBottomDistance { distanceFromBottom in
                         chatScrollController.scheduleBottomDistanceUpdate(distanceFromBottom)
                     }
                     .onAppear {
@@ -1393,13 +1432,20 @@ struct ContentView: View {
     }
 
     private func prepareMarkdownCache(for messageID: UUID, content: String) {
-        let signature = MarkdownRenderCacheEntry.signature(for: content)
+        let style = MarkdownRenderStyle(
+            textColor: .label,
+            baseFont: .preferredFont(forTextStyle: .body),
+            textAlignment: .left,
+            userInterfaceStyle: colorScheme == .dark ? .dark : .light,
+            displayScale: UIScreen.main.scale
+        )
+        let signature = MarkdownRenderCacheEntry.signature(for: content, style: style)
         guard markdownRenderCache[messageID]?.signature != signature else { return }
 
         markdownRenderTasks[messageID]?.cancel()
         markdownRenderTasks[messageID] = Task { @MainActor in
             let entry = await Task.detached(priority: .utility) {
-                MarkdownRenderCacheEntry(content: content)
+                await MarkdownRenderCacheEntry.make(content: content, style: style)
             }.value
 
             guard !Task.isCancelled else { return }
@@ -1610,7 +1656,7 @@ struct ContentView: View {
 
     private func chatScrollBottomDistance(bottomGeometry: GeometryProxy, viewportHeight: CGFloat) -> CGFloat {
         let bottomY = bottomGeometry.frame(in: .named(ChatScrollMetrics.coordinateSpaceName)).maxY
-        return max(0, bottomY - viewportHeight)
+        return ChatScrollMetrics.roundedDistance(bottomY - viewportHeight)
     }
 
     func forceScrollToBottom(proxy: ScrollViewProxy, animated: Bool = true) {
@@ -2510,19 +2556,67 @@ struct PlainAssistantText: View {
     }
 }
 
+nonisolated struct PreparedChatMarkdownSegment: Identifiable, @unchecked Sendable {
+    let id: Int
+    let kind: Kind
+
+    enum Kind {
+        case text([PreparedMarkdownBlock])
+        case code(language: String?, code: String)
+        case math(PreparedLaTeXFormula)
+    }
+}
+
 nonisolated struct MarkdownRenderCacheEntry: @unchecked Sendable {
     let signature: String
     let renderedMarkdown: String
-    let segments: [ChatMarkdownBlockSegment]
+    let segments: [PreparedChatMarkdownSegment]
 
-    nonisolated init(content: String) {
-        signature = Self.signature(for: content)
-        renderedMarkdown = ChatMarkdownPreprocessor.preprocess(content)
-        segments = ChatMarkdownBlockSegment.split(renderedMarkdown)
+    private nonisolated init(
+        signature: String,
+        renderedMarkdown: String,
+        segments: [PreparedChatMarkdownSegment]
+    ) {
+        self.signature = signature
+        self.renderedMarkdown = renderedMarkdown
+        self.segments = segments
     }
 
-    nonisolated static func signature(for content: String) -> String {
-        "\(content.count):\(content.hashValue)"
+    nonisolated static func make(content: String, style: MarkdownRenderStyle) async -> MarkdownRenderCacheEntry {
+        let signature = Self.signature(for: content, style: style)
+        let renderedMarkdown = ChatMarkdownPreprocessor.preprocess(content)
+        var preparedSegments: [PreparedChatMarkdownSegment] = []
+
+        for segment in ChatMarkdownBlockSegment.split(renderedMarkdown) {
+            switch segment.kind {
+            case let .text(text):
+                let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let blocks = trimmedText.isEmpty ? [] : await PreparedMarkdownBlockRenderer.renderBlocks(
+                    markdown: trimmedText,
+                    style: style
+                )
+                preparedSegments.append(PreparedChatMarkdownSegment(id: segment.id, kind: .text(blocks)))
+            case let .code(language, code):
+                preparedSegments.append(PreparedChatMarkdownSegment(id: segment.id, kind: .code(language: language, code: code)))
+            case let .math(formula, displayMode):
+                let preparedFormula = await LaTeXSVGRenderer.shared.render(
+                    formula: formula,
+                    displayMode: displayMode,
+                    style: style
+                )
+                preparedSegments.append(PreparedChatMarkdownSegment(id: segment.id, kind: .math(preparedFormula)))
+            }
+        }
+
+        return MarkdownRenderCacheEntry(
+            signature: signature,
+            renderedMarkdown: renderedMarkdown,
+            segments: preparedSegments
+        )
+    }
+
+    nonisolated static func signature(for content: String, style: MarkdownRenderStyle) -> String {
+        "\(style.signature):\(content.count):\(content.hashValue)"
     }
 }
 
@@ -2533,20 +2627,14 @@ struct AssistantMarkdownText: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(renderCache.segments) { segment in
                 switch segment.kind {
-                case let .text(text):
-                    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        SelectableMarkdownTextView(
-                            markdown: text.trimmingCharacters(in: .whitespacesAndNewlines),
-                            textColor: .label,
-                            baseFont: .preferredFont(forTextStyle: .body),
-                            textAlignment: .left
-                        )
+                case let .text(blocks):
+                    if !blocks.isEmpty {
+                        SelectableMarkdownTextView(blocks: blocks)
                     }
                 case let .code(language, code):
                     ChatCodeBlock(content: code, language: language)
-                case let .math(formula, displayMode):
-                    LaTeXFormulaView(formula: formula, displayMode: displayMode)
-                        .equatable()
+                case let .math(formula):
+                    PreparedLaTeXFormulaView(formula: formula)
                 }
             }
         }

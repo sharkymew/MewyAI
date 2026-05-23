@@ -73,6 +73,58 @@ nonisolated enum ChatLaTeXSegmentParser {
         return false
     }
 
+    static func splitInlineMath(_ text: String) -> [ChatLaTeXSegment] {
+        guard mayContainMath(in: text) else { return [.text(text)] }
+
+        var segments: [ChatLaTeXSegment] = []
+        var index = text.startIndex
+        var textStart = text.startIndex
+
+        func appendText(upTo end: String.Index) {
+            guard textStart < end else { return }
+            segments.append(.text(String(text[textStart..<end])))
+        }
+
+        func appendMath(from start: String.Index, to end: String.Index, formula: String, displayMode: Bool) {
+            appendText(upTo: start)
+            segments.append(.math(formula: formula, displayMode: displayMode))
+            textStart = end
+            index = end
+        }
+
+        while index < text.endIndex {
+            if let codeEnd = inlineCodeEnd(in: text, from: index) {
+                index = codeEnd
+                continue
+            }
+
+            if let match = displayMathMatch(in: text, at: index) {
+                appendMath(
+                    from: index,
+                    to: match.endIndex,
+                    formula: match.formula,
+                    displayMode: true
+                )
+                continue
+            }
+
+            if let match = inlineMathMatch(in: text, at: index) {
+                appendMath(
+                    from: index,
+                    to: match.endIndex,
+                    formula: match.formula,
+                    displayMode: false
+                )
+                continue
+            }
+
+            index = text.index(after: index)
+        }
+
+        appendText(upTo: text.endIndex)
+        return mergedTextSegments(segments)
+    }
+
     private static func mayContainMath(in text: String) -> Bool {
         text.contains("$")
             || text.contains(#"\("#)

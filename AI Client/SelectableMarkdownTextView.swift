@@ -1,14 +1,365 @@
 import SwiftUI
 import UIKit
 
-struct SelectableMarkdownTextView: View {
-    let markdown: String
-    var textColor: UIColor = .label
-    var baseFont: UIFont = .preferredFont(forTextStyle: .body)
-    var textAlignment: NSTextAlignment = .left
+nonisolated struct MarkdownRenderStyle: @unchecked Sendable {
+    let textColor: UIColor
+    let baseFont: UIFont
+    let textAlignment: NSTextAlignment
+    let userInterfaceStyle: UIUserInterfaceStyle
+    let displayScale: CGFloat
+    let signature: String
 
-    private var blocks: [MarkdownBlock] {
-        MarkdownBlockParser.parse(markdown)
+    init(
+        textColor: UIColor,
+        baseFont: UIFont,
+        textAlignment: NSTextAlignment,
+        userInterfaceStyle: UIUserInterfaceStyle = .light,
+        displayScale: CGFloat = 1
+    ) {
+        self.textColor = textColor
+        self.baseFont = baseFont
+        self.textAlignment = textAlignment
+        self.userInterfaceStyle = userInterfaceStyle
+        self.displayScale = displayScale
+        signature = [
+            baseFont.fontName,
+            "\(Int(baseFont.pointSize * 10))",
+            "\(textAlignment.rawValue)",
+            "\(userInterfaceStyle.rawValue)",
+            "\(Int(displayScale * 100))",
+            Self.colorSignature(for: textColor, userInterfaceStyle: userInterfaceStyle)
+        ].joined(separator: ":")
+    }
+
+    var resolvedTextColor: UIColor {
+        textColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: userInterfaceStyle))
+    }
+
+    private static func colorSignature(
+        for color: UIColor,
+        userInterfaceStyle: UIUserInterfaceStyle
+    ) -> String {
+        let resolvedColor = color.resolvedColor(with: UITraitCollection(userInterfaceStyle: userInterfaceStyle))
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+
+        guard resolvedColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return "\(type(of: color))"
+        }
+
+        return [
+            Int(red * 255),
+            Int(green * 255),
+            Int(blue * 255),
+            Int(alpha * 255)
+        ].map(String.init).joined(separator: ",")
+    }
+}
+
+nonisolated struct PreparedMarkdownBlock: Identifiable, @unchecked Sendable {
+    let id: Int
+    let kind: Kind
+
+    enum Kind {
+        case text(PreparedMarkdownLine)
+        case quote(PreparedMarkdownQuote)
+        case table(PreparedMarkdownTable)
+        case divider
+    }
+}
+
+nonisolated struct PreparedMarkdownLine: @unchecked Sendable {
+    let text: String
+    let font: UIFont
+    let textColor: UIColor
+    let textAlignment: NSTextAlignment
+    let attributedText: NSAttributedString
+}
+
+nonisolated struct PreparedMarkdownQuote: @unchecked Sendable {
+    let lines: [PreparedMarkdownQuoteLine]
+}
+
+nonisolated struct PreparedMarkdownQuoteLine: Identifiable, @unchecked Sendable {
+    let id: Int
+    let depth: Int
+    let line: PreparedMarkdownLine
+}
+
+nonisolated struct PreparedMarkdownTable: @unchecked Sendable {
+    let header: PreparedMarkdownTableRow
+    let rows: [PreparedMarkdownTableRow]
+    let columnWidths: [CGFloat]
+    let horizontalPadding: CGFloat
+    let verticalPadding: CGFloat
+
+    var columnCount: Int {
+        columnWidths.count
+    }
+
+    func columnWidth(at index: Int) -> CGFloat {
+        columnWidths.value(at: index)
+    }
+}
+
+nonisolated struct PreparedMarkdownTableRow: Identifiable, @unchecked Sendable {
+    let id: Int
+    let cells: [PreparedMarkdownTableCell]
+    let height: CGFloat
+}
+
+nonisolated struct PreparedMarkdownTableCell: Identifiable, @unchecked Sendable {
+    let id: Int
+    let attributedText: NSAttributedString
+    let isHeader: Bool
+}
+
+enum PreparedMarkdownBlockRenderer {
+    nonisolated static func renderBlocks(
+        markdown: String,
+        style: MarkdownRenderStyle
+    ) async -> [PreparedMarkdownBlock] {
+        var preparedBlocks: [PreparedMarkdownBlock] = []
+        for block in MarkdownBlockParser.parse(markdown) {
+            switch block.kind {
+            case let .text(text, textStyle):
+                preparedBlocks.append(PreparedMarkdownBlock(
+                    id: block.id,
+                    kind: .text(await renderLine(text: text, textStyle: textStyle, renderStyle: style))
+                ))
+            case let .quote(text):
+                preparedBlocks.append(PreparedMarkdownBlock(
+                    id: block.id,
+                    kind: .quote(await renderQuote(text, renderStyle: style))
+                ))
+            case let .table(table):
+                preparedBlocks.append(PreparedMarkdownBlock(
+                    id: block.id,
+                    kind: .table(await renderTable(table, renderStyle: style))
+                ))
+            case .divider:
+                preparedBlocks.append(PreparedMarkdownBlock(id: block.id, kind: .divider))
+            }
+        }
+        return preparedBlocks
+    }
+
+    private nonisolated static func renderLine(
+        text: String,
+        textStyle: MarkdownTextStyle,
+        renderStyle: MarkdownRenderStyle
+    ) async -> PreparedMarkdownLine {
+        let font = textStyle.font(baseFont: renderStyle.baseFont)
+        let lineStyle = MarkdownRenderStyle(
+            textColor: renderStyle.textColor,
+            baseFont: font,
+            textAlignment: renderStyle.textAlignment,
+            userInterfaceStyle: renderStyle.userInterfaceStyle,
+            displayScale: renderStyle.displayScale
+        )
+        let attributedText: NSAttributedString
+        if ChatLaTeXSegmentParser.containsInlineMath(in: text) {
+            attributedText = await LaTeXInlineAttributedRenderer.attributedString(
+                from: text,
+                font: font,
+                textColor: renderStyle.textColor,
+                textAlignment: renderStyle.textAlignment,
+                renderStyle: lineStyle
+            )
+        } else {
+            attributedText = MarkdownInlineFormatter.attributedString(
+                from: text,
+                font: font,
+                textColor: renderStyle.textColor,
+                textAlignment: renderStyle.textAlignment
+            )
+        }
+
+        return PreparedMarkdownLine(
+            text: text,
+            font: font,
+            textColor: renderStyle.textColor,
+            textAlignment: renderStyle.textAlignment,
+            attributedText: attributedText
+        )
+    }
+
+    private nonisolated static func renderQuote(
+        _ text: String,
+        renderStyle: MarkdownRenderStyle
+    ) async -> PreparedMarkdownQuote {
+        let quoteStyle = MarkdownRenderStyle(
+            textColor: .secondaryLabel,
+            baseFont: renderStyle.baseFont,
+            textAlignment: renderStyle.textAlignment,
+            userInterfaceStyle: renderStyle.userInterfaceStyle,
+            displayScale: renderStyle.displayScale
+        )
+        var lines: [PreparedMarkdownQuoteLine] = []
+        for (index, rawText) in text.components(separatedBy: .newlines).enumerated() {
+            let parsedLine = quoteLine(from: rawText)
+            lines.append(PreparedMarkdownQuoteLine(
+                id: index,
+                depth: parsedLine.depth,
+                line: await renderLine(text: parsedLine.text, textStyle: .paragraph, renderStyle: quoteStyle)
+            ))
+        }
+        return PreparedMarkdownQuote(lines: lines)
+    }
+
+    private nonisolated static func quoteLine(from rawText: String) -> (depth: Int, text: String) {
+        var value = rawText.trimmingCharacters(in: .whitespaces)
+        var level = 0
+        while value.first == ">" {
+            level += 1
+            value.removeFirst()
+            value = value.trimmingCharacters(in: .whitespaces)
+        }
+        return (max(level, 1), value)
+    }
+
+    private nonisolated static func renderTable(
+        _ table: MarkdownTable,
+        renderStyle: MarkdownRenderStyle
+    ) async -> PreparedMarkdownTable {
+        let columnCount = table.columnCount
+        let headerFont = UIFont.boldSystemFont(ofSize: renderStyle.baseFont.pointSize)
+        let bodyFont = renderStyle.baseFont
+        let headerCells = await renderTableCells(
+            table.headers,
+            columnCount: columnCount,
+            font: headerFont,
+            isHeader: true,
+            renderStyle: renderStyle
+        )
+        var bodyCells: [[PreparedMarkdownTableCell]] = []
+        for row in table.rows {
+            bodyCells.append(await renderTableCells(
+                row,
+                columnCount: columnCount,
+                font: bodyFont,
+                isHeader: false,
+                renderStyle: renderStyle
+            ))
+        }
+
+        let columnWidths = (0..<columnCount).map { columnIndex in
+            let headerWidth = measuredWidth(for: headerCells[columnIndex].attributedText)
+            let rowWidth = bodyCells
+                .map { measuredWidth(for: $0[columnIndex].attributedText) }
+                .max() ?? TableMetrics.minimumColumnWidth
+            return min(
+                max(max(headerWidth, rowWidth), TableMetrics.minimumColumnWidth),
+                TableMetrics.maximumColumnWidth
+            )
+        }
+
+        let header = PreparedMarkdownTableRow(
+            id: -1,
+            cells: headerCells,
+            height: rowHeight(for: headerCells, font: headerFont, columnWidths: columnWidths)
+        )
+        let rows = bodyCells.enumerated().map { rowIndex, cells in
+            PreparedMarkdownTableRow(
+                id: rowIndex,
+                cells: cells,
+                height: rowHeight(for: cells, font: bodyFont, columnWidths: columnWidths)
+            )
+        }
+
+        return PreparedMarkdownTable(
+            header: header,
+            rows: rows,
+            columnWidths: columnWidths,
+            horizontalPadding: TableMetrics.horizontalPadding,
+            verticalPadding: TableMetrics.verticalPadding
+        )
+    }
+
+    private nonisolated static func renderTableCells(
+        _ values: [String],
+        columnCount: Int,
+        font: UIFont,
+        isHeader: Bool,
+        renderStyle: MarkdownRenderStyle
+    ) async -> [PreparedMarkdownTableCell] {
+        let cellStyle = MarkdownRenderStyle(
+            textColor: renderStyle.textColor,
+            baseFont: font,
+            textAlignment: .left,
+            userInterfaceStyle: renderStyle.userInterfaceStyle,
+            displayScale: renderStyle.displayScale
+        )
+        var cells: [PreparedMarkdownTableCell] = []
+        for columnIndex in 0..<columnCount {
+            let attributedText = await LaTeXInlineAttributedRenderer.attributedString(
+                from: values.value(at: columnIndex),
+                font: font,
+                textColor: renderStyle.textColor,
+                textAlignment: .left,
+                renderStyle: cellStyle
+            )
+            cells.append(PreparedMarkdownTableCell(
+                id: columnIndex,
+                attributedText: attributedText,
+                isHeader: isHeader
+            ))
+        }
+        return cells
+    }
+
+    private nonisolated static func measuredWidth(for attributedText: NSAttributedString) -> CGFloat {
+        let bounds = attributedText.boundingRect(
+            with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        )
+        return ceil(bounds.width)
+    }
+
+    private nonisolated static func rowHeight(
+        for cells: [PreparedMarkdownTableCell],
+        font: UIFont,
+        columnWidths: [CGFloat]
+    ) -> CGFloat {
+        let contentHeight = cells.enumerated()
+            .map { columnIndex, cell in
+                measuredHeight(
+                    for: cell.attributedText,
+                    width: columnWidths.value(at: columnIndex)
+                )
+            }
+            .max() ?? font.lineHeight
+        return ceil(max(contentHeight, font.lineHeight) + TableMetrics.verticalPadding * 2)
+    }
+
+    private nonisolated static func measuredHeight(
+        for attributedText: NSAttributedString,
+        width: CGFloat
+    ) -> CGFloat {
+        let bounds = attributedText.boundingRect(
+            with: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        )
+        return ceil(bounds.height)
+    }
+
+    private nonisolated enum TableMetrics {
+        static let minimumColumnWidth: CGFloat = 72
+        static let maximumColumnWidth: CGFloat = 320
+        static let horizontalPadding: CGFloat = 8
+        static let verticalPadding: CGFloat = 7
+    }
+}
+
+struct SelectableMarkdownTextView: View {
+    let blocks: [PreparedMarkdownBlock]
+
+    init(blocks: [PreparedMarkdownBlock]) {
+        self.blocks = blocks
     }
 
     var body: some View {
@@ -20,148 +371,83 @@ struct SelectableMarkdownTextView: View {
     }
 
     @ViewBuilder
-    private func blockView(_ block: MarkdownBlock) -> some View {
+    private func blockView(_ block: PreparedMarkdownBlock) -> some View {
         switch block.kind {
-        case let .text(text, style):
-            MarkdownSelectableLine(
-                text: text,
-                style: style,
-                textColor: textColor,
-                baseFont: baseFont,
-                textAlignment: textAlignment
-            )
+        case let .text(line):
+            MarkdownSelectableLine(line: line)
         case .divider:
             Divider()
                 .padding(.vertical, 8)
-        case let .quote(text):
-            MarkdownQuoteView(
-                text: text,
-                textColor: .secondaryLabel,
-                baseFont: baseFont,
-                textAlignment: textAlignment
-            )
+        case let .quote(quote):
+            MarkdownQuoteView(quote: quote)
         case let .table(table):
-            MarkdownTableView(table: table, textColor: textColor, baseFont: baseFont)
+            MarkdownTableView(table: table)
         }
     }
 }
 
 private struct MarkdownSelectableLine: View {
-    let text: String
-    let style: MarkdownTextStyle
-    let textColor: UIColor
-    let baseFont: UIFont
-    let textAlignment: NSTextAlignment
+    let line: PreparedMarkdownLine
 
     var body: some View {
-        let font = style.font(baseFont: baseFont)
-
-        if ChatLaTeXSegmentParser.containsInlineMath(in: text) {
+        if ChatLaTeXSegmentParser.containsInlineMath(in: line.text) {
             LaTeXInlineTextView(
-                text: text,
-                textColor: textColor,
-                font: font,
-                textAlignment: textAlignment
+                text: line.text,
+                textColor: line.textColor,
+                font: line.font,
+                textAlignment: line.textAlignment
             )
         } else {
             SelectableAttributedTextView(
-                attributedText: MarkdownInlineFormatter.attributedString(
-                    from: text,
-                    font: font,
-                    textColor: textColor,
-                    textAlignment: textAlignment
-                ),
-                textAlignment: textAlignment
+                attributedText: line.attributedText,
+                textAlignment: line.textAlignment
             )
         }
     }
 }
 
 private struct MarkdownQuoteView: View {
-    let text: String
-    let textColor: UIColor
-    let baseFont: UIFont
-    let textAlignment: NSTextAlignment
-
-    private var lines: [MarkdownQuoteLine] {
-        text.components(separatedBy: .newlines).enumerated().map { index, line in
-            MarkdownQuoteLine(id: index, rawText: line)
-        }
-    }
+    let quote: PreparedMarkdownQuote
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(lines) { line in
+            ForEach(quote.lines) { line in
                 HStack(alignment: .top, spacing: 7) {
                     ForEach(0..<line.depth, id: \.self) { _ in
                         RoundedRectangle(cornerRadius: 1)
                             .fill(Color.secondary.opacity(0.45))
                             .frame(width: 3)
                     }
-                    MarkdownSelectableLine(
-                        text: line.text,
-                        style: .paragraph,
-                        textColor: textColor,
-                        baseFont: baseFont,
-                        textAlignment: textAlignment
-                    )
+                    MarkdownSelectableLine(line: line.line)
                 }
             }
         }
     }
 }
 
-private struct MarkdownQuoteLine: Identifiable {
-    let id: Int
-    let depth: Int
-    let text: String
-
-    init(id: Int, rawText: String) {
-        self.id = id
-        var value = rawText.trimmingCharacters(in: .whitespaces)
-        var level = 0
-        while value.first == ">" {
-            level += 1
-            value.removeFirst()
-            value = value.trimmingCharacters(in: .whitespaces)
-        }
-        depth = max(level, 1)
-        text = value
-    }
-}
-
 private struct MarkdownTableView: View {
-    let table: MarkdownTable
-    let textColor: UIColor
-    let baseFont: UIFont
-
-    private let minimumColumnWidth: CGFloat = 72
-    private let maximumColumnWidth: CGFloat = 320
-    private let horizontalPadding: CGFloat = 8
-    private let verticalPadding: CGFloat = 7
+    let table: PreparedMarkdownTable
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
             Grid(horizontalSpacing: 0, verticalSpacing: 0) {
                 GridRow(alignment: .top) {
-                    ForEach(0..<table.columnCount, id: \.self) { index in
-                        cell(
-                            table.headers.value(at: index),
-                            isHeader: true,
-                            width: columnWidth(at: index),
-                            height: headerRowHeight()
+                    ForEach(table.header.cells) { cell in
+                        tableCell(
+                            cell,
+                            width: table.columnWidth(at: cell.id),
+                            height: table.header.height
                         )
                     }
                 }
 
-                ForEach(table.rows.indices, id: \.self) { rowIndex in
+                ForEach(table.rows) { row in
                     GridRow(alignment: .top) {
-                        ForEach(0..<table.columnCount, id: \.self) { columnIndex in
-                            cell(
-                                table.rows[rowIndex].value(at: columnIndex),
-                                isHeader: false,
-                                width: columnWidth(at: columnIndex),
-                                height: rowHeight(at: rowIndex)
+                        ForEach(row.cells) { cell in
+                            tableCell(
+                                cell,
+                                width: table.columnWidth(at: cell.id),
+                                height: row.height
                             )
                         }
                     }
@@ -172,110 +458,35 @@ private struct MarkdownTableView: View {
         .padding(.vertical, 4)
     }
 
-    private func cell(_ text: String, isHeader: Bool, width: CGFloat, height: CGFloat) -> some View {
+    private func tableCell(
+        _ cell: PreparedMarkdownTableCell,
+        width: CGFloat,
+        height: CGFloat
+    ) -> some View {
         MarkdownTableCell(
-            text: text,
-            textColor: textColor,
-            font: font(isHeader: isHeader),
+            cell: cell,
             width: width,
             height: height,
-            horizontalPadding: horizontalPadding,
-            verticalPadding: verticalPadding,
-            isHeader: isHeader
+            horizontalPadding: table.horizontalPadding,
+            verticalPadding: table.verticalPadding
         )
-    }
-
-    private func columnWidth(at index: Int) -> CGFloat {
-        let headerWidth = measuredWidth(for: table.headers.value(at: index), font: font(isHeader: true))
-        let rowWidth = table.rows
-            .map { measuredWidth(for: $0.value(at: index), font: font(isHeader: false)) }
-            .max() ?? minimumColumnWidth
-        return min(max(max(headerWidth, rowWidth), minimumColumnWidth), maximumColumnWidth)
-    }
-
-    private func measuredWidth(for markdown: String, font: UIFont) -> CGFloat {
-        let attributedText = MarkdownInlineFormatter.attributedString(
-            from: markdown,
-            font: font,
-            textColor: textColor,
-            textAlignment: .left
-        )
-        let bounds = attributedText.boundingRect(
-            with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            context: nil
-        )
-        return ceil(bounds.width)
-    }
-
-    private func headerRowHeight() -> CGFloat {
-        rowHeight(for: table.headers, isHeader: true)
-    }
-
-    private func rowHeight(at index: Int) -> CGFloat {
-        rowHeight(for: table.rows[index], isHeader: false)
-    }
-
-    private func rowHeight(for cells: [String], isHeader: Bool) -> CGFloat {
-        let font = font(isHeader: isHeader)
-        let contentHeight = (0..<table.columnCount)
-            .map { columnIndex in
-                measuredHeight(
-                    for: cells.value(at: columnIndex),
-                    font: font,
-                    width: columnWidth(at: columnIndex)
-                )
-            }
-            .max() ?? font.lineHeight
-        return ceil(max(contentHeight, font.lineHeight) + verticalPadding * 2)
-    }
-
-    private func measuredHeight(for markdown: String, font: UIFont, width: CGFloat) -> CGFloat {
-        let attributedText = MarkdownInlineFormatter.attributedString(
-            from: markdown.isEmpty ? " " : markdown,
-            font: font,
-            textColor: textColor,
-            textAlignment: .left
-        )
-        let bounds = attributedText.boundingRect(
-            with: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            context: nil
-        )
-        return ceil(bounds.height)
-    }
-
-    private func font(isHeader: Bool) -> UIFont {
-        isHeader ? .boldSystemFont(ofSize: baseFont.pointSize) : baseFont
     }
 }
 
 private struct MarkdownTableCell: View {
-    let text: String
-    let textColor: UIColor
-    let font: UIFont
+    let cell: PreparedMarkdownTableCell
     let width: CGFloat
     let height: CGFloat
     let horizontalPadding: CGFloat
     let verticalPadding: CGFloat
-    let isHeader: Bool
-
-    private var attributedText: NSAttributedString {
-        MarkdownInlineFormatter.attributedString(
-            from: text,
-            font: font,
-            textColor: textColor,
-            textAlignment: .left
-        )
-    }
 
     var body: some View {
-        SelectableAttributedTextView(attributedText: attributedText, textAlignment: .left)
+        SelectableAttributedTextView(attributedText: cell.attributedText, textAlignment: .left)
             .frame(width: width, alignment: .leading)
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, verticalPadding)
             .frame(height: height, alignment: .topLeading)
-            .background(isHeader ? Color.secondary.opacity(0.10) : Color.clear)
+            .background(cell.isHeader ? Color.secondary.opacity(0.10) : Color.clear)
             .overlay(
                 Rectangle()
                     .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
@@ -295,12 +506,12 @@ private struct MarkdownBlock: Identifiable {
     }
 }
 
-private enum MarkdownTextStyle {
+private nonisolated enum MarkdownTextStyle {
     case paragraph
     case heading(Int)
     case list
 
-    func font(baseFont: UIFont) -> UIFont {
+    nonisolated func font(baseFont: UIFont) -> UIFont {
         switch self {
         case .paragraph, .list:
             return baseFont
@@ -311,17 +522,17 @@ private enum MarkdownTextStyle {
     }
 }
 
-private struct MarkdownTable {
+private nonisolated struct MarkdownTable {
     let headers: [String]
     let rows: [[String]]
 
-    var columnCount: Int {
+    nonisolated var columnCount: Int {
         max(headers.count, rows.map(\.count).max() ?? 0)
     }
 }
 
-private enum MarkdownBlockParser {
-    static func parse(_ markdown: String) -> [MarkdownBlock] {
+private nonisolated enum MarkdownBlockParser {
+    nonisolated static func parse(_ markdown: String) -> [MarkdownBlock] {
         let lines = markdown.components(separatedBy: .newlines)
         var blocks: [MarkdownBlock] = []
         var index = 0
@@ -458,8 +669,14 @@ private enum MarkdownBlockParser {
     }
 }
 
-private extension Array where Element == String {
+private nonisolated extension Array where Element == String {
     func value(at index: Int) -> String {
         indices.contains(index) ? self[index] : ""
+    }
+}
+
+private nonisolated extension Array where Element == CGFloat {
+    func value(at index: Int) -> CGFloat {
+        indices.contains(index) ? self[index] : 0
     }
 }
