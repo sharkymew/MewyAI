@@ -606,7 +606,6 @@ struct ContentView: View {
                 text: $inputText,
                 isFocused: $isInputFocused,
                 focusRequestID: inputFocusRequestID,
-                isDisabled: isGenerating,
                 placeholder: "输入消息...",
                 onPasteImages: pasteImagesFromInputMenu
             )
@@ -824,8 +823,6 @@ struct ContentView: View {
             )
         }
         .buttonStyle(.plain)
-        .disabled(isGenerating)
-        .opacity(isGenerating ? 0.45 : 1)
         .accessibilityLabel("更多输入选项")
     }
 
@@ -1539,8 +1536,6 @@ struct ContentView: View {
     }
 
     private func handleDroppedImages(_ providers: [NSItemProvider]) -> Bool {
-        guard !isGenerating else { return false }
-
         guard currentConfiguration.selectedModelSupportsImages else {
             imageSelectionError = "当前模型不支持图片输入。"
             return false
@@ -1588,8 +1583,6 @@ struct ContentView: View {
     }
 
     private func pasteImagesFromInputMenu(_ images: [UIImage]) {
-        guard !isGenerating else { return }
-
         guard currentConfiguration.selectedModelSupportsImages else {
             imageSelectionError = "当前模型不支持图片输入。"
             return
@@ -2951,7 +2944,6 @@ struct ImagePastingTextView: UIViewRepresentable {
 
     @Binding var isFocused: Bool
     let focusRequestID: Int
-    let isDisabled: Bool
     let placeholder: String
     let onPasteImages: ([UIImage]) -> Void
 
@@ -2978,8 +2970,8 @@ struct ImagePastingTextView: UIViewRepresentable {
         }
 
         textView.onPasteImages = onPasteImages
-        textView.isEditable = !isDisabled
-        textView.isSelectable = !isDisabled
+        textView.isEditable = true
+        textView.isSelectable = true
         textView.placeholderText = placeholder
         textView.accessibilityLabel = placeholder
         textView.updatePlaceholderVisibility()
