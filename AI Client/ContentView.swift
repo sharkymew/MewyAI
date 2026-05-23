@@ -6,11 +6,43 @@ import UniformTypeIdentifiers
 
 private enum ChatScrollMetrics {
     static let coordinateSpaceName = "ChatScrollCoordinateSpace"
-    static let bottomThreshold: CGFloat = 32
+    static let bottomThreshold: CGFloat = 12
+    static let dragIntentMinimumDistance: CGFloat = 3
 
     static func roundedDistance(_ distance: CGFloat) -> CGFloat {
         let scale = max(UIScreen.main.scale, 1)
         return (max(distance, 0) * scale).rounded() / scale
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func observeChatScrollUserInteraction(
+        onBegin: @escaping () -> Void,
+        onEnd: @escaping () -> Void
+    ) -> some View {
+        if #available(iOS 18.0, *) {
+            onScrollPhaseChange { _, newPhase in
+                switch newPhase {
+                case .interacting, .decelerating:
+                    onBegin()
+                case .idle:
+                    onEnd()
+                case .tracking, .animating:
+                    break
+                }
+            }
+        } else {
+            simultaneousGesture(
+                DragGesture(minimumDistance: ChatScrollMetrics.dragIntentMinimumDistance)
+                    .onChanged { _ in
+                        onBegin()
+                    }
+                    .onEnded { _ in
+                        onEnd()
+                    }
+            )
+        }
     }
 }
 
@@ -49,14 +81,17 @@ private final class ChatScrollController: ObservableObject {
     @Published private var isScrolledToBottom = true
 
     private var isUserDragging = false
+    private var hasUserPausedAutoScroll = false
+    private var hasLeftBottomAfterUserPause = false
     private var isAutoScrollScheduled = false
     private var isBottomDistanceUpdateScheduled = false
     private var pendingDistanceFromBottom: CGFloat?
+    private var lastDistanceFromBottom: CGFloat = 0
     private var autoScrollTask: Task<Void, Never>?
     private var scrollAction: ((Bool) -> Void)?
 
     var shouldShowScrollToBottomButton: Bool {
-        !shouldAutoScroll && !isScrolledToBottom
+        !isScrolledToBottom
     }
 
     deinit {
@@ -71,19 +106,26 @@ private final class ChatScrollController: ObservableObject {
         scrollAction = nil
     }
 
-    func beginUserDrag() {
+    func beginUserScrollInteraction() {
         isUserDragging = true
-
-        guard !isScrolledToBottom else { return }
-        setShouldAutoScroll(false)
-        cancelScheduledAutoScroll()
+        pauseAutoScrollForUser()
     }
 
-    func endUserDrag() {
+    func endUserScrollInteraction() {
         isUserDragging = false
+
+        if resumeAutoScrollIfUserReturnedToBottom() {
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            self?.resumeAutoScrollIfUserReturnedToBottom()
+        }
     }
 
     func scheduleBottomDistanceUpdate(_ distanceFromBottom: CGFloat) {
+        lastDistanceFromBottom = distanceFromBottom
         pendingDistanceFromBottom = distanceFromBottom
 
         guard !isBottomDistanceUpdateScheduled else { return }
@@ -101,6 +143,7 @@ private final class ChatScrollController: ObservableObject {
     }
 
     private func updateBottomDistance(_ distanceFromBottom: CGFloat) {
+        lastDistanceFromBottom = distanceFromBottom
         let isAtBottom = distanceFromBottom <= ChatScrollMetrics.bottomThreshold
 
         if isScrolledToBottom != isAtBottom {
@@ -108,15 +151,22 @@ private final class ChatScrollController: ObservableObject {
         }
 
         if isAtBottom {
-            setShouldAutoScroll(true)
+            if hasUserPausedAutoScroll {
+                if hasLeftBottomAfterUserPause, !isUserDragging {
+                    resumeAutoScroll()
+                }
+            } else {
+                setShouldAutoScroll(true)
+            }
         } else if isUserDragging {
-            setShouldAutoScroll(false)
-            cancelScheduledAutoScroll()
+            pauseAutoScrollForUser()
+        } else if hasUserPausedAutoScroll {
+            hasLeftBottomAfterUserPause = true
         }
     }
 
     func returnToBottom() {
-        setShouldAutoScroll(true)
+        resumeAutoScroll()
         requestImmediateAutoScroll(animated: false)
     }
 
@@ -128,6 +178,8 @@ private final class ChatScrollController: ObservableObject {
 
     func scheduleStreamingAutoScroll() {
         guard shouldAutoScroll else { return }
+        guard !hasUserPausedAutoScroll else { return }
+        guard !isUserDragging else { return }
         guard !isAutoScrollScheduled else { return }
         isAutoScrollScheduled = true
         autoScrollTask?.cancel()
@@ -157,6 +209,27 @@ private final class ChatScrollController: ObservableObject {
     private func setIsScrolledToBottom(_ value: Bool) {
         guard isScrolledToBottom != value else { return }
         isScrolledToBottom = value
+    }
+
+    private func pauseAutoScrollForUser() {
+        hasUserPausedAutoScroll = true
+        hasLeftBottomAfterUserPause = hasLeftBottomAfterUserPause || !isScrolledToBottom
+        setShouldAutoScroll(false)
+        cancelScheduledAutoScroll()
+    }
+
+    private func resumeAutoScroll() {
+        hasUserPausedAutoScroll = false
+        hasLeftBottomAfterUserPause = false
+        setShouldAutoScroll(true)
+    }
+
+    @discardableResult
+    private func resumeAutoScrollIfUserReturnedToBottom() -> Bool {
+        guard hasUserPausedAutoScroll, hasLeftBottomAfterUserPause else { return false }
+        guard isScrolledToBottom || lastDistanceFromBottom <= ChatScrollMetrics.bottomThreshold else { return false }
+        resumeAutoScroll()
+        return true
     }
 }
 
@@ -354,6 +427,32 @@ struct ContentView: View {
         .frame(width: frame, height: frame)
     }
 
+    private func scrollToBottomGlassIcon() -> some View {
+        let shape = Circle()
+
+        return ZStack {
+            if #available(iOS 26.0, *) {
+                shape
+                    .fill(.clear)
+                    .glassEffect(.regular.tint(inputGlassTint), in: shape)
+            } else {
+                shape
+                    .fill(.ultraThinMaterial)
+                    .overlay(shape.fill(inputGlassTint))
+                    .overlay(
+                        shape
+                            .stroke(inputGlassHighlight, lineWidth: 1)
+                            .blendMode(.screen)
+                    )
+            }
+
+            Image(systemName: "arrow.down")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+        }
+        .frame(width: 36, height: 36)
+    }
+
     private var inputBottomFade: some View {
         Rectangle()
             .fill(.thickMaterial)
@@ -527,14 +626,13 @@ struct ContentView: View {
                         .contentShape(Rectangle())
                     }
                     .coordinateSpace(name: ChatScrollMetrics.coordinateSpaceName)
-                    .simultaneousGesture(
-                        DragGesture()
-                            .onChanged { _ in
-                                chatScrollController.beginUserDrag()
-                            }
-                            .onEnded { _ in
-                                chatScrollController.endUserDrag()
-                            }
+                    .observeChatScrollUserInteraction(
+                        onBegin: {
+                            chatScrollController.beginUserScrollInteraction()
+                        },
+                        onEnd: {
+                            chatScrollController.endUserScrollInteraction()
+                        }
                     )
                     .simultaneousGesture(
                         TapGesture().onEnded {
@@ -574,13 +672,7 @@ struct ContentView: View {
         }
         .overlay(alignment: .bottom) {
             ScrollToBottomButtonOverlay(scrollController: chatScrollController) {
-                controlGlassIcon(
-                    systemName: "arrow.down",
-                    size: 15,
-                    weight: .semibold,
-                    frame: 36,
-                    tint: inputGlassTint
-                )
+                scrollToBottomGlassIcon()
             }
         }
     }

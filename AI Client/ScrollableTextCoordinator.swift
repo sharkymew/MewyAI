@@ -301,6 +301,6 @@ final class ScrollableTextCoordinator: NSObject, UITextViewDelegate {
         return distanceFromBottom <= Self.bottomDetectionTolerance
     }
 
-    private static let bottomDetectionTolerance: CGFloat = 24
+    private static let bottomDetectionTolerance: CGFloat = 12
 
 }
