@@ -150,7 +150,26 @@ struct FunctionOpacityMask: View {
     }
 }
 
+private struct GlassFadeExclusion {
+    let bounds: Anchor<CGRect>
+    let inset: CGFloat
+}
+
+private struct GlassFadeExclusionPreferenceKey: PreferenceKey {
+    static var defaultValue: [GlassFadeExclusion] = []
+
+    static func reduce(value: inout [GlassFadeExclusion], nextValue: () -> [GlassFadeExclusion]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
 private extension View {
+    func glassFadeExclusion(inset: CGFloat) -> some View {
+        anchorPreference(key: GlassFadeExclusionPreferenceKey.self, value: .bounds) { bounds in
+            [GlassFadeExclusion(bounds: bounds, inset: inset)]
+        }
+    }
+
     @ViewBuilder
     func observeChatScrollBottomDistance(_ action: @escaping (CGFloat) -> Void) -> some View {
         if #available(iOS 18.0, *) {
@@ -451,8 +470,13 @@ struct ContentView: View {
     let aiService = AIService()
     private let maxImageAttachmentCount = 4
     private let inputBarBottomPadding: CGFloat = 8
+    private let inputBarTopPadding: CGFloat = 8
+    private let inputBarHorizontalPadding: CGFloat = 12
+    private let inputBarCornerRadius: CGFloat = 34
     private let inputBottomFadeHeight: CGFloat = 178
     private let inputBottomFadeOverlap: CGFloat = 118
+    private let topGlassFadeExclusionInset: CGFloat = 8
+    private let scrollToBottomFadeExclusionSize: CGFloat = 34
     private let topControlSize: CGFloat = 44
     private let topControlsTopPadding: CGFloat = 8
     private let topControlsHorizontalPadding: CGFloat = 16
@@ -511,7 +535,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private func inputGlassContainer<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 34, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: inputBarCornerRadius, style: .continuous)
 
         if #available(iOS 26.0, *) {
             content()
@@ -607,6 +631,33 @@ struct ContentView: View {
             .allowsHitTesting(false)
     }
 
+    private var inputBottomFadeBackdrop: some View {
+        GeometryReader { geometry in
+            let fadeTop = geometry.size.height - inputBottomFadeOverlap - inputBarBottomPadding
+            let scrollButtonCenterY = geometry.size.height
+                - ChatScrollMetrics.scrollToBottomButtonHitAdjustedBottomPadding
+                - ChatScrollMetrics.scrollToBottomButtonHitSize / 2
+
+            ZStack(alignment: .topLeading) {
+                inputBottomFade
+                    .frame(width: geometry.size.width, height: inputBottomFadeHeight)
+                    .offset(y: fadeTop)
+
+                if chatScrollController.shouldShowScrollToBottomButton {
+                    Circle()
+                        .frame(
+                            width: scrollToBottomFadeExclusionSize,
+                            height: scrollToBottomFadeExclusionSize
+                        )
+                        .position(x: geometry.size.width / 2, y: scrollButtonCenterY)
+                        .blendMode(.destinationOut)
+                }
+            }
+            .compositingGroup()
+        }
+        .allowsHitTesting(false)
+    }
+
     private var topFade: some View {
         fadeBase
             .overlay(topFadeTint)
@@ -622,6 +673,58 @@ struct ContentView: View {
             .allowsHitTesting(false)
     }
 
+    private func topFadeBackdrop(
+        topSafeAreaInset: CGFloat,
+        exclusions: [GlassFadeExclusion],
+        proxy: GeometryProxy
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
+            topFade
+                .frame(width: proxy.size.width, height: topSafeAreaInset + topFadeHeight)
+                .offset(y: -topSafeAreaInset)
+                .ignoresSafeArea(edges: .top)
+
+            Capsule()
+                .frame(
+                    width: max(topControlSize - topGlassFadeExclusionInset * 2, 0),
+                    height: max(topControlSize - topGlassFadeExclusionInset * 2, 0)
+                )
+                .position(
+                    x: topControlsHorizontalPadding + topControlSize / 2,
+                    y: topControlsTopPadding + topControlSize / 2
+                )
+                .blendMode(.destinationOut)
+
+            ForEach(Array(exclusions.enumerated()), id: \.offset) { _, exclusion in
+                let rect = proxy[exclusion.bounds]
+
+                Capsule()
+                    .frame(
+                        width: max(rect.width - exclusion.inset * 2, 0),
+                        height: max(rect.height - exclusion.inset * 2, 0)
+                    )
+                    .position(x: rect.midX, y: rect.midY)
+                    .blendMode(.destinationOut)
+            }
+        }
+        .compositingGroup()
+        .allowsHitTesting(false)
+    }
+
+    private func topChrome(topSafeAreaInset: CGFloat) -> some View {
+        topFloatingControls
+            .frame(maxWidth: .infinity, maxHeight: topFadeHeight, alignment: .top)
+            .backgroundPreferenceValue(GlassFadeExclusionPreferenceKey.self) { exclusions in
+                GeometryReader { proxy in
+                    topFadeBackdrop(
+                        topSafeAreaInset: topSafeAreaInset,
+                        exclusions: exclusions,
+                        proxy: proxy
+                    )
+                }
+            }
+    }
+
     @ViewBuilder
     private func topGlassControl<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content()
@@ -631,6 +734,7 @@ struct ContentView: View {
                     highlight: inputGlassHighlight
                 )
             )
+            .glassFadeExclusion(inset: topGlassFadeExclusionInset)
     }
 
     private func topIconLabel(systemName: String) -> some View {
@@ -838,13 +942,7 @@ struct ContentView: View {
                 }
             }
 
-            topFade
-                .frame(maxWidth: .infinity)
-                .frame(height: topSafeAreaInset + topFadeHeight)
-                .offset(y: -topSafeAreaInset)
-                .ignoresSafeArea(edges: .top)
-
-            topFloatingControls
+            topChrome(topSafeAreaInset: topSafeAreaInset)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             inputBar
@@ -883,7 +981,7 @@ struct ContentView: View {
             .padding(.vertical, 10)
         }
         .overlay(
-            RoundedRectangle(cornerRadius: 34, style: .continuous)
+            RoundedRectangle(cornerRadius: inputBarCornerRadius, style: .continuous)
                 .stroke(
                     isImageDropTargeted ? Color.accentColor.opacity(0.56) : Color.secondary.opacity(0.12),
                     lineWidth: isImageDropTargeted ? 2 : 1
@@ -898,13 +996,11 @@ struct ContentView: View {
             transaction.animation = nil
             transaction.disablesAnimations = true
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
+        .padding(.horizontal, inputBarHorizontalPadding)
+        .padding(.top, inputBarTopPadding)
         .padding(.bottom, inputBarBottomPadding)
         .background(alignment: .bottom) {
-            inputBottomFade
-                .frame(height: inputBottomFadeHeight)
-                .offset(y: inputBottomFadeHeight - inputBottomFadeOverlap - inputBarBottomPadding)
+            inputBottomFadeBackdrop
                 .ignoresSafeArea(edges: .bottom)
         }
     }
