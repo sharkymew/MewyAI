@@ -10,9 +10,8 @@ struct ConversationSidebarView: View {
     let topSafeAreaInset: CGFloat
     let showsSidebarToggleFadeExclusion: Bool
     let onSelect: (UUID) -> Void
-    let onCreate: () -> Void
+    let onOpenConfiguration: () -> Void
     let onDelete: (UUID) -> Void
-    let canCreateConversation: Bool
 
     private let topControlSize: CGFloat = 44
     private let topControlsTopPadding: CGFloat = 8
@@ -151,12 +150,11 @@ struct ConversationSidebarView: View {
             Spacer(minLength: 0)
 
             topGlassControl {
-                Button(action: onCreate) {
-                    topIconLabel(systemName: "plus")
+                Button(action: onOpenConfiguration) {
+                    topIconLabel(systemName: "slider.horizontal.3")
                 }
             }
-            .disabled(!canCreateConversation)
-            .accessibilityLabel("新建对话")
+            .accessibilityLabel("打开 AI 配置")
         }
         .padding(.horizontal, topControlsHorizontalPadding)
         .padding(.top, topSafeAreaInset + topControlsTopPadding)

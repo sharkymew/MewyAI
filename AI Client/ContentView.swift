@@ -799,9 +799,8 @@ struct ContentView: View {
                     topSafeAreaInset: geometry.safeAreaInsets.top,
                     showsSidebarToggleFadeExclusion: showsSidebarToggleFadeExclusion,
                     onSelect: selectConversation,
-                    onCreate: createConversation,
-                    onDelete: deleteConversation,
-                    canCreateConversation: canCreateConversation
+                    onOpenConfiguration: openConfigurationFromSidebar,
+                    onDelete: deleteConversation
                 )
                 .frame(width: sidebarWidth)
                 .ignoresSafeArea(edges: [.top, .bottom])
@@ -2428,6 +2427,12 @@ struct ContentView: View {
 
     private func createConversation() {
         createConversation(closesSidebar: true)
+    }
+
+    private func openConfigurationFromSidebar() {
+        hideKeyboard()
+        setConversationSidebarVisibility(false)
+        showConfiguration = true
     }
 
     private func createConversation(closesSidebar: Bool) {
