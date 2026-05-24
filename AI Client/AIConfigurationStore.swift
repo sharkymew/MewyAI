@@ -153,17 +153,17 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         reasoningEnabled = try container.decodeIfPresent(Bool.self, forKey: .reasoningEnabled) ?? true
         reasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort) ?? .medium
         
-        if let decodedModels = try? container.decode([AIModelConfiguration].self, forKey: .models),
-           !decodedModels.isEmpty {
+        if container.contains(.models),
+           let decodedModels = try? container.decode([AIModelConfiguration].self, forKey: .models) {
             models = decodedModels
-        } else if let legacyModels = try? container.decode([String].self, forKey: .models),
-                  !legacyModels.isEmpty {
+        } else if container.contains(.models),
+                  let legacyModels = try? container.decode([String].self, forKey: .models) {
             models = legacyModels.map { AIModelConfiguration(name: $0) }
         } else {
             models = [AIModelConfiguration(name: "deepseek-v4-pro")]
         }
         
-        selectedModel = try container.decodeIfPresent(String.self, forKey: .selectedModel) ?? models.first?.name ?? "deepseek-v4-pro"
+        selectedModel = try container.decodeIfPresent(String.self, forKey: .selectedModel) ?? models.first?.name ?? ""
         var containsSelectedModel = false
         for model in models where model.name == selectedModel {
             containsSelectedModel = true

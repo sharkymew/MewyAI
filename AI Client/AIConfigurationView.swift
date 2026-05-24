@@ -9,6 +9,10 @@ struct AIConfigurationView: View {
     @State private var newModelName = ""
     @State private var modelFetchMessage: String?
     @State private var isFetchingModels = false
+    @State private var fetchedModels: [AIModelConfiguration] = []
+    @State private var selectedFetchedModelNames: Set<String> = []
+    @State private var isModelImportSheetPresented = false
+    @State private var isDeleteAllModelsConfirmationPresented = false
     @FocusState private var focusedField: ConfigurationField?
     
     private let aiService = AIService()
@@ -61,6 +65,20 @@ struct AIConfigurationView: View {
                         dismiss()
                     }
                 }
+            }
+            .sheet(isPresented: $isModelImportSheetPresented) {
+                modelImportSheet
+            }
+            .confirmationDialog(
+                "删除本配置下的所有模型？",
+                isPresented: $isDeleteAllModelsConfirmationPresented,
+                titleVisibility: .visible
+            ) {
+                Button("删除所有模型", role: .destructive) {
+                    deleteAllModels()
+                }
+            } message: {
+                Text("这只会清空当前配置的模型列表，不会删除配置组或 API Key。")
             }
         }
     }
@@ -223,6 +241,14 @@ struct AIConfigurationView: View {
                 }
             }
             .disabled(isFetchingModels)
+
+            Button(role: .destructive) {
+                hideKeyboard()
+                isDeleteAllModelsConfirmationPresented = true
+            } label: {
+                Label("删除所有模型", systemImage: "trash")
+            }
+            .disabled((selectedConfiguration?.models.isEmpty ?? true) || isFetchingModels)
             
             if let modelFetchMessage {
                 Text(modelFetchMessage)
@@ -245,14 +271,11 @@ struct AIConfigurationView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     
-                    VStack(spacing: 8) {
-                        Toggle("", isOn: supportsReasoningBinding(for: model.name))
-                            .labelsHidden()
-                            .fixedSize()
-                        Toggle("", isOn: supportsImagesBinding(for: model.name))
-                            .labelsHidden()
-                            .fixedSize()
+                    VStack(alignment: .leading, spacing: 8) {
+                        CheckboxButton("推理", isOn: supportsReasoningBinding(for: model.name))
+                        CheckboxButton("图片", isOn: supportsImagesBinding(for: model.name))
                     }
+                    .fixedSize()
                     
                     Button(role: .destructive) {
                         deleteModel(model.name)
@@ -266,7 +289,72 @@ struct AIConfigurationView: View {
         } header: {
             Text("模型")
         } footer: {
-            Text("自动获取会根据 Base URL 推断 /models 地址，适用于 OpenAI-compatible 服务。")
+            Text("自动获取会根据 Base URL 推断 /models 地址，适用于 OpenAI-compatible 服务；获取结果需要确认后才会加入当前配置。")
+        }
+    }
+
+    private var modelImportSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button("全选") {
+                        selectedFetchedModelNames = Set(fetchedModels.map(\.name))
+                    }
+                    .disabled(fetchedModels.isEmpty)
+
+                    Button("清空选择") {
+                        selectedFetchedModelNames.removeAll()
+                    }
+                    .disabled(selectedFetchedModelNames.isEmpty)
+                }
+
+                Section {
+                    ForEach(fetchedModels) { model in
+                        Button {
+                            toggleFetchedModelSelection(model.name)
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                CheckboxIndicator(isOn: selectedFetchedModelNames.contains(model.name))
+                                    .padding(.top, 2)
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(model.name)
+                                        .lineLimit(2)
+                                        .truncationMode(.middle)
+                                    HStack(spacing: 8) {
+                                        Text(model.supportsReasoning ? "支持推理" : "不支持推理")
+                                        Text(model.supportsImages ? "支持图片" : "仅文字")
+                                        if selectedConfiguration?.models.contains(where: { $0.name == model.name }) == true {
+                                            Text("已在当前配置中")
+                                        }
+                                    }
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } header: {
+                    Text("可导入模型")
+                } footer: {
+                    Text("导入已存在的模型会更新它的推理与图片能力标记。")
+                }
+            }
+            .navigationTitle("选择模型")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        isModelImportSheetPresented = false
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("导入") {
+                        importSelectedFetchedModels()
+                    }
+                    .disabled(selectedFetchedModelNames.isEmpty)
+                }
+            }
         }
     }
     
@@ -399,6 +487,8 @@ struct AIConfigurationView: View {
         selectedConfigurationID = configuration.id
         newModelName = ""
         modelFetchMessage = nil
+        fetchedModels = []
+        selectedFetchedModelNames.removeAll()
         saveCurrentState()
     }
     
@@ -434,6 +524,14 @@ struct AIConfigurationView: View {
             }
         }
     }
+
+    private func deleteAllModels() {
+        updateSelectedConfiguration { configuration in
+            configuration.models.removeAll()
+            configuration.selectedModel = ""
+        }
+        modelFetchMessage = "已删除当前配置下的所有模型。"
+    }
     
     private func supportsReasoningBinding(for model: String) -> Binding<Bool> {
         Binding(
@@ -467,6 +565,8 @@ struct AIConfigurationView: View {
         guard let configuration = selectedConfiguration else { return }
         isFetchingModels = true
         modelFetchMessage = nil
+        fetchedModels = []
+        selectedFetchedModelNames.removeAll()
         
         aiService.fetchModels(
             baseURL: configuration.baseURL,
@@ -481,25 +581,90 @@ struct AIConfigurationView: View {
                     modelFetchMessage = "没有获取到模型。"
                     return
                 }
-                updateSelectedConfiguration { configuration in
-                    configuration.models = models.map { model in
-                        AIModelConfiguration(
-                            name: model.name,
-                            supportsReasoning: model.supportsReasoning,
-                            supportsImages: model.supportsImages
-                        )
-                    }
-                    if !configuration.models.contains(where: { $0.name == configuration.selectedModel }) {
-                        configuration.selectedModel = configuration.models[0].name
-                    }
-                }
-                let reasoningModelCount = models.filter(\.supportsReasoning).count
-                let imageModelCount = models.filter(\.supportsImages).count
-                modelFetchMessage = "已获取 \(models.count) 个模型，识别到 \(reasoningModelCount) 个支持推理、\(imageModelCount) 个支持图片。"
+                let uniqueFetchedModels = uniqueModels(from: models)
+                fetchedModels = uniqueFetchedModels
+                let reasoningModelCount = uniqueFetchedModels.filter(\.supportsReasoning).count
+                let imageModelCount = uniqueFetchedModels.filter(\.supportsImages).count
+                modelFetchMessage = "已获取 \(fetchedModels.count) 个模型，识别到 \(reasoningModelCount) 个支持推理、\(imageModelCount) 个支持图片，请选择要导入的模型。"
+                isModelImportSheetPresented = true
             case .failure(let error):
                 modelFetchMessage = error.localizedDescription
             }
         }
+    }
+
+    private func toggleFetchedModelSelection(_ model: String) {
+        if selectedFetchedModelNames.contains(model) {
+            selectedFetchedModelNames.remove(model)
+        } else {
+            selectedFetchedModelNames.insert(model)
+        }
+    }
+
+    private func importSelectedFetchedModels() {
+        let selectedModels = fetchedModels.filter { selectedFetchedModelNames.contains($0.name) }
+        guard !selectedModels.isEmpty else { return }
+
+        updateSelectedConfiguration { configuration in
+            for model in selectedModels {
+                if let index = configuration.models.firstIndex(where: { $0.name == model.name }) {
+                    configuration.models[index] = model
+                } else {
+                    configuration.models.append(model)
+                }
+            }
+
+            if configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                configuration.selectedModel = selectedModels[0].name
+            }
+        }
+
+        modelFetchMessage = "已导入 \(selectedModels.count) 个模型。"
+        selectedFetchedModelNames.removeAll()
+        isModelImportSheetPresented = false
+    }
+
+    private func uniqueModels(from models: [AIModelConfiguration]) -> [AIModelConfiguration] {
+        var seenNames = Set<String>()
+        return models.filter { model in
+            seenNames.insert(model.name).inserted
+        }
+    }
+}
+
+private struct CheckboxButton: View {
+    let title: String
+    @Binding var isOn: Bool
+
+    init(_ title: String, isOn: Binding<Bool>) {
+        self.title = title
+        _isOn = isOn
+    }
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            Label {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+            } icon: {
+                CheckboxIndicator(isOn: isOn)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(isOn ? "已选中" : "未选中")
+    }
+}
+
+private struct CheckboxIndicator: View {
+    let isOn: Bool
+
+    var body: some View {
+        Image(systemName: isOn ? "checkmark.square.fill" : "square")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(isOn ? Color.accentColor : Color.secondary)
     }
 }
 
