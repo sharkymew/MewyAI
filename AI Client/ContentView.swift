@@ -68,6 +68,7 @@ struct FixedTopGlassButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .opacity(isEnabled ? 1 : 0.46)
             .background {
                 if #available(iOS 26.0, *) {
                     Capsule()
@@ -85,7 +86,6 @@ struct FixedTopGlassButtonStyle: ButtonStyle {
                 }
             }
             .scaleEffect(configuration.isPressed ? 1.05 : 1)
-            .opacity(isEnabled ? 1 : 0.46)
             .animation(.spring(response: 0.18, dampingFraction: 0.72), value: configuration.isPressed)
     }
 }
