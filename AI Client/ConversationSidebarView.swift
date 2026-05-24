@@ -8,6 +8,7 @@ struct ConversationSidebarView: View {
     let conversations: [AIConversation]
     let selectedConversationID: UUID?
     let topSafeAreaInset: CGFloat
+    let showsSidebarToggleFadeExclusion: Bool
     let onSelect: (UUID) -> Void
     let onCreate: () -> Void
     let onDelete: (UUID) -> Void
@@ -18,6 +19,7 @@ struct ConversationSidebarView: View {
     private let topControlsHorizontalPadding: CGFloat = 16
     private let topFadeBottomPadding: CGFloat = 155
     private let topFadeVerticalOffset: CGFloat = -55
+    private let topGlassFadeExclusionInset: CGFloat = 8
     private let rowActionSuppressionMinimumDistance: CGFloat = 10
     private let rowActionSuppressionHorizontalRatio: CGFloat = 1.2
     private let rowActionSuppressionResetDelayNanoseconds: UInt64 = 180_000_000
@@ -82,10 +84,10 @@ struct ConversationSidebarView: View {
                 }
                 .simultaneousGesture(rowActionSuppressionGesture)
 
-                topFade(topSafeAreaInset: topSafeAreaInset)
-                    .frame(width: sidebarWidth, height: topSafeAreaInset + topFadeHeight)
-                    .offset(y: topFadeVerticalOffset)
-                    .ignoresSafeArea(edges: .top)
+                topFadeBackdrop(
+                    topSafeAreaInset: topSafeAreaInset,
+                    sidebarWidth: sidebarWidth
+                )
 
                 topFloatingControls(topSafeAreaInset: topSafeAreaInset)
             }
@@ -107,6 +109,41 @@ struct ConversationSidebarView: View {
                 )
             )
             .allowsHitTesting(false)
+    }
+
+    private func topFadeBackdrop(topSafeAreaInset: CGFloat, sidebarWidth: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            topFade(topSafeAreaInset: topSafeAreaInset)
+                .frame(width: sidebarWidth, height: topSafeAreaInset + topFadeHeight)
+                .offset(y: topFadeVerticalOffset)
+                .ignoresSafeArea(edges: .top)
+
+            if showsSidebarToggleFadeExclusion {
+                Capsule()
+                    .frame(
+                        width: max(topControlSize - topGlassFadeExclusionInset * 2, 0),
+                        height: max(topControlSize - topGlassFadeExclusionInset * 2, 0)
+                    )
+                    .position(
+                        x: topControlsHorizontalPadding + topControlSize / 2,
+                        y: topSafeAreaInset + topControlsTopPadding + topControlSize / 2
+                    )
+                    .blendMode(.destinationOut)
+            }
+
+            Capsule()
+                .frame(
+                    width: max(topControlSize - topGlassFadeExclusionInset * 2, 0),
+                    height: max(topControlSize - topGlassFadeExclusionInset * 2, 0)
+                )
+                .position(
+                    x: sidebarWidth - topControlsHorizontalPadding - topControlSize / 2,
+                    y: topSafeAreaInset + topControlsTopPadding + topControlSize / 2
+                )
+                .blendMode(.destinationOut)
+        }
+        .compositingGroup()
+        .allowsHitTesting(false)
     }
 
     private func topFloatingControls(topSafeAreaInset: CGFloat) -> some View {

@@ -466,6 +466,9 @@ struct ContentView: View {
     @State private var isInputFocused = false
     @State private var inputFocusRequestID = 0
     @State private var hasLoadedInitialConversation = false
+    @State private var showsMainSidebarToggleFadeExclusion = true
+    @State private var showsSidebarToggleFadeExclusion = false
+    @State private var sidebarVisibilityTransitionTask: Task<Void, Never>?
 
     let aiService = AIService()
     private let maxImageAttachmentCount = 4
@@ -483,6 +486,8 @@ struct ContentView: View {
     private let topConversationTitleButtonWidth: CGFloat = 148
     private let topFadeBottomPadding: CGFloat = 155
     private let topScrollContentGap: CGFloat = 70
+    private let sidebarTransitionDuration: Double = 0.22
+    private let sidebarTransitionDelayNanoseconds: UInt64 = 220_000_000
 
     private var inputGlassTint: Color {
         colorScheme == .dark ? Color.white.opacity(0.04) : Color.white.opacity(0.14)
@@ -676,7 +681,8 @@ struct ContentView: View {
     private func topFadeBackdrop(
         topSafeAreaInset: CGFloat,
         exclusions: [GlassFadeExclusion],
-        proxy: GeometryProxy
+        proxy: GeometryProxy,
+        showsSidebarToggleExclusion: Bool
     ) -> some View {
         ZStack(alignment: .topLeading) {
             topFade
@@ -684,16 +690,18 @@ struct ContentView: View {
                 .offset(y: -topSafeAreaInset)
                 .ignoresSafeArea(edges: .top)
 
-            Capsule()
-                .frame(
-                    width: max(topControlSize - topGlassFadeExclusionInset * 2, 0),
-                    height: max(topControlSize - topGlassFadeExclusionInset * 2, 0)
-                )
-                .position(
-                    x: topControlsHorizontalPadding + topControlSize / 2,
-                    y: topControlsTopPadding + topControlSize / 2
-                )
-                .blendMode(.destinationOut)
+            if showsSidebarToggleExclusion {
+                Capsule()
+                    .frame(
+                        width: max(topControlSize - topGlassFadeExclusionInset * 2, 0),
+                        height: max(topControlSize - topGlassFadeExclusionInset * 2, 0)
+                    )
+                    .position(
+                        x: topControlsHorizontalPadding + topControlSize / 2,
+                        y: topControlsTopPadding + topControlSize / 2
+                    )
+                    .blendMode(.destinationOut)
+            }
 
             ForEach(Array(exclusions.enumerated()), id: \.offset) { _, exclusion in
                 let rect = proxy[exclusion.bounds]
@@ -711,7 +719,7 @@ struct ContentView: View {
         .allowsHitTesting(false)
     }
 
-    private func topChrome(topSafeAreaInset: CGFloat) -> some View {
+    private func topChrome(topSafeAreaInset: CGFloat, showsSidebarToggleExclusion: Bool) -> some View {
         topFloatingControls
             .frame(maxWidth: .infinity, maxHeight: topFadeHeight, alignment: .top)
             .backgroundPreferenceValue(GlassFadeExclusionPreferenceKey.self) { exclusions in
@@ -719,7 +727,8 @@ struct ContentView: View {
                     topFadeBackdrop(
                         topSafeAreaInset: topSafeAreaInset,
                         exclusions: exclusions,
-                        proxy: proxy
+                        proxy: proxy,
+                        showsSidebarToggleExclusion: showsSidebarToggleExclusion
                     )
                 }
             }
@@ -762,13 +771,13 @@ struct ContentView: View {
                 mainContent(topSafeAreaInset: geometry.safeAreaInsets.top)
                     .disabled(showConversationSidebar)
                     .offset(x: showConversationSidebar ? sidebarWidth : 0)
-                    .animation(.easeOut(duration: 0.22), value: showConversationSidebar)
+                    .animation(.easeOut(duration: sidebarTransitionDuration), value: showConversationSidebar)
 
                 if showConversationSidebar {
                     Color.black.opacity(0.22)
                         .ignoresSafeArea()
                         .onTapGesture {
-                            showConversationSidebar = false
+                            setConversationSidebarVisibility(false)
                         }
                 }
 
@@ -784,6 +793,7 @@ struct ContentView: View {
                     conversations: conversations,
                     selectedConversationID: selectedConversationID,
                     topSafeAreaInset: geometry.safeAreaInsets.top,
+                    showsSidebarToggleFadeExclusion: showsSidebarToggleFadeExclusion,
                     onSelect: selectConversation,
                     onCreate: createConversation,
                     onDelete: deleteConversation,
@@ -792,7 +802,7 @@ struct ContentView: View {
                 .frame(width: sidebarWidth)
                 .ignoresSafeArea(edges: [.top, .bottom])
                 .offset(x: showConversationSidebar ? 0 : -sidebarWidth)
-                .animation(.easeOut(duration: 0.22), value: showConversationSidebar)
+                .animation(.easeOut(duration: sidebarTransitionDuration), value: showConversationSidebar)
 
                 sidebarToggleControl
             }
@@ -829,6 +839,35 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .inactive || newPhase == .background else { return }
             persistApplicationStateForLifecycle()
+        }
+    }
+
+    private func setConversationSidebarVisibility(_ isVisible: Bool) {
+        guard showConversationSidebar != isVisible else { return }
+
+        sidebarVisibilityTransitionTask?.cancel()
+
+        if isVisible {
+            showsMainSidebarToggleFadeExclusion = false
+            showsSidebarToggleFadeExclusion = false
+            showConversationSidebar = true
+
+            sidebarVisibilityTransitionTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: sidebarTransitionDelayNanoseconds)
+                guard !Task.isCancelled, showConversationSidebar else { return }
+                showsSidebarToggleFadeExclusion = true
+                sidebarVisibilityTransitionTask = nil
+            }
+        } else {
+            showsSidebarToggleFadeExclusion = false
+            showConversationSidebar = false
+
+            sidebarVisibilityTransitionTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: sidebarTransitionDelayNanoseconds)
+                guard !Task.isCancelled, !showConversationSidebar else { return }
+                showsMainSidebarToggleFadeExclusion = true
+                sidebarVisibilityTransitionTask = nil
+            }
         }
     }
 
@@ -942,7 +981,10 @@ struct ContentView: View {
                 }
             }
 
-            topChrome(topSafeAreaInset: topSafeAreaInset)
+            topChrome(
+                topSafeAreaInset: topSafeAreaInset,
+                showsSidebarToggleExclusion: showsMainSidebarToggleFadeExclusion
+            )
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             inputBar
@@ -1034,7 +1076,7 @@ struct ContentView: View {
                 topGlassControl {
                     Button {
                         hideKeyboard()
-                        showConversationSidebar.toggle()
+                        setConversationSidebarVisibility(!showConversationSidebar)
                     } label: {
                         topIconLabel(systemName: "sidebar.left")
                     }
@@ -1285,7 +1327,7 @@ struct ContentView: View {
                    value.translation.width > 46,
                    abs(value.translation.width) > abs(value.translation.height) * 1.6 {
                     hideKeyboard()
-                    showConversationSidebar = true
+                    setConversationSidebarVisibility(true)
                 }
             }
     }
@@ -1296,7 +1338,7 @@ struct ContentView: View {
                 if showConversationSidebar,
                    value.translation.width < -46,
                    abs(value.translation.width) > abs(value.translation.height) * 1.4 {
-                    showConversationSidebar = false
+                    setConversationSidebarVisibility(false)
                 }
             }
     }
@@ -2164,7 +2206,7 @@ struct ContentView: View {
         ConversationStore.saveSelectedConversationID(conversation.id)
 
         if closesSidebar {
-            showConversationSidebar = false
+            setConversationSidebarVisibility(false)
         }
     }
 
@@ -2175,7 +2217,7 @@ struct ContentView: View {
     private func createConversation(closesSidebar: Bool) {
         guard canCreateConversation else {
             if closesSidebar {
-                showConversationSidebar = false
+                setConversationSidebarVisibility(false)
             }
             return
         }
@@ -2188,7 +2230,7 @@ struct ContentView: View {
 
         if currentConversationIsBlank {
             if closesSidebar {
-                showConversationSidebar = false
+                setConversationSidebarVisibility(false)
             }
             return
         }
@@ -2224,7 +2266,7 @@ struct ContentView: View {
         ConversationStore.saveConversations(conversations)
 
         if closesSidebar {
-            showConversationSidebar = false
+            setConversationSidebarVisibility(false)
         }
     }
 
@@ -2254,7 +2296,7 @@ struct ContentView: View {
             editingMessageID = nil
             streamingTokenBuffer.reset()
             isFlushScheduled = false
-            showConversationSidebar = false
+            setConversationSidebarVisibility(false)
             aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
             ConversationStore.saveSelectedConversationID(conversation.id)
             ConversationStore.saveConversations(conversations)
