@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ConversationSidebarView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @State private var isSuppressingRowActions = false
+    @State private var rowActionSuppressionResetTask: Task<Void, Never>?
 
     let conversations: [AIConversation]
     let selectedConversationID: UUID?
@@ -16,6 +18,9 @@ struct ConversationSidebarView: View {
     private let topControlsHorizontalPadding: CGFloat = 16
     private let topFadeBottomPadding: CGFloat = 155
     private let topFadeVerticalOffset: CGFloat = -55
+    private let rowActionSuppressionMinimumDistance: CGFloat = 10
+    private let rowActionSuppressionHorizontalRatio: CGFloat = 1.2
+    private let rowActionSuppressionResetDelayNanoseconds: UInt64 = 180_000_000
 
     private var glassTint: Color {
         colorScheme == .dark ? Color.white.opacity(0.04) : Color.white.opacity(0.14)
@@ -75,6 +80,7 @@ struct ConversationSidebarView: View {
                     .padding(8)
                     .padding(.top, topScrollContentPadding(topSafeAreaInset: topSafeAreaInset))
                 }
+                .simultaneousGesture(rowActionSuppressionGesture)
 
                 topFade(topSafeAreaInset: topSafeAreaInset)
                     .frame(width: sidebarWidth, height: topSafeAreaInset + topFadeHeight)
@@ -138,11 +144,44 @@ struct ConversationSidebarView: View {
             .contentShape(Circle())
     }
 
+    private var rowActionSuppressionGesture: some Gesture {
+        DragGesture(minimumDistance: rowActionSuppressionMinimumDistance)
+            .onChanged { value in
+                if isHorizontalRowSwipe(value.translation) {
+                    rowActionSuppressionResetTask?.cancel()
+                    isSuppressingRowActions = true
+                }
+            }
+            .onEnded { value in
+                if isHorizontalRowSwipe(value.translation) {
+                    isSuppressingRowActions = true
+                }
+
+                scheduleRowActionSuppressionReset()
+            }
+    }
+
+    private func isHorizontalRowSwipe(_ translation: CGSize) -> Bool {
+        abs(translation.width) >= rowActionSuppressionMinimumDistance
+            && abs(translation.width) > abs(translation.height) * rowActionSuppressionHorizontalRatio
+    }
+
+    private func scheduleRowActionSuppressionReset() {
+        rowActionSuppressionResetTask?.cancel()
+        rowActionSuppressionResetTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: rowActionSuppressionResetDelayNanoseconds)
+            guard !Task.isCancelled else { return }
+            isSuppressingRowActions = false
+            rowActionSuppressionResetTask = nil
+        }
+    }
+
     private func conversationRow(_ conversation: AIConversation, rowWidth: CGFloat) -> some View {
         let isSelected = conversation.id == selectedConversationID
 
         return HStack(spacing: 8) {
             Button {
+                guard !isSuppressingRowActions else { return }
                 onSelect(conversation.id)
             } label: {
                 VStack(alignment: .leading, spacing: 4) {
@@ -163,6 +202,7 @@ struct ConversationSidebarView: View {
             .buttonStyle(.plain)
 
             Button(role: .destructive) {
+                guard !isSuppressingRowActions else { return }
                 onDelete(conversation.id)
             } label: {
                 Image(systemName: "trash")
