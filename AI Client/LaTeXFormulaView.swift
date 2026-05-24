@@ -298,6 +298,7 @@ private enum LaTeXWebViewSupport {
 
     static func makeWebView(coordinator: LaTeXWebViewCoordinator, scrollsHorizontally: Bool) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.add(coordinator, name: messageName)
         configuration.setURLSchemeHandler(LaTeXWebViewResourceHandler(), forURLScheme: resourceScheme)
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
