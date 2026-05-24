@@ -3,6 +3,56 @@ import Foundation
 struct ChatImageAttachment: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var dataURL: String
+
+    init(id: UUID = UUID(), dataURL: String) {
+        self.id = id
+        self.dataURL = dataURL
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        dataURL = try container.decode(String.self, forKey: .dataURL)
+    }
+}
+
+struct ChatFileAttachment: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var name: String
+    var typeIdentifier: String?
+    var byteCount: Int
+    var characterCount: Int
+    var extractedText: String
+    var isTruncated: Bool
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        typeIdentifier: String?,
+        byteCount: Int,
+        characterCount: Int,
+        extractedText: String,
+        isTruncated: Bool
+    ) {
+        self.id = id
+        self.name = name
+        self.typeIdentifier = typeIdentifier
+        self.byteCount = byteCount
+        self.characterCount = characterCount
+        self.extractedText = extractedText
+        self.isTruncated = isTruncated
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        typeIdentifier = try container.decodeIfPresent(String.self, forKey: .typeIdentifier)
+        byteCount = try container.decodeIfPresent(Int.self, forKey: .byteCount) ?? 0
+        extractedText = try container.decode(String.self, forKey: .extractedText)
+        characterCount = try container.decodeIfPresent(Int.self, forKey: .characterCount) ?? extractedText.count
+        isTruncated = try container.decodeIfPresent(Bool.self, forKey: .isTruncated) ?? false
+    }
 }
 
 struct ChatMessage: Identifiable, Codable, Equatable {
@@ -10,11 +60,50 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     let role: String
     var content: String
     var imageAttachments: [ChatImageAttachment] = []
+    var fileAttachments: [ChatFileAttachment] = []
     var contentChunks: [String] = []
     var reasoningContent: String = ""
     var reasoningChunks: [String] = []
     var isReasoningExpanded: Bool = false
     var isStopped: Bool = false
+
+    init(
+        id: UUID = UUID(),
+        role: String,
+        content: String,
+        imageAttachments: [ChatImageAttachment] = [],
+        fileAttachments: [ChatFileAttachment] = [],
+        contentChunks: [String] = [],
+        reasoningContent: String = "",
+        reasoningChunks: [String] = [],
+        isReasoningExpanded: Bool = false,
+        isStopped: Bool = false
+    ) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.imageAttachments = imageAttachments
+        self.fileAttachments = fileAttachments
+        self.contentChunks = contentChunks
+        self.reasoningContent = reasoningContent
+        self.reasoningChunks = reasoningChunks
+        self.isReasoningExpanded = isReasoningExpanded
+        self.isStopped = isStopped
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        role = try container.decode(String.self, forKey: .role)
+        content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        imageAttachments = try container.decodeIfPresent([ChatImageAttachment].self, forKey: .imageAttachments) ?? []
+        fileAttachments = try container.decodeIfPresent([ChatFileAttachment].self, forKey: .fileAttachments) ?? []
+        contentChunks = try container.decodeIfPresent([String].self, forKey: .contentChunks) ?? []
+        reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent) ?? ""
+        reasoningChunks = try container.decodeIfPresent([String].self, forKey: .reasoningChunks) ?? []
+        isReasoningExpanded = try container.decodeIfPresent(Bool.self, forKey: .isReasoningExpanded) ?? false
+        isStopped = try container.decodeIfPresent(Bool.self, forKey: .isStopped) ?? false
+    }
     
     var normalized: ChatMessage {
         var message = self

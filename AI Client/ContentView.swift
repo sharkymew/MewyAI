@@ -457,9 +457,11 @@ struct ContentView: View {
     @State private var markdownRenderTasks: [UUID: Task<Void, Never>] = [:]
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isPhotoPickerPresented = false
+    @State private var isFileImporterPresented = false
     @State private var pendingImageAttachments: [ChatImageAttachment] = []
+    @State private var pendingFileAttachments: [ChatFileAttachment] = []
     @State private var imageSelectionError: String?
-    @State private var isImageDropTargeted = false
+    @State private var isAttachmentDropTargeted = false
     @State private var activeMessageActionID: UUID?
     @State private var didTapMessageBubble = false
     @State private var editingMessageID: UUID?
@@ -472,6 +474,7 @@ struct ContentView: View {
 
     let aiService = AIService()
     private let maxImageAttachmentCount = 4
+    private let maxFileAttachmentCount = 5
     private let inputBarBottomPadding: CGFloat = 8
     private let inputBarTopPadding: CGFloat = 8
     private let inputBarHorizontalPadding: CGFloat = 12
@@ -757,6 +760,7 @@ struct ContentView: View {
     private var canSendMessage: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !pendingImageAttachments.isEmpty
+            || !pendingFileAttachments.isEmpty
     }
 
     private var isEditingMessage: Bool {
@@ -821,6 +825,12 @@ struct ContentView: View {
             selection: $selectedPhotoItems,
             maxSelectionCount: maxImageAttachmentCount,
             matching: .images
+        )
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: ChatFileAttachmentReader.supportedDocumentTypes,
+            allowsMultipleSelection: true,
+            onCompletion: loadSelectedFiles
         )
         .onChange(of: showConfiguration) { _, isPresented in
             if !isPresented {
@@ -999,8 +1009,8 @@ struct ContentView: View {
     private var inputBar: some View {
         inputGlassContainer {
             VStack(alignment: .leading, spacing: 8) {
-                if !pendingImageAttachments.isEmpty {
-                    imageAttachmentPreview
+                if !pendingImageAttachments.isEmpty || !pendingFileAttachments.isEmpty {
+                    pendingAttachmentPreview
                 }
 
                 if let imageSelectionError {
@@ -1025,14 +1035,14 @@ struct ContentView: View {
         .overlay(
             RoundedRectangle(cornerRadius: inputBarCornerRadius, style: .continuous)
                 .stroke(
-                    isImageDropTargeted ? Color.accentColor.opacity(0.56) : Color.secondary.opacity(0.12),
-                    lineWidth: isImageDropTargeted ? 2 : 1
+                    isAttachmentDropTargeted ? Color.accentColor.opacity(0.56) : Color.secondary.opacity(0.12),
+                    lineWidth: isAttachmentDropTargeted ? 2 : 1
                 )
         )
         .onDrop(
-            of: [UTType.image.identifier],
-            isTargeted: $isImageDropTargeted,
-            perform: handleDroppedImages
+            of: [UTType.image.identifier] + ChatFileAttachmentReader.dropTypeIdentifiers,
+            isTargeted: $isAttachmentDropTargeted,
+            perform: handleDroppedAttachments
         )
         .transaction { transaction in
             transaction.animation = nil
@@ -1177,6 +1187,18 @@ struct ContentView: View {
         }
     }
 
+    private var pendingAttachmentPreview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !pendingImageAttachments.isEmpty {
+                imageAttachmentPreview
+            }
+
+            if !pendingFileAttachments.isEmpty {
+                fileAttachmentPreview
+            }
+        }
+    }
+
     private var imageAttachmentPreview: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -1200,6 +1222,20 @@ struct ContentView: View {
             }
             .padding(.horizontal, 6)
             .padding(.top, 6)
+        }
+    }
+
+    private var fileAttachmentPreview: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(pendingFileAttachments) { attachment in
+                    ChatFileAttachmentChip(attachment: attachment) {
+                        removePendingFile(attachment.id)
+                    }
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.top, 2)
         }
     }
 
@@ -1281,6 +1317,12 @@ struct ContentView: View {
             }
             .disabled(!currentConfiguration.selectedModelSupportsImages)
 
+            Button {
+                isFileImporterPresented = true
+            } label: {
+                Label("上传文件", systemImage: "doc")
+            }
+
             if currentConfiguration.selectedModelSupportsReasoning {
                 Divider()
 
@@ -1360,6 +1402,7 @@ struct ContentView: View {
         messages.isEmpty
             && inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pendingImageAttachments.isEmpty
+            && pendingFileAttachments.isEmpty
     }
 
     private var currentConfiguration: AIConfiguration {
@@ -1388,10 +1431,12 @@ struct ContentView: View {
     func sendMessage() {
         let userText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageAttachments = pendingImageAttachments
+        let fileAttachments = pendingFileAttachments
         ensureCurrentConversation()
         startStreamingResponse(
             userText: userText,
             imageAttachments: imageAttachments,
+            fileAttachments: fileAttachments,
             contextMessages: messages,
             appendsUserMessage: true
         )
@@ -1400,6 +1445,7 @@ struct ContentView: View {
     private func startStreamingResponse(
         userText: String,
         imageAttachments: [ChatImageAttachment],
+        fileAttachments: [ChatFileAttachment],
         contextMessages: [ChatMessage],
         appendsUserMessage: Bool
     ) {
@@ -1411,7 +1457,7 @@ struct ContentView: View {
         let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
 
-        guard !userText.isEmpty || !imageAttachments.isEmpty else { return }
+        guard !userText.isEmpty || !imageAttachments.isEmpty || !fileAttachments.isEmpty else { return }
 
         guard imageAttachments.isEmpty || configuration.selectedModelSupportsImages else {
             appendAssistantError("当前模型不支持图片输入，请切换到支持图片的多模态模型，或在配置页为该模型开启“支持图片”。")
@@ -1445,7 +1491,8 @@ struct ContentView: View {
                 ChatMessage(
                     role: "user",
                     content: userText,
-                    imageAttachments: imageAttachments
+                    imageAttachments: imageAttachments,
+                    fileAttachments: fileAttachments
                 )
             )
         }
@@ -1462,6 +1509,7 @@ struct ContentView: View {
         aiService.sendStreamingMessage(
             message: userText,
             imageAttachments: imageAttachments,
+            fileAttachments: fileAttachments,
             baseURL: trimmedBaseURL,
             apiKey: trimmedAPIKey,
             customHeaders: trimmedCustomHeaders,
@@ -1542,6 +1590,7 @@ struct ContentView: View {
     private func clearInputState() {
         inputText = ""
         pendingImageAttachments = []
+        pendingFileAttachments = []
         selectedPhotoItems = []
         imageSelectionError = nil
         editingMessageID = nil
@@ -1562,7 +1611,12 @@ struct ContentView: View {
         transaction.disablesAnimations = true
 
         withTransaction(transaction) {
-            activateEditingInput(for: id, text: message.content, images: message.imageAttachments)
+            activateEditingInput(
+                for: id,
+                text: message.content,
+                images: message.imageAttachments,
+                files: message.fileAttachments
+            )
             imageSelectionError = nil
             activeMessageActionID = nil
         }
@@ -1578,10 +1632,16 @@ struct ContentView: View {
         }
     }
 
-    private func activateEditingInput(for id: UUID, text: String, images: [ChatImageAttachment]) {
+    private func activateEditingInput(
+        for id: UUID,
+        text: String,
+        images: [ChatImageAttachment],
+        files: [ChatFileAttachment]
+    ) {
         editingMessageID = id
         inputText = text
         pendingImageAttachments = images
+        pendingFileAttachments = files
         selectedPhotoItems = []
     }
 
@@ -1609,6 +1669,7 @@ struct ContentView: View {
 
         messages[index].content = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         messages[index].imageAttachments = pendingImageAttachments
+        messages[index].fileAttachments = pendingFileAttachments
         invalidateMarkdownCache(for: editingMessageID)
         persistCurrentConversation()
         clearInputState()
@@ -1624,8 +1685,10 @@ struct ContentView: View {
 
         let editedText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let editedImages = pendingImageAttachments
+        let editedFiles = pendingFileAttachments
         messages[index].content = editedText
         messages[index].imageAttachments = editedImages
+        messages[index].fileAttachments = editedFiles
         messages.removeSubrange((index + 1)..<messages.count)
         pruneMarkdownCache()
         let context = Array(messages.prefix(index))
@@ -1634,6 +1697,7 @@ struct ContentView: View {
         startStreamingResponse(
             userText: editedText,
             imageAttachments: editedImages,
+            fileAttachments: editedFiles,
             contextMessages: context,
             appendsUserMessage: false
         )
@@ -1658,6 +1722,7 @@ struct ContentView: View {
         startStreamingResponse(
             userText: userMessage.content,
             imageAttachments: userMessage.imageAttachments,
+            fileAttachments: userMessage.fileAttachments,
             contextMessages: context,
             appendsUserMessage: false
         )
@@ -2002,11 +2067,6 @@ struct ContentView: View {
     }
 
     private func handleDroppedImages(_ providers: [NSItemProvider]) -> Bool {
-        guard currentConfiguration.selectedModelSupportsImages else {
-            imageSelectionError = "当前模型不支持图片输入。"
-            return false
-        }
-
         let imageProviders = providers.filter { provider in
             provider.registeredTypeIdentifiers.contains { identifier in
                 UTType(identifier)?.conforms(to: .image) == true
@@ -2014,6 +2074,12 @@ struct ContentView: View {
         }
 
         guard !imageProviders.isEmpty else { return false }
+
+        guard currentConfiguration.selectedModelSupportsImages else {
+            imageSelectionError = "当前模型不支持图片输入，已忽略图片。"
+            return false
+        }
+
         imageSelectionError = nil
 
         Task {
@@ -2032,6 +2098,151 @@ struct ContentView: View {
         }
 
         return true
+    }
+
+    private func loadSelectedFiles(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard !urls.isEmpty else { return }
+
+            Task {
+                var attachments = [ChatFileAttachment]()
+                var firstError: String?
+
+                for url in urls.prefix(maxFileAttachmentCount) {
+                    do {
+                        attachments.append(try ChatFileAttachmentReader.attachment(from: url))
+                    } catch {
+                        if firstError == nil {
+                            firstError = error.localizedDescription
+                        }
+                    }
+                }
+
+                appendPendingFileAttachments(attachments, source: "选择", fallbackError: firstError)
+            }
+        case .failure(let error):
+            let nsError = error as NSError
+            guard nsError.code != NSUserCancelledError else { return }
+            imageSelectionError = "文件选择失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func appendPendingFileAttachments(
+        _ attachments: [ChatFileAttachment],
+        source: String,
+        fallbackError: String? = nil
+    ) {
+        guard !attachments.isEmpty else {
+            imageSelectionError = fallbackError ?? "\(source)文件读取失败。"
+            return
+        }
+
+        let remainingCount = maxFileAttachmentCount - pendingFileAttachments.count
+        guard remainingCount > 0 else {
+            imageSelectionError = "最多只能添加 \(maxFileAttachmentCount) 个文件。"
+            return
+        }
+
+        pendingFileAttachments.append(contentsOf: attachments.prefix(remainingCount))
+
+        if attachments.count > remainingCount {
+            imageSelectionError = "最多只能添加 \(maxFileAttachmentCount) 个文件，已保留前 \(maxFileAttachmentCount) 个。"
+        } else {
+            imageSelectionError = fallbackError
+        }
+    }
+
+    private func handleDroppedAttachments(_ providers: [NSItemProvider]) -> Bool {
+        let handledImages = handleDroppedImages(providers)
+        let handledFiles = handleDroppedFiles(providers)
+        return handledImages || handledFiles
+    }
+
+    private func handleDroppedFiles(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter { provider in
+            !providerContainsImage(provider) && providerContainsReadableFile(provider)
+        }
+
+        guard !fileProviders.isEmpty else { return false }
+
+        Task {
+            var attachments = [ChatFileAttachment]()
+
+            for provider in fileProviders.prefix(maxFileAttachmentCount) {
+                guard let attachment = await fileAttachment(from: provider) else { continue }
+                attachments.append(attachment)
+            }
+
+            appendPendingFileAttachments(attachments, source: "拖拽")
+        }
+
+        return true
+    }
+
+    private func providerContainsImage(_ provider: NSItemProvider) -> Bool {
+        provider.registeredTypeIdentifiers.contains { identifier in
+            UTType(identifier)?.conforms(to: .image) == true
+        }
+    }
+
+    private func providerContainsReadableFile(_ provider: NSItemProvider) -> Bool {
+        provider.registeredTypeIdentifiers.contains { identifier in
+            isReadableFileIdentifier(identifier)
+        }
+    }
+
+    private func fileAttachment(from provider: NSItemProvider) async -> ChatFileAttachment? {
+        if provider.registeredTypeIdentifiers.contains(UTType.fileURL.identifier),
+           let url = await fileURL(from: provider) {
+            return try? ChatFileAttachmentReader.attachment(from: url)
+        }
+
+        guard let identifier = provider.registeredTypeIdentifiers.first(where: { identifier in
+            isReadableFileIdentifier(identifier)
+        }) else {
+            return nil
+        }
+
+        return await withCheckedContinuation { continuation in
+            provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, _ in
+                guard let url else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                continuation.resume(returning: try? ChatFileAttachmentReader.attachment(from: url))
+            }
+        }
+    }
+
+    private func isReadableFileIdentifier(_ identifier: String) -> Bool {
+        guard identifier != UTType.fileURL.identifier else { return true }
+        guard let type = UTType(identifier) else { return false }
+
+        return ChatFileAttachmentReader.supportedDocumentTypes.contains { supportedType in
+            type.conforms(to: supportedType) || supportedType.conforms(to: type)
+        }
+    }
+
+    private func fileURL(from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                if let url = item as? URL {
+                    continuation.resume(returning: url)
+                    return
+                }
+
+                if let data = item as? Data,
+                   let urlString = String(data: data, encoding: .utf8),
+                   let url = URL(string: urlString) {
+                    continuation.resume(returning: url)
+                    return
+                }
+
+                continuation.resume(returning: nil)
+            }
+        }
     }
 
     private func imageData(from provider: NSItemProvider) async -> Data? {
@@ -2072,6 +2283,10 @@ struct ContentView: View {
         if pendingImageAttachments.isEmpty {
             selectedPhotoItems = []
         }
+    }
+
+    private func removePendingFile(_ id: UUID) {
+        pendingFileAttachments.removeAll { $0.id == id }
     }
 
     private func chatScrollBottomDistance(bottomGeometry: GeometryProxy, viewportHeight: CGFloat) -> CGFloat {
@@ -2189,6 +2404,7 @@ struct ContentView: View {
         resetMarkdownCache(for: messages)
         inputText = ""
         pendingImageAttachments = []
+        pendingFileAttachments = []
         selectedPhotoItems = []
         imageSelectionError = nil
         activeAssistantMessageID = nil
@@ -2249,6 +2465,7 @@ struct ContentView: View {
         resetMarkdownCache(for: messages)
         inputText = ""
         pendingImageAttachments = []
+        pendingFileAttachments = []
         selectedPhotoItems = []
         imageSelectionError = nil
         activeAssistantMessageID = nil
@@ -2284,6 +2501,7 @@ struct ContentView: View {
             resetMarkdownCache(for: messages)
             inputText = ""
             pendingImageAttachments = []
+            pendingFileAttachments = []
             selectedPhotoItems = []
             imageSelectionError = nil
             activeAssistantMessageID = nil
@@ -2315,6 +2533,7 @@ struct ContentView: View {
             messages = nextConversation.messages
             resetMarkdownCache(for: messages)
             pendingImageAttachments = []
+            pendingFileAttachments = []
             selectedPhotoItems = []
             imageSelectionError = nil
             activeAssistantMessageID = nil
@@ -2521,6 +2740,10 @@ struct MessageBubble: View {
                 messageImages
             }
 
+            if !message.fileAttachments.isEmpty {
+                messageFiles
+            }
+
             if !message.content.isEmpty {
                 messageContentBubble
                     .fixedSize(horizontal: false, vertical: true)
@@ -2590,6 +2813,18 @@ struct MessageBubble: View {
             }
         }
         .frame(width: imageGridWidth, alignment: .trailing)
+        .onTapGesture {
+            onSelect()
+        }
+    }
+
+    private var messageFiles: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            ForEach(message.fileAttachments) { attachment in
+                ChatFileAttachmentChip(attachment: attachment)
+            }
+        }
+        .frame(maxWidth: 300, alignment: .trailing)
         .onTapGesture {
             onSelect()
         }

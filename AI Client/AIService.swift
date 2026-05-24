@@ -40,21 +40,81 @@ struct ChatRequestMessage: Encodable {
         self.content = .text(text)
     }
     
-    init(role: String, text: String, imageAttachments: [ChatImageAttachment]) {
+    init(
+        role: String,
+        text: String,
+        imageAttachments: [ChatImageAttachment],
+        fileAttachments: [ChatFileAttachment] = []
+    ) {
         self.role = role
+        let requestText = Self.textByAppendingFileContext(text, fileAttachments: fileAttachments)
         
         guard !imageAttachments.isEmpty else {
-            content = .text(text)
+            content = .text(requestText)
             return
         }
         
         var parts = [ChatRequestContent.Part]()
-        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedText = requestText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedText.isEmpty {
             parts.append(.text(trimmedText))
         }
         parts.append(contentsOf: imageAttachments.map { .imageURL($0.dataURL) })
         content = .parts(parts)
+    }
+
+    private static func textByAppendingFileContext(
+        _ text: String,
+        fileAttachments: [ChatFileAttachment]
+    ) -> String {
+        guard !fileAttachments.isEmpty else { return text }
+
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userText = trimmedText.isEmpty
+            ? "请根据上传文件内容回答。"
+            : trimmedText
+        let fileContext = formattedFileContext(from: fileAttachments)
+
+        return [userText, fileContext]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+    }
+
+    private static func formattedFileContext(from attachments: [ChatFileAttachment]) -> String {
+        let maxTotalCharacters = 60_000
+        var remainingCharacters = maxTotalCharacters
+        var sections = [
+            "以下是用户上传文件的本地文本提取内容。回答时优先依据用户问题引用相关文件内容；文件内容可能被截断。"
+        ]
+
+        for attachment in attachments where remainingCharacters > 0 {
+            let text = attachment.extractedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+
+            let limitedText = String(text.prefix(remainingCharacters))
+            remainingCharacters -= limitedText.count
+            let truncationNote = attachment.isTruncated || limitedText.count < text.count ? " truncated=\"true\"" : ""
+            let typeAttribute = attachment.typeIdentifier.map { " type=\"\(escapedAttribute($0))\"" } ?? ""
+            let escapedName = escapedAttribute(attachment.name)
+
+            sections.append(
+                """
+                <uploaded_file name="\(escapedName)"\(typeAttribute) characters="\(attachment.characterCount)"\(truncationNote)>
+                \(limitedText)
+                </uploaded_file>
+                """
+            )
+        }
+
+        return sections.joined(separator: "\n\n")
+    }
+
+    private static func escapedAttribute(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
     }
 }
 
@@ -233,14 +293,17 @@ class AIService {
             contentsOf: messages.compactMap { message in
                 let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
                 let hasImages = !message.imageAttachments.isEmpty
-                guard (hasImages || !content.isEmpty), message.role == "user" || message.role == "assistant" else {
+                let hasFiles = !message.fileAttachments.isEmpty
+                guard (hasImages || hasFiles || !content.isEmpty),
+                      message.role == "user" || message.role == "assistant" else {
                     return nil
                 }
                 
                 return ChatRequestMessage(
                     role: message.role,
                     text: content,
-                    imageAttachments: message.role == "user" ? message.imageAttachments : []
+                    imageAttachments: message.role == "user" ? message.imageAttachments : [],
+                    fileAttachments: message.role == "user" ? message.fileAttachments : []
                 )
             }
         )
@@ -411,6 +474,7 @@ class AIService {
     func sendMessage(
         message: String,
         imageAttachments: [ChatImageAttachment] = [],
+        fileAttachments: [ChatFileAttachment] = [],
         baseURL: String,
         apiKey: String,
         customHeaders: String,
@@ -428,7 +492,8 @@ class AIService {
             ChatRequestMessage(
                 role: "user",
                 text: message,
-                imageAttachments: imageAttachments
+                imageAttachments: imageAttachments,
+                fileAttachments: fileAttachments
             )
         )
         
@@ -488,6 +553,7 @@ class AIService {
     func sendStreamingMessage(
         message: String,
         imageAttachments: [ChatImageAttachment],
+        fileAttachments: [ChatFileAttachment],
         baseURL: String,
         apiKey: String,
         customHeaders: String,
@@ -511,7 +577,8 @@ class AIService {
             ChatRequestMessage(
                 role: "user",
                 text: message,
-                imageAttachments: imageAttachments
+                imageAttachments: imageAttachments,
+                fileAttachments: fileAttachments
             )
         )
         
