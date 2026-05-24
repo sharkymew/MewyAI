@@ -458,6 +458,7 @@ struct ContentView: View {
     private let topControlsHorizontalPadding: CGFloat = 16
     private let topConversationTitleButtonWidth: CGFloat = 148
     private let topFadeBottomPadding: CGFloat = 155
+    private let topScrollContentGap: CGFloat = 70
 
     private var inputGlassTint: Color {
         colorScheme == .dark ? Color.white.opacity(0.04) : Color.white.opacity(0.14)
@@ -494,7 +495,7 @@ struct ContentView: View {
     }
 
     private var topScrollContentPadding: CGFloat {
-        topFadeHeight + 18
+        topControlsTopPadding + topControlSize + topScrollContentGap
     }
 
     @ViewBuilder
@@ -3137,13 +3138,14 @@ nonisolated struct MarkdownRenderCacheEntry: @unchecked Sendable {
 
     nonisolated static func make(content: String, style: MarkdownRenderStyle) async -> MarkdownRenderCacheEntry {
         let signature = Self.signature(for: content, style: style)
-        let renderedMarkdown = ChatMarkdownPreprocessor.preprocess(content)
+        let renderedMarkdown = content
         var preparedSegments: [PreparedChatMarkdownSegment] = []
 
-        for segment in ChatMarkdownBlockSegment.split(renderedMarkdown) {
+        for segment in ChatMarkdownBlockSegment.split(content) {
             switch segment.kind {
             case let .text(text):
-                let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let preprocessedText = ChatMarkdownPreprocessor.preprocess(text)
+                let trimmedText = preprocessedText.trimmingCharacters(in: .whitespacesAndNewlines)
                 let blocks = trimmedText.isEmpty ? [] : await PreparedMarkdownBlockRenderer.renderBlocks(
                     markdown: trimmedText,
                     style: style
