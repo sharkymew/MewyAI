@@ -9,6 +9,7 @@ struct ConversationSidebarView: View {
     let selectedConversationID: UUID?
     let topSafeAreaInset: CGFloat
     let showsSidebarToggleFadeExclusion: Bool
+    let showsCloseButton: Bool
     let onSelect: (UUID) -> Void
     let onClose: () -> Void
     let onOpenConfiguration: () -> Void
@@ -163,12 +164,14 @@ struct ConversationSidebarView: View {
 
     private func topFloatingControls(topSafeAreaInset: CGFloat) -> some View {
         HStack(spacing: 8) {
-            topGlassControl {
-                Button(action: onClose) {
-                    topIconLabel(systemName: "sidebar.left")
+            if showsCloseButton {
+                topGlassControl {
+                    Button(action: onClose) {
+                        topIconLabel(systemName: "sidebar.left")
+                    }
                 }
+                .accessibilityLabel("关闭对话列表")
             }
-            .accessibilityLabel("关闭对话列表")
 
             Spacer(minLength: 0)
 

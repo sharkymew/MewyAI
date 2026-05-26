@@ -60,6 +60,16 @@ private struct ChatScrollBottomDistancePreferenceKey: PreferenceKey {
     }
 }
 
+private struct SidebarLayout {
+    let sidebarWidth: CGFloat
+    let mainContentWidth: CGFloat
+    let usesPersistentSidebar: Bool
+
+    func mainContentOffsetX(isOverlayVisible: Bool) -> CGFloat {
+        usesPersistentSidebar || isOverlayVisible ? sidebarWidth : 0
+    }
+}
+
 struct FixedTopGlassButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
@@ -489,6 +499,9 @@ struct ContentView: View {
     private let topConversationTitleButtonWidth: CGFloat = 148
     private let topFadeBottomPadding: CGFloat = 155
     private let topScrollContentGap: CGFloat = 70
+    private let persistentSidebarWidthRatio: CGFloat = 0.28
+    private let persistentSidebarMinimumWidth: CGFloat = 280
+    private let persistentSidebarMaximumWidth: CGFloat = 360
     private let sidebarTransitionDuration: Double = 0.22
     private let sidebarTransitionDelayNanoseconds: UInt64 = 220_000_000
 
@@ -769,15 +782,19 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let sidebarWidth = min(geometry.size.width * 0.72, 320)
+            let layout = sidebarLayout(for: geometry.size)
+            let showsOverlaySidebar = showConversationSidebar && !layout.usesPersistentSidebar
+            let showsSidebar = showConversationSidebar || layout.usesPersistentSidebar
 
             ZStack(alignment: .leading) {
                 mainContent(topSafeAreaInset: geometry.safeAreaInsets.top)
-                    .disabled(showConversationSidebar)
-                    .offset(x: showConversationSidebar ? sidebarWidth : 0)
+                    .frame(width: layout.mainContentWidth)
+                    .clipped()
+                    .disabled(showsOverlaySidebar)
+                    .offset(x: layout.mainContentOffsetX(isOverlayVisible: showsOverlaySidebar))
                     .animation(.easeOut(duration: sidebarTransitionDuration), value: showConversationSidebar)
 
-                if showConversationSidebar {
+                if showsOverlaySidebar {
                     Color.black.opacity(0.22)
                         .ignoresSafeArea()
                         .onTapGesture {
@@ -785,7 +802,7 @@ struct ContentView: View {
                         }
                 }
 
-                if !showConversationSidebar {
+                if !showConversationSidebar && !layout.usesPersistentSidebar {
                     Color.clear
                         .contentShape(Rectangle())
                         .frame(width: 28)
@@ -797,21 +814,26 @@ struct ContentView: View {
                     conversations: conversations,
                     selectedConversationID: selectedConversationID,
                     topSafeAreaInset: geometry.safeAreaInsets.top,
-                    showsSidebarToggleFadeExclusion: showsSidebarToggleFadeExclusion,
-                    onSelect: selectConversation,
+                    showsSidebarToggleFadeExclusion: showsSidebarToggleFadeExclusion && !layout.usesPersistentSidebar,
+                    showsCloseButton: !layout.usesPersistentSidebar,
+                    onSelect: { id in
+                        selectConversation(id, closesSidebar: !layout.usesPersistentSidebar)
+                    },
                     onClose: {
                         hideKeyboard()
                         setConversationSidebarVisibility(false)
                     },
-                    onOpenConfiguration: openConfigurationFromSidebar,
+                    onOpenConfiguration: {
+                        openConfigurationFromSidebar(closesSidebar: !layout.usesPersistentSidebar)
+                    },
                     onDelete: deleteConversation
                 )
-                .frame(width: sidebarWidth)
+                .frame(width: layout.sidebarWidth)
                 .ignoresSafeArea(edges: [.top, .bottom])
-                .offset(x: showConversationSidebar ? 0 : -sidebarWidth)
+                .offset(x: showsSidebar ? 0 : -layout.sidebarWidth)
                 .animation(.easeOut(duration: sidebarTransitionDuration), value: showConversationSidebar)
 
-                if !showConversationSidebar {
+                if !showsSidebar {
                     sidebarToggleControl
                 }
             }
@@ -855,6 +877,27 @@ struct ContentView: View {
             guard newPhase == .inactive || newPhase == .background else { return }
             persistApplicationStateForLifecycle()
         }
+    }
+
+    private func sidebarLayout(for size: CGSize) -> SidebarLayout {
+        let usesPersistentSidebar = UIDevice.current.userInterfaceIdiom == .pad
+            && size.width > size.height
+        let sidebarWidth: CGFloat
+
+        if usesPersistentSidebar {
+            sidebarWidth = min(
+                max(size.width * persistentSidebarWidthRatio, persistentSidebarMinimumWidth),
+                persistentSidebarMaximumWidth
+            )
+        } else {
+            sidebarWidth = min(size.width * 0.72, 320)
+        }
+
+        return SidebarLayout(
+            sidebarWidth: sidebarWidth,
+            mainContentWidth: usesPersistentSidebar ? max(size.width - sidebarWidth, 0) : size.width,
+            usesPersistentSidebar: usesPersistentSidebar
+        )
     }
 
     private func setConversationSidebarVisibility(_ isVisible: Bool) {
@@ -2468,9 +2511,11 @@ struct ContentView: View {
         createConversation(closesSidebar: true)
     }
 
-    private func openConfigurationFromSidebar() {
+    private func openConfigurationFromSidebar(closesSidebar: Bool) {
         hideKeyboard()
-        setConversationSidebarVisibility(false)
+        if closesSidebar {
+            setConversationSidebarVisibility(false)
+        }
         showConfiguration = true
     }
 
