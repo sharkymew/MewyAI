@@ -256,10 +256,10 @@
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_OPTIMIZATION_LEVEL = "-Osize";
 				STRIP_INSTALLED_PRODUCT = YES;
 				STRIP_STYLE = "non-global";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-Osize";
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;

@@ -1285,7 +1285,7 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 ForEach(pendingImageAttachments) { attachment in
                     ZStack(alignment: .topTrailing) {
-                        DataURLImage(dataURL: attachment.dataURL)
+                        ChatAttachmentImage(attachment: attachment)
                             .frame(width: 64, height: 64)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
@@ -2207,11 +2207,11 @@ struct ContentView: View {
 
             for item in items {
                 guard let data = try? await item.loadTransferable(type: Data.self),
-                      let dataURL = compressedImageDataURL(from: data) else {
+                      let attachment = storedImageAttachment(from: data) else {
                     continue
                 }
 
-                attachments.append(ChatImageAttachment(dataURL: dataURL))
+                attachments.append(attachment)
             }
 
             if attachments.isEmpty, !items.isEmpty {
@@ -2223,15 +2223,15 @@ struct ContentView: View {
         }
     }
 
-    private func compressedImageDataURL(from data: Data) -> String? {
+    private func storedImageAttachment(from data: Data) -> ChatImageAttachment? {
         guard let image = UIImage(data: data) else { return nil }
-        return compressedImageDataURL(from: image)
+        return storedImageAttachment(from: image)
     }
 
-    private func compressedImageDataURL(from image: UIImage) -> String? {
+    private func storedImageAttachment(from image: UIImage) -> ChatImageAttachment? {
         let scaledImage = image.scaledDown(maxDimension: 1600)
         guard let jpegData = scaledImage.jpegData(compressionQuality: 0.78) else { return nil }
-        return "data:image/jpeg;base64,\(jpegData.base64EncodedString())"
+        return ConversationImageStore.storeJPEGData(jpegData)
     }
 
     private func setPendingImageAttachments(_ attachments: [ChatImageAttachment]) {
@@ -2285,11 +2285,11 @@ struct ContentView: View {
 
             for provider in imageProviders.prefix(maxImageAttachmentCount) {
                 guard let data = await imageData(from: provider),
-                      let dataURL = compressedImageDataURL(from: data) else {
+                      let attachment = storedImageAttachment(from: data) else {
                     continue
                 }
 
-                attachments.append(ChatImageAttachment(dataURL: dataURL))
+                attachments.append(attachment)
             }
 
             appendPendingImageAttachments(attachments, source: "拖拽")
@@ -2469,8 +2469,7 @@ struct ContentView: View {
         }
 
         let attachments = images.compactMap { image -> ChatImageAttachment? in
-            guard let dataURL = compressedImageDataURL(from: image) else { return nil }
-            return ChatImageAttachment(dataURL: dataURL)
+            storedImageAttachment(from: image)
         }
 
         appendPendingImageAttachments(attachments, source: "剪贴板")
@@ -3029,7 +3028,7 @@ struct MessageBubble: View {
             spacing: 8
         ) {
             ForEach(message.imageAttachments) { attachment in
-                DataURLImage(dataURL: attachment.dataURL)
+                ChatAttachmentImage(attachment: attachment)
                     .frame(width: 112, height: 112)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .overlay(
@@ -4453,11 +4452,11 @@ final class ImagePastingUITextView: UITextView {
     }
 }
 
-struct DataURLImage: View {
-    let dataURL: String
+struct ChatAttachmentImage: View {
+    let attachment: ChatImageAttachment
 
     var body: some View {
-        if let image = UIImage(dataURL: dataURL) {
+        if let image = UIImage(chatImageAttachment: attachment) {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()
@@ -4473,10 +4472,8 @@ struct DataURLImage: View {
 }
 
 extension UIImage {
-    convenience init?(dataURL: String) {
-        guard let commaIndex = dataURL.firstIndex(of: ",") else { return nil }
-        let base64 = dataURL[dataURL.index(after: commaIndex)...]
-        guard let data = Data(base64Encoded: String(base64)) else { return nil }
+    convenience init?(chatImageAttachment attachment: ChatImageAttachment) {
+        guard let data = ConversationImageStore.imageData(for: attachment) else { return nil }
         self.init(data: data)
     }
 

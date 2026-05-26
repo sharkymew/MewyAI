@@ -50,15 +50,17 @@ struct ChatRequestMessage: Encodable {
     ) {
         self.role = role
         let fileText = Self.textByAppendingFileContext(text, fileAttachments: fileAttachments)
+        let imageURLs = usesImageAttachments
+            ? imageAttachments.compactMap(ConversationImageStore.dataURL(for:))
+            : []
         let requestText = Self.textByAppendingImageContext(
             fileText,
             imageAttachments: imageAttachments,
             imageContextDescription: imageContextDescription,
-            usesImageAttachments: usesImageAttachments
+            usesImageAttachments: usesImageAttachments && !imageURLs.isEmpty
         )
-        let requestImageAttachments = usesImageAttachments ? imageAttachments : []
 
-        guard !requestImageAttachments.isEmpty else {
+        guard !imageURLs.isEmpty else {
             content = .text(requestText)
             return
         }
@@ -68,7 +70,7 @@ struct ChatRequestMessage: Encodable {
         if !trimmedText.isEmpty {
             parts.append(.text(trimmedText))
         }
-        parts.append(contentsOf: requestImageAttachments.map { .imageURL($0.dataURL) })
+        parts.append(contentsOf: imageURLs.map { .imageURL($0) })
         content = .parts(parts)
     }
 
@@ -483,7 +485,7 @@ class AIService {
         let titleMessages = [
             ChatRequestMessage(
                 role: "system",
-                text: "请根据对话内容生成一个中文标题。只输出标题文字，不要解释，不要引号、方框、括号、Markdown、项目符号或任何额外格式，最多10个字。"
+                text: "请根据对话内容生成一个简短标题。只允许自然中文或英文词语；不要输出特殊 token、模板片段、XML/JSON、Markdown、项目符号、引号、括号、下划线、竖线或任何格式符号。中文最多10个字，英文最多6个词。只输出标题本身。"
             ),
             ChatRequestMessage(role: "user", text: transcript)
         ]
@@ -522,6 +524,7 @@ class AIService {
                 }
 
                 let title = Self.sanitizedConversationTitle(decoded.choices.first?.message.content)
+                    ?? Self.fallbackConversationTitle(from: messages)
 
                 completion(title?.isEmpty == false ? title : nil)
             }
@@ -599,21 +602,98 @@ class AIService {
     private nonisolated static func sanitizedConversationTitle(_ rawTitle: String?) -> String? {
         guard let rawTitle else { return nil }
 
-        let formatCharacters = CharacterSet(charactersIn: "\"'“”‘’[]【】()（）{}《》<>#*-_`·•「」『』")
-        let words = rawTitle
+        let lines = rawTitle
             .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines.union(formatCharacters)) }
-            .filter { !$0.isEmpty }
-        var title = (words.first ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines.union(formatCharacters))
-        for prefix in ["标题：", "标题:", "题目：", "题目:"] where title.hasPrefix(prefix) {
+        for line in lines {
+            if let title = normalizedConversationTitle(line) {
+                return title
+            }
+        }
+
+        return nil
+    }
+
+    private nonisolated static func fallbackConversationTitle(from messages: [ChatMessage]) -> String? {
+        messages
+            .first { $0.role == "user" && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .flatMap { normalizedConversationTitle($0.content) }
+    }
+
+    private nonisolated static func normalizedConversationTitle(_ rawTitle: String) -> String? {
+        guard !containsSpecialTokenFragment(rawTitle) else { return nil }
+
+        let formatCharacters = CharacterSet(charactersIn: "\"'“”‘’[]【】()（）{}《》<>#*-_`·•「」『』|:：")
+        var title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines.union(formatCharacters))
+        for prefix in ["标题：", "标题:", "题目：", "题目:", "Title:", "Title：", "Topic:", "Topic："] where title.hasPrefix(prefix) {
             title.removeFirst(prefix.count)
             title = title.trimmingCharacters(in: .whitespacesAndNewlines.union(formatCharacters))
             break
         }
 
-        guard !title.isEmpty else { return nil }
-        return String(title.prefix(10))
+        guard !containsSpecialTokenFragment(title) else { return nil }
+
+        var cleaned = ""
+        var previousWasSpace = false
+        for scalar in title.unicodeScalars {
+            if isAllowedTitleScalar(scalar) {
+                cleaned.unicodeScalars.append(scalar)
+                previousWasSpace = false
+            } else if scalar.properties.isWhitespace || scalar.value < 128 {
+                if !cleaned.isEmpty, !previousWasSpace {
+                    cleaned.append(" ")
+                    previousWasSpace = true
+                }
+            }
+        }
+
+        let normalized = cleaned
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        guard !normalized.isEmpty else { return nil }
+
+        let hasLatin = normalized.unicodeScalars.contains { (65...90).contains($0.value) || (97...122).contains($0.value) }
+        if hasLatin {
+            return normalized
+                .split(separator: " ")
+                .prefix(6)
+                .joined(separator: " ")
+        }
+
+        return String(normalized.prefix(10))
+    }
+
+    private nonisolated static func containsSpecialTokenFragment(_ title: String) -> Bool {
+        let lowercasedTitle = title.lowercased()
+        guard lowercasedTitle.contains("_")
+                || lowercasedTitle.contains("|")
+                || lowercasedTitle.contains("<")
+                || lowercasedTitle.contains(">") else {
+            return false
+        }
+
+        let compactTitle = lowercasedTitle.filter { $0.isLetter || $0.isNumber }
+        return [
+            "beginof",
+            "endof",
+            "startof",
+            "think",
+            "imstart",
+            "imend",
+            "startheaderid",
+            "endheaderid",
+            "eotid"
+        ].contains { compactTitle.contains($0) }
+    }
+
+    private nonisolated static func isAllowedTitleScalar(_ scalar: UnicodeScalar) -> Bool {
+        switch scalar.value {
+        case 48...57, 65...90, 97...122:
+            return true
+        case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF:
+            return true
+        default:
+            return false
+        }
     }
 
     private nonisolated static func sanitizedImageContextDescription(_ rawDescription: String?) -> String? {

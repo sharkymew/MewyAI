@@ -2,17 +2,78 @@ import Foundation
 
 struct ChatImageAttachment: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
-    var dataURL: String
+    var fileName: String?
+    var md5: String?
+    var byteCount: Int
+    var mimeType: String
+    var dataURL: String?
 
-    init(id: UUID = UUID(), dataURL: String) {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case fileName
+        case md5
+        case byteCount
+        case mimeType
+        case dataURL
+    }
+
+    nonisolated init(
+        id: UUID = UUID(),
+        fileName: String,
+        md5: String,
+        byteCount: Int,
+        mimeType: String = "image/jpeg"
+    ) {
         self.id = id
+        self.fileName = fileName
+        self.md5 = md5
+        self.byteCount = byteCount
+        self.mimeType = mimeType
+        self.dataURL = nil
+    }
+
+    nonisolated init(id: UUID = UUID(), dataURL: String) {
+        self.id = id
+        self.fileName = nil
+        self.md5 = nil
+        self.byteCount = 0
+        self.mimeType = Self.mimeType(from: dataURL) ?? "image/jpeg"
         self.dataURL = dataURL
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        dataURL = try container.decode(String.self, forKey: .dataURL)
+        fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
+        md5 = try container.decodeIfPresent(String.self, forKey: .md5)
+        byteCount = try container.decodeIfPresent(Int.self, forKey: .byteCount) ?? 0
+        dataURL = try container.decodeIfPresent(String.self, forKey: .dataURL)
+        mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
+            ?? dataURL.flatMap(Self.mimeType(from:))
+            ?? "image/jpeg"
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(fileName, forKey: .fileName)
+        try container.encodeIfPresent(md5, forKey: .md5)
+        try container.encode(byteCount, forKey: .byteCount)
+        try container.encode(mimeType, forKey: .mimeType)
+        if fileName == nil {
+            try container.encodeIfPresent(dataURL, forKey: .dataURL)
+        }
+    }
+
+    nonisolated private static func mimeType(from dataURL: String) -> String? {
+        guard dataURL.hasPrefix("data:"),
+              let semicolonIndex = dataURL.firstIndex(of: ";") else {
+            return nil
+        }
+
+        let startIndex = dataURL.index(dataURL.startIndex, offsetBy: 5)
+        guard startIndex < semicolonIndex else { return nil }
+        return String(dataURL[startIndex..<semicolonIndex])
     }
 }
 
@@ -150,22 +211,27 @@ enum ConversationStore {
         if let fileURL = conversationsFileURL,
            let data = try? Data(contentsOf: fileURL),
            let conversations = decodedConversations(from: data) {
+            let migratedConversations = migratedConversationsForStorage(conversations)
+            if migratedConversations != conversations {
+                saveConversations(migratedConversations)
+            }
             UserDefaults.standard.removeObject(forKey: conversationsKey)
-            return conversations
+            return migratedConversations
         }
 
         if let data = UserDefaults.standard.data(forKey: conversationsKey),
            let conversations = decodedConversations(from: data) {
-            saveConversations(conversations)
-            return conversations
+            let migratedConversations = migratedConversationsForStorage(conversations)
+            saveConversations(migratedConversations)
+            return migratedConversations
         }
 
         return [AIConversation()]
     }
 
     static func saveConversations(_ conversations: [AIConversation], synchronize: Bool = false) {
-        let normalizedConversations = conversations.map(\.normalized)
-        guard let data = try? JSONEncoder().encode(normalizedConversations) else { return }
+        let storageConversations = migratedConversationsForStorage(conversations)
+        guard let data = try? JSONEncoder().encode(storageConversations) else { return }
 
         if writeProtectedConversations(data) {
             UserDefaults.standard.removeObject(forKey: conversationsKey)
@@ -204,6 +270,10 @@ enum ConversationStore {
         return conversations
             .map(\.normalized)
             .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private static func migratedConversationsForStorage(_ conversations: [AIConversation]) -> [AIConversation] {
+        ConversationImageStore.migratedLegacyImages(in: conversations.map(\.normalized))
     }
 
     private static func writeProtectedConversations(_ data: Data) -> Bool {
