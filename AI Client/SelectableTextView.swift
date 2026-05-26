@@ -116,6 +116,7 @@ struct SelectableAttributedTextView: UIViewRepresentable {
             .underlineStyle: NSUnderlineStyle.single.rawValue
         ]
         textView.tintColor = .systemBlue
+        textView.delegate = context.coordinator
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return textView
     }
@@ -136,6 +137,29 @@ struct SelectableAttributedTextView: UIViewRepresentable {
             CGSize(width: width, height: .greatestFiniteMagnitude)
         )
         return CGSize(width: width, height: ceil(size.height))
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        @available(iOS 17.0, *)
+        func textView(
+            _ textView: UITextView,
+            primaryActionFor textItem: UITextItem,
+            defaultAction: UIAction
+        ) -> UIAction? {
+            guard case let .link(url) = textItem.content else { return defaultAction }
+            return isSafeLink(url) ? defaultAction : nil
+        }
+
+        private func isSafeLink(_ url: URL) -> Bool {
+            guard let scheme = url.scheme?.lowercased() else { return false }
+            return ["https", "http", "mailto"].contains(scheme)
+                && url.user == nil
+                && url.password == nil
+        }
     }
 }
 

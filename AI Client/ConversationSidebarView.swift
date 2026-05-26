@@ -10,6 +10,7 @@ struct ConversationSidebarView: View {
     let topSafeAreaInset: CGFloat
     let showsSidebarToggleFadeExclusion: Bool
     let onSelect: (UUID) -> Void
+    let onClose: () -> Void
     let onOpenConfiguration: () -> Void
     let onDelete: (UUID) -> Void
 
@@ -68,31 +69,46 @@ struct ConversationSidebarView: View {
             let sidebarWidth = geometry.size.width
             let rowWidth = max(0, sidebarWidth - 16)
 
-            ZStack(alignment: .top) {
-                sidebarBackground
-                    .allowsHitTesting(false)
-
-                ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(conversations) { conversation in
-                            conversationRow(conversation, rowWidth: rowWidth)
-                        }
-                    }
-                    .padding(8)
-                    .padding(.top, topScrollContentPadding(topSafeAreaInset: topSafeAreaInset))
-                }
-                .simultaneousGesture(rowActionSuppressionGesture)
-
-                topFadeBackdrop(
-                    topSafeAreaInset: topSafeAreaInset,
-                    sidebarWidth: sidebarWidth
-                )
-
-                topFloatingControls(topSafeAreaInset: topSafeAreaInset)
-            }
-            .frame(width: sidebarWidth, height: geometry.size.height, alignment: .top)
+            sidebarContentWithBlurMask(
+                sidebarWidth: sidebarWidth,
+                sidebarHeight: geometry.size.height,
+                rowWidth: rowWidth
+            )
         }
         .clipped()
+    }
+
+    private func sidebarContentWithBlurMask(sidebarWidth: CGFloat, sidebarHeight: CGFloat, rowWidth: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            sidebarBackground
+                .allowsHitTesting(false)
+
+            sidebarContent(
+                rowWidth: rowWidth,
+                topPadding: topScrollContentPadding(topSafeAreaInset: topSafeAreaInset)
+            )
+
+            topFadeBackdrop(
+                topSafeAreaInset: topSafeAreaInset,
+                sidebarWidth: sidebarWidth
+            )
+
+            topFloatingControls(topSafeAreaInset: topSafeAreaInset)
+        }
+        .frame(width: sidebarWidth, height: sidebarHeight, alignment: .top)
+    }
+
+    private func sidebarContent(rowWidth: CGFloat, topPadding: CGFloat) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 4) {
+                ForEach(conversations) { conversation in
+                    conversationRow(conversation, rowWidth: rowWidth)
+                }
+            }
+            .padding(8)
+            .padding(.top, topPadding)
+        }
+        .simultaneousGesture(rowActionSuppressionGesture)
     }
 
     private func topFade(topSafeAreaInset: CGFloat) -> some View {
@@ -147,6 +163,13 @@ struct ConversationSidebarView: View {
 
     private func topFloatingControls(topSafeAreaInset: CGFloat) -> some View {
         HStack(spacing: 8) {
+            topGlassControl {
+                Button(action: onClose) {
+                    topIconLabel(systemName: "sidebar.left")
+                }
+            }
+            .accessibilityLabel("关闭对话列表")
+
             Spacer(minLength: 0)
 
             topGlassControl {

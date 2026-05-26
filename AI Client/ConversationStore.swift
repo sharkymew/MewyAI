@@ -104,7 +104,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         isReasoningExpanded = try container.decodeIfPresent(Bool.self, forKey: .isReasoningExpanded) ?? false
         isStopped = try container.decodeIfPresent(Bool.self, forKey: .isStopped) ?? false
     }
-    
+
     var normalized: ChatMessage {
         var message = self
         if message.content.isEmpty, !message.contentChunks.isEmpty {
@@ -125,7 +125,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
     var hasGeneratedTitle: Bool = false
-    
+
     var normalized: AIConversation {
         var conversation = self
         conversation.messages = messages.map(\.normalized)
@@ -140,37 +140,86 @@ struct AIConversation: Identifiable, Codable, Equatable {
 enum ConversationStore {
     private static let conversationsKey = "savedConversations"
     private static let selectedConversationIDKey = "selectedConversationID"
-    
+    private static let conversationsFileName = "Conversations.json"
+
     static func loadConversations() -> [AIConversation] {
-        guard let data = UserDefaults.standard.data(forKey: conversationsKey),
-              let conversations = try? JSONDecoder().decode([AIConversation].self, from: data),
-              !conversations.isEmpty else {
-            return [AIConversation()]
+        if let fileURL = conversationsFileURL,
+           let data = try? Data(contentsOf: fileURL),
+           let conversations = decodedConversations(from: data) {
+            UserDefaults.standard.removeObject(forKey: conversationsKey)
+            return conversations
         }
-        
-        return conversations
-            .map(\.normalized)
-            .sorted { $0.updatedAt > $1.updatedAt }
+
+        if let data = UserDefaults.standard.data(forKey: conversationsKey),
+           let conversations = decodedConversations(from: data) {
+            saveConversations(conversations)
+            return conversations
+        }
+
+        return [AIConversation()]
     }
-    
+
     static func saveConversations(_ conversations: [AIConversation], synchronize: Bool = false) {
         let normalizedConversations = conversations.map(\.normalized)
         guard let data = try? JSONEncoder().encode(normalizedConversations) else { return }
-        UserDefaults.standard.set(data, forKey: conversationsKey)
+
+        if writeProtectedConversations(data) {
+            UserDefaults.standard.removeObject(forKey: conversationsKey)
+        } else {
+            UserDefaults.standard.set(data, forKey: conversationsKey)
+        }
+
         if synchronize {
             UserDefaults.standard.synchronize()
         }
     }
-    
+
     static func loadSelectedConversationID() -> UUID? {
         guard let idString = UserDefaults.standard.string(forKey: selectedConversationIDKey) else {
             return nil
         }
-        
+
         return UUID(uuidString: idString)
     }
-    
+
     static func saveSelectedConversationID(_ id: UUID) {
         UserDefaults.standard.set(id.uuidString, forKey: selectedConversationIDKey)
+    }
+
+    private static var conversationsFileURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent(conversationsFileName, isDirectory: false)
+    }
+
+    private static func decodedConversations(from data: Data) -> [AIConversation]? {
+        guard let conversations = try? JSONDecoder().decode([AIConversation].self, from: data),
+              !conversations.isEmpty else {
+            return nil
+        }
+
+        return conversations
+            .map(\.normalized)
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private static func writeProtectedConversations(_ data: Data) -> Bool {
+        guard let fileURL = conversationsFileURL else { return false }
+
+        do {
+            let directoryURL = fileURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.complete]
+            )
+            try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+            try FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.complete],
+                ofItemAtPath: fileURL.path
+            )
+            return true
+        } catch {
+            return false
+        }
     }
 }

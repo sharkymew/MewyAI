@@ -63,14 +63,14 @@ nonisolated enum MarkdownInlineFormatter {
         replaceMatches(pattern: #"(?<!\\)\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)"#, in: text) { groups in
             let label = groups.value(at: 1)
             let url = groups.value(at: 2)
-            return (label, [.link: url, .foregroundColor: UIColor.systemBlue, .underlineStyle: NSUnderlineStyle.single.rawValue])
+            return (label, linkAttributes(for: url))
         }
     }
 
     private static func replaceAutolink(in text: NSMutableAttributedString) {
         replaceMatches(pattern: #"(?<!\\)<(https?://[^>]+)>"#, in: text) { groups in
             let url = groups.value(at: 1)
-            return (url, [.link: url, .foregroundColor: UIColor.systemBlue, .underlineStyle: NSUnderlineStyle.single.rawValue])
+            return (url, linkAttributes(for: url))
         }
     }
 
@@ -124,6 +124,26 @@ nonisolated enum MarkdownInlineFormatter {
         replaceMatches(pattern: #"\\([\\`*_{}\[\]()#+\-.!~|<>])"#, in: text) { groups in
             (groups.value(at: 1), [:])
         }
+    }
+
+    private static func linkAttributes(for rawURL: String) -> [NSAttributedString.Key: Any] {
+        guard isSafeLink(rawURL) else { return [:] }
+        return [
+            .link: rawURL,
+            .foregroundColor: UIColor.systemBlue,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+    }
+
+    private static func isSafeLink(_ rawURL: String) -> Bool {
+        guard let components = URLComponents(string: rawURL),
+              let scheme = components.scheme?.lowercased(),
+              ["https", "http", "mailto"].contains(scheme),
+              components.user == nil,
+              components.password == nil else {
+            return false
+        }
+        return true
     }
 
     private static func bold(_ font: UIFont) -> UIFont {

@@ -799,6 +799,10 @@ struct ContentView: View {
                     topSafeAreaInset: geometry.safeAreaInsets.top,
                     showsSidebarToggleFadeExclusion: showsSidebarToggleFadeExclusion,
                     onSelect: selectConversation,
+                    onClose: {
+                        hideKeyboard()
+                        setConversationSidebarVisibility(false)
+                    },
                     onOpenConfiguration: openConfigurationFromSidebar,
                     onDelete: deleteConversation
                 )
@@ -807,7 +811,9 @@ struct ContentView: View {
                 .offset(x: showConversationSidebar ? 0 : -sidebarWidth)
                 .animation(.easeOut(duration: sidebarTransitionDuration), value: showConversationSidebar)
 
-                sidebarToggleControl
+                if !showConversationSidebar {
+                    sidebarToggleControl
+                }
             }
             .simultaneousGesture(closeSidebarGesture)
         }
@@ -880,115 +886,36 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder
     private func mainContent(topSafeAreaInset: CGFloat) -> some View {
-        ZStack(alignment: .top) {
-            ScrollViewReader { proxy in
-                GeometryReader { scrollGeometry in
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            ForEach($messages) { $message in
-                                let liveAssistantDisplay = liveAssistantDisplays[message.id]
-                                let isStreamingMessage = activeAssistantMessageID == message.id
-                                let liveReasoningChannel = isStreamingMessage && activeAssistantReasoningIsExpanded
-                                    ? liveAssistantDisplay?.reasoningChannel
-                                    : nil
-                                MessageBubble(
-                                    message: $message,
-                                    isStreaming: isStreamingMessage,
-                                    hasStreamingReasoning: isStreamingMessage && activeAssistantHasReasoning,
-                                    hasStreamingContent: isStreamingMessage && activeAssistantHasContent,
-                                    streamingContentChannel: liveAssistantDisplay?.contentChannel,
-                                    streamingReasoningChannel: liveReasoningChannel,
-                                    markdownRenderCache: markdownRenderCache[message.id],
-                                    showsActions: activeMessageActionID == message.id,
-                                    onSelect: {
-                                        selectMessageAction(for: message.id)
-                                    },
-                                    onReasoningExpansionChanged: { isExpanded in
-                                        handleReasoningExpansionChange(for: message.id, isExpanded: isExpanded)
-                                    },
-                                    onRegenerate: {
-                                        regenerateAssistantResponse(message.id)
-                                    },
-                                    onEdit: {
-                                        startEditingUserMessage(message.id)
-                                    }
-                                )
-                                    .id(message.id)
-                            }
+        if #available(iOS 26.0, *) {
+            mainContentWithSystemScrollEdges
+        } else {
+            legacyMainContent(topSafeAreaInset: topSafeAreaInset)
+        }
+    }
 
-                            if #available(iOS 18.0, *) {
-                                Color.clear
-                                    .frame(height: 1)
-                                    .id("bottomAnchor")
-                            } else {
-                                Color.clear
-                                    .frame(height: 1)
-                                    .id("bottomAnchor")
-                                    .background(
-                                        GeometryReader { bottomGeometry in
-                                            Color.clear.preference(
-                                                key: ChatScrollBottomDistancePreferenceKey.self,
-                                                value: chatScrollBottomDistance(
-                                                    bottomGeometry: bottomGeometry,
-                                                    viewportHeight: scrollGeometry.size.height
-                                                )
-                                            )
-                                        }
-                                    )
-                            }
-                        }
-                        .padding(.horizontal)
-                        .padding(.bottom)
-                        .padding(.top, topScrollContentPadding)
-                        .frame(
-                            maxWidth: .infinity,
-                            minHeight: scrollGeometry.size.height,
-                            alignment: .top
-                        )
-                        .contentShape(Rectangle())
-                    }
-                    .coordinateSpace(name: ChatScrollMetrics.coordinateSpaceName)
-                    .observeChatScrollUserInteraction(
-                        onBegin: {
-                            chatScrollController.beginUserScrollInteraction()
-                        },
-                        onEnd: {
-                            chatScrollController.endUserScrollInteraction()
-                        }
-                    )
-                    .simultaneousGesture(
-                        TapGesture().onEnded {
-                            DispatchQueue.main.async {
-                                if didTapMessageBubble {
-                                    didTapMessageBubble = false
-                                    return
-                                }
-
-                                hideKeyboard()
-
-                                withAnimation(.easeOut(duration: 0.16)) {
-                                    activeMessageActionID = nil
-                                }
-                            }
-                        }
-                    )
-                    .onChange(of: messages.count) { _, _ in
-                        chatScrollController.requestImmediateAutoScroll(animated: true)
-                    }
-                    .observeChatScrollBottomDistance { distanceFromBottom in
-                        chatScrollController.scheduleBottomDistanceUpdate(distanceFromBottom)
-                    }
-                    .onAppear {
-                        chatScrollController.setScrollAction { animated in
-                            forceScrollToBottom(proxy: proxy, animated: animated)
-                        }
-                    }
-                    .onDisappear {
-                        chatScrollController.clearScrollAction()
-                    }
+    @available(iOS 26.0, *)
+    private var mainContentWithSystemScrollEdges: some View {
+        chatScrollView(topPadding: 12)
+            .safeAreaBar(edge: .top, spacing: 0) {
+                topFloatingControls
+                    .padding(.bottom, 8)
+            }
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                inputBar(includesLegacyFade: false)
+            }
+            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+            .overlay(alignment: .bottom) {
+                ScrollToBottomButtonOverlay(scrollController: chatScrollController) {
+                    scrollToBottomGlassIcon()
                 }
             }
+    }
+
+    private func legacyMainContent(topSafeAreaInset: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            chatScrollView(topPadding: topScrollContentPadding)
 
             topChrome(
                 topSafeAreaInset: topSafeAreaInset,
@@ -996,7 +923,7 @@ struct ContentView: View {
             )
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            inputBar
+            inputBar(includesLegacyFade: true)
         }
         .overlay(alignment: .bottom) {
             ScrollToBottomButtonOverlay(scrollController: chatScrollController) {
@@ -1005,7 +932,117 @@ struct ContentView: View {
         }
     }
 
-    private var inputBar: some View {
+    private func chatScrollView(topPadding: CGFloat) -> some View {
+        ScrollViewReader { proxy in
+            GeometryReader { scrollGeometry in
+                ScrollView {
+                    VStack(spacing: 12) {
+                        ForEach($messages) { $message in
+                            let liveAssistantDisplay = liveAssistantDisplays[message.id]
+                            let isStreamingMessage = activeAssistantMessageID == message.id
+                            let liveReasoningChannel = isStreamingMessage && activeAssistantReasoningIsExpanded
+                                ? liveAssistantDisplay?.reasoningChannel
+                                : nil
+                            MessageBubble(
+                                message: $message,
+                                isStreaming: isStreamingMessage,
+                                hasStreamingReasoning: isStreamingMessage && activeAssistantHasReasoning,
+                                hasStreamingContent: isStreamingMessage && activeAssistantHasContent,
+                                streamingContentChannel: liveAssistantDisplay?.contentChannel,
+                                streamingReasoningChannel: liveReasoningChannel,
+                                markdownRenderCache: markdownRenderCache[message.id],
+                                showsActions: activeMessageActionID == message.id,
+                                onSelect: {
+                                    selectMessageAction(for: message.id)
+                                },
+                                onReasoningExpansionChanged: { isExpanded in
+                                    handleReasoningExpansionChange(for: message.id, isExpanded: isExpanded)
+                                },
+                                onRegenerate: {
+                                    regenerateAssistantResponse(message.id)
+                                },
+                                onEdit: {
+                                    startEditingUserMessage(message.id)
+                                }
+                            )
+                                .id(message.id)
+                        }
+
+                        if #available(iOS 18.0, *) {
+                            Color.clear
+                                .frame(height: 1)
+                                .id("bottomAnchor")
+                        } else {
+                            Color.clear
+                                .frame(height: 1)
+                                .id("bottomAnchor")
+                                .background(
+                                    GeometryReader { bottomGeometry in
+                                        Color.clear.preference(
+                                            key: ChatScrollBottomDistancePreferenceKey.self,
+                                            value: chatScrollBottomDistance(
+                                                bottomGeometry: bottomGeometry,
+                                                viewportHeight: scrollGeometry.size.height
+                                            )
+                                        )
+                                    }
+                                )
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom)
+                    .padding(.top, topPadding)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: scrollGeometry.size.height,
+                        alignment: .top
+                    )
+                    .contentShape(Rectangle())
+                }
+                .coordinateSpace(name: ChatScrollMetrics.coordinateSpaceName)
+                .observeChatScrollUserInteraction(
+                    onBegin: {
+                        chatScrollController.beginUserScrollInteraction()
+                    },
+                    onEnd: {
+                        chatScrollController.endUserScrollInteraction()
+                    }
+                )
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        DispatchQueue.main.async {
+                            if didTapMessageBubble {
+                                didTapMessageBubble = false
+                                return
+                            }
+
+                            hideKeyboard()
+
+                            withAnimation(.easeOut(duration: 0.16)) {
+                                activeMessageActionID = nil
+                            }
+                        }
+                    }
+                )
+                .onChange(of: messages.count) { _, _ in
+                    chatScrollController.requestImmediateAutoScroll(animated: true)
+                }
+                .observeChatScrollBottomDistance { distanceFromBottom in
+                    chatScrollController.scheduleBottomDistanceUpdate(distanceFromBottom)
+                }
+                .onAppear {
+                    chatScrollController.setScrollAction { animated in
+                        forceScrollToBottom(proxy: proxy, animated: animated)
+                    }
+                }
+                .onDisappear {
+                    chatScrollController.clearScrollAction()
+                }
+            }
+        }
+    }
+
+    private func inputBar(includesLegacyFade: Bool) -> some View {
         inputGlassContainer {
             VStack(alignment: .leading, spacing: 8) {
                 if !pendingImageAttachments.isEmpty || !pendingFileAttachments.isEmpty {
@@ -1051,8 +1088,10 @@ struct ContentView: View {
         .padding(.top, inputBarTopPadding)
         .padding(.bottom, inputBarBottomPadding)
         .background(alignment: .bottom) {
-            inputBottomFadeBackdrop
-                .ignoresSafeArea(edges: .bottom)
+            if includesLegacyFade {
+                inputBottomFadeBackdrop
+                    .ignoresSafeArea(edges: .bottom)
+            }
         }
     }
 

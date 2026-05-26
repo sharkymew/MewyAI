@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import MarkdownUI
+import UniformTypeIdentifiers
 
 struct ChatCodeBlock: View {
     let content: String
@@ -84,7 +85,13 @@ struct ChatCodeBlock: View {
     }
 
     private func copyCode() {
-        UIPasteboard.general.string = content
+        UIPasteboard.general.setItems(
+            [[UTType.plainText.identifier: content]],
+            options: [
+                .localOnly: true,
+                .expirationDate: Date().addingTimeInterval(120)
+            ]
+        )
         didCopy = true
 
         Task { @MainActor in

@@ -148,7 +148,7 @@ struct AIConfigurationView: View {
         } header: {
             Text("认证")
         } footer: {
-            Text("填写 API Key 时会自动发送 Authorization: Bearer <API Key>。如果服务商使用其他认证方式，可以留空并在自定义请求头中配置。")
+            Text("填写 API Key 时会自动发送 Authorization: Bearer <API Key>。API Key 会存入钥匙串。")
         }
     }
     
@@ -163,7 +163,7 @@ struct AIConfigurationView: View {
                     .autocorrectionDisabled()
             }
         } footer: {
-            Text("每行一个请求头，格式为 Header-Name: value。自定义请求头会覆盖同名默认请求头。")
+            Text("每行一个请求头，格式为 Header-Name: value。Authorization、Token、API Key 等敏感请求头会存入钥匙串。")
         }
     }
 
@@ -496,7 +496,7 @@ struct AIConfigurationView: View {
         guard configurations.count > 1,
               let selectedIndex else { return }
         let removedConfiguration = configurations.remove(at: selectedIndex)
-        KeychainService.deleteAPIKey(for: removedConfiguration.id)
+        KeychainService.deleteAllSecrets(for: removedConfiguration.id)
         selectedConfigurationID = configurations[0].id
         saveCurrentState()
     }

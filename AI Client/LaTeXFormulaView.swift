@@ -282,10 +282,13 @@ private final class LaTeXWebViewCoordinator: NSObject, WKScriptMessageHandler, W
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
-        switch navigationAction.navigationType {
-        case .other:
+        let url = navigationAction.request.url
+        let isInitialDocumentLoad = navigationAction.navigationType == .other
+            && (url == nil || url?.absoluteString == "about:blank")
+
+        if isInitialDocumentLoad {
             decisionHandler(.allow)
-        default:
+        } else {
             decisionHandler(.cancel)
         }
     }
@@ -451,6 +454,27 @@ private enum LaTeXFormulaHTML {
             });
         }
 
+        function sanitizeRenderedSVG(svg) {
+            const template = document.createElement("template");
+            template.innerHTML = String(svg || "");
+            template.content.querySelectorAll("script, foreignObject, iframe, object, embed, image, audio, video").forEach(element => element.remove());
+            template.content.querySelectorAll("*").forEach(element => {
+                for (const attribute of Array.from(element.attributes)) {
+                    const name = attribute.name.toLowerCase();
+                    const value = String(attribute.value || "");
+                    const lowerValue = value.trim().toLowerCase();
+                    if (name.startsWith("on")
+                        || name === "href"
+                        || name === "xlink:href"
+                        || name === "src"
+                        || ((name === "style" || name === "class") && /(url\\s*\\(|expression\\s*\\(|javascript:)/i.test(lowerValue))) {
+                        element.removeAttribute(attribute.name);
+                    }
+                }
+            });
+            return template.innerHTML;
+        }
+
         function renderFormulaElement(target, encoded, display) {
             if (!target || !window.AIClientMathJax || !AIClientMathJax.renderToSVG) {
                 reportHeight();
@@ -460,7 +484,7 @@ private enum LaTeXFormulaHTML {
                 const source = decodeFormula(encoded);
                 const response = JSON.parse(AIClientMathJax.renderToSVG(source, display));
                 if (response.ok && response.svg) {
-                    target.innerHTML = response.svg;
+                    target.innerHTML = sanitizeRenderedSVG(response.svg);
                 }
             } catch (_) {}
             reportHeight();
@@ -851,6 +875,7 @@ actor LaTeXSVGRenderer {
         let size = size(from: svg, fontSize: fontSize)
         guard size.width > 0, size.height > 0 else { return nil }
 
+        svg = sanitizedSVG(svg)
         svg = svg.replacingOccurrences(of: "currentColor", with: textColor.cssHex)
         svg = replaceAttribute("width", with: Self.svgNumber(size.width), in: svg)
         svg = replaceAttribute("height", with: Self.svgNumber(size.height), in: svg)
@@ -875,6 +900,32 @@ actor LaTeXSVGRenderer {
             return nil
         }
         return String(rawSVG[start.lowerBound..<end.upperBound])
+    }
+
+    private static func sanitizedSVG(_ svg: String) -> String {
+        var result = svg
+        let patterns = [
+            #"<script\b[^>]*>[\s\S]*?</script>"#,
+            #"<foreignObject\b[^>]*>[\s\S]*?</foreignObject>"#,
+            #"<(?:iframe|object|embed|image|audio|video)\b[^>]*/?>"#,
+            #"\s+on[a-zA-Z]+\s*=\s*"[^"]*""#,
+            #"\s+(?:xlink:)?href\s*=\s*"[^"]*""#,
+            #"\s+src\s*=\s*"[^"]*""#,
+            #"\s+style\s*=\s*"[^"]*(?:url\s*\(|expression\s*\(|javascript:)[^"]*""#
+        ]
+
+        for pattern in patterns {
+            result = replacingSVG(pattern: pattern, in: result, template: "")
+        }
+        return result
+    }
+
+    private static func replacingSVG(pattern: String, in text: String, template: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(in: text, range: range, withTemplate: template)
     }
 
     private static func size(from svg: String, fontSize: CGFloat) -> CGSize {

@@ -54,7 +54,9 @@ enum ChatFileAttachmentReader {
 
         let resourceValues = try? url.resourceValues(forKeys: [.fileSizeKey, .typeIdentifierKey, .localizedNameKey])
         let name = resourceValues?.localizedName ?? url.lastPathComponent
-        let byteCount = resourceValues?.fileSize ?? ((try? Data(contentsOf: url).count) ?? 0)
+        guard let byteCount = fileByteCount(for: url, resourceValues: resourceValues) else {
+            throw ChatFileAttachmentReadError.unreadable(name)
+        }
         let maxMegabytes = maxFileByteCount / 1024 / 1024
 
         guard byteCount <= maxFileByteCount else {
@@ -138,6 +140,18 @@ enum ChatFileAttachmentReader {
         ]
 
         return textExtensions.contains(pathExtension.lowercased())
+    }
+
+    private static func fileByteCount(for url: URL, resourceValues: URLResourceValues?) -> Int? {
+        if let fileSize = resourceValues?.fileSize {
+            return fileSize
+        }
+
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else {
+            return nil
+        }
+        return size.intValue
     }
 
     private static func decodedString(from data: Data) -> String? {
