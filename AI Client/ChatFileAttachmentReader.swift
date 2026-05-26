@@ -25,6 +25,7 @@ enum ChatFileAttachmentReadError: LocalizedError {
 enum ChatFileAttachmentReader {
     static let maxFileByteCount = 8 * 1024 * 1024
     static let maxCharactersPerFile = 24_000
+    static let maxPDFPageCount = 80
 
     static let supportedDocumentTypes: [UTType] = [
         .pdf,
@@ -67,11 +68,15 @@ enum ChatFileAttachmentReader {
             ?? UTType(filenameExtension: url.pathExtension)?.identifier
         let type = typeIdentifier.flatMap(UTType.init)
         let rawText: String
+        let wasExtractionTruncated: Bool
 
         if type?.conforms(to: .pdf) == true || url.pathExtension.lowercased() == "pdf" {
-            rawText = try pdfText(from: url, name: name)
+            let result = try pdfText(from: url, name: name)
+            rawText = result.text
+            wasExtractionTruncated = result.wasTruncated
         } else {
             rawText = try plainText(from: url, name: name, type: type)
+            wasExtractionTruncated = false
         }
 
         let normalizedText = rawText
@@ -89,26 +94,32 @@ enum ChatFileAttachmentReader {
             byteCount: byteCount,
             characterCount: normalizedText.count,
             extractedText: limitedText,
-            isTruncated: normalizedText.count > maxCharactersPerFile
+            isTruncated: wasExtractionTruncated || normalizedText.count > maxCharactersPerFile
         )
     }
 
-    private static func pdfText(from url: URL, name: String) throws -> String {
+    private static func pdfText(from url: URL, name: String) throws -> (text: String, wasTruncated: Bool) {
         guard let document = PDFDocument(url: url) else {
             throw ChatFileAttachmentReadError.unreadable(name)
         }
 
         var pages = [String]()
-        for pageIndex in 0..<document.pageCount {
+        var characterCount = 0
+        let pageLimit = min(document.pageCount, maxPDFPageCount)
+        for pageIndex in 0..<pageLimit {
             guard let pageText = document.page(at: pageIndex)?.string,
                   !pageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 continue
             }
 
             pages.append(pageText)
+            characterCount += pageText.count
+            if characterCount >= maxCharactersPerFile {
+                return (pages.joined(separator: "\n\n"), true)
+            }
         }
 
-        return pages.joined(separator: "\n\n")
+        return (pages.joined(separator: "\n\n"), document.pageCount > maxPDFPageCount)
     }
 
     private static func plainText(from url: URL, name: String, type: UTType?) throws -> String {

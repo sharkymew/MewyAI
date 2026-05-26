@@ -114,6 +114,18 @@ nonisolated enum CustomHeaderSecurity {
         }
     }
 
+    static func sensitiveHeaderValues(from headers: String) -> [String] {
+        parsedHeaders(from: headers).compactMap { header in
+            let value = header.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isSensitiveHeaderName(header.name),
+                  !value.isEmpty,
+                  value != keychainPlaceholder else {
+                return nil
+            }
+            return value
+        }
+    }
+
     static func isSensitiveHeaderName(_ name: String) -> Bool {
         let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized == "authorization"
@@ -212,6 +224,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     var selectedModel: String
     var reasoningEnabled: Bool
     var reasoningEffort: ReasoningEffort
+    var generatesImageContextDescriptions: Bool
     var updatedAt: Date
 
     var requestURLString: String {
@@ -248,6 +261,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         selectedModel: String = "deepseek-v4-pro",
         reasoningEnabled: Bool = true,
         reasoningEffort: ReasoningEffort = .medium,
+        generatesImageContextDescriptions: Bool = true,
         updatedAt: Date = Date()
     ) {
         self.id = id
@@ -271,6 +285,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         self.selectedModel = selectedModel
         self.reasoningEnabled = reasoningEnabled
         self.reasoningEffort = reasoningEffort
+        self.generatesImageContextDescriptions = generatesImageContextDescriptions
         self.updatedAt = updatedAt
     }
 
@@ -287,6 +302,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         case selectedModel
         case reasoningEnabled
         case reasoningEffort
+        case generatesImageContextDescriptions
         case updatedAt
     }
 
@@ -313,6 +329,10 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         reasoningEnabled = try container.decodeIfPresent(Bool.self, forKey: .reasoningEnabled) ?? true
         reasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort) ?? .medium
+        generatesImageContextDescriptions = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .generatesImageContextDescriptions
+        ) ?? true
 
         if container.contains(.models),
            let decodedModels = try? container.decode([AIModelConfiguration].self, forKey: .models) {
@@ -372,6 +392,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         try container.encode(selectedModel, forKey: .selectedModel)
         try container.encode(reasoningEnabled, forKey: .reasoningEnabled)
         try container.encode(reasoningEffort, forKey: .reasoningEffort)
+        try container.encode(generatesImageContextDescriptions, forKey: .generatesImageContextDescriptions)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import ImageIO
 import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
@@ -485,6 +486,8 @@ struct ContentView: View {
     let aiService = AIService()
     private let maxImageAttachmentCount = 4
     private let maxFileAttachmentCount = 5
+    private let maxImageInputByteCount = 12 * 1024 * 1024
+    private let maxImagePixelCount: Int64 = 24_000_000
     private let inputBarBottomPadding: CGFloat = 8
     private let inputBarTopPadding: CGFloat = 8
     private let inputBarHorizontalPadding: CGFloat = 12
@@ -1540,6 +1543,7 @@ struct ContentView: View {
         let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
         let usesImageAttachments = configuration.selectedModelSupportsImages
+        let generatesImageContextDescriptions = configuration.generatesImageContextDescriptions
 
         guard !userText.isEmpty || !imageAttachments.isEmpty || !fileAttachments.isEmpty else { return }
 
@@ -1662,9 +1666,10 @@ struct ContentView: View {
                 cancelScheduledFlush()
                 flushPendingTokens(for: assistantMessageID, invalidatesMarkdownCache: true, requestsAutoScroll: false)
 
+                let persistentError = persistentAssistantErrorMessage(from: error)
                 if let index = messages.firstIndex(where: { $0.id == assistantMessageID }) {
-                    messages[index].content = error
-                    publishLiveContentUpdate(for: assistantMessageID, chunks: [error], resetsText: true)
+                    messages[index].content = persistentError
+                    publishLiveContentUpdate(for: assistantMessageID, chunks: [persistentError], resetsText: true)
                 }
 
                 isGenerating = false
@@ -1679,6 +1684,7 @@ struct ContentView: View {
         )
 
         if usesImageAttachments,
+           generatesImageContextDescriptions,
            !imageAttachments.isEmpty,
            imageContextDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            let selectedConversationID,
@@ -1702,6 +1708,20 @@ struct ContentView: View {
         messages.append(message)
         prepareMarkdownCache(for: message.id, content: content)
         persistCurrentConversation()
+    }
+
+    private func persistentAssistantErrorMessage(from error: String) -> String {
+        guard error.contains("\n\n") else { return error }
+        let headline = error
+            .components(separatedBy: .newlines)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return [
+            headline?.isEmpty == false ? headline : "请求失败",
+            "错误响应正文已隐藏，避免把认证信息或服务端回显持久化到聊天记录。"
+        ]
+        .compactMap { $0 }
+        .joined(separator: "\n\n")
     }
 
     private func containsImageWithoutContextDescription(in messages: [ChatMessage]) -> Bool {
@@ -1862,6 +1882,7 @@ struct ContentView: View {
         messages[index].fileAttachments = pendingFileAttachments
         invalidateMarkdownCache(for: editingMessageID)
         persistCurrentConversation()
+        removeUnreferencedConversationImages()
         clearInputState()
     }
 
@@ -1887,6 +1908,7 @@ struct ContentView: View {
         pruneMarkdownCache()
         let context = Array(messages.prefix(index))
         persistCurrentConversation()
+        removeUnreferencedConversationImages()
 
         startStreamingResponse(
             userText: editedText,
@@ -2224,14 +2246,36 @@ struct ContentView: View {
     }
 
     private func storedImageAttachment(from data: Data) -> ChatImageAttachment? {
+        guard imageDataIsWithinLimits(data) else { return nil }
         guard let image = UIImage(data: data) else { return nil }
         return storedImageAttachment(from: image)
     }
 
     private func storedImageAttachment(from image: UIImage) -> ChatImageAttachment? {
+        guard imagePixelCount(image) <= maxImagePixelCount else { return nil }
         let scaledImage = image.scaledDown(maxDimension: 1600)
         guard let jpegData = scaledImage.jpegData(compressionQuality: 0.78) else { return nil }
         return ConversationImageStore.storeJPEGData(jpegData)
+    }
+
+    private func imageDataIsWithinLimits(_ data: Data) -> Bool {
+        guard data.count <= maxImageInputByteCount else { return false }
+        guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+              let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else {
+            return false
+        }
+
+        let pixelCount = Int64(width.intValue) * Int64(height.intValue)
+        return pixelCount > 0 && pixelCount <= maxImagePixelCount
+    }
+
+    private func imagePixelCount(_ image: UIImage) -> Int64 {
+        let scale = max(image.scale, 1)
+        let width = Int64((image.size.width * scale).rounded())
+        let height = Int64((image.size.height * scale).rounded())
+        return width * height
     }
 
     private func setPendingImageAttachments(_ attachments: [ChatImageAttachment]) {
@@ -2480,6 +2524,7 @@ struct ContentView: View {
         if pendingImageAttachments.isEmpty {
             selectedPhotoItems = []
         }
+        removeUnreferencedConversationImages()
     }
 
     private func removePendingFile(_ id: UUID) {
@@ -2739,6 +2784,7 @@ struct ContentView: View {
             )
             ConversationStore.saveSelectedConversationID(conversation.id)
             ConversationStore.saveConversations(conversations)
+            removeUnreferencedConversationImages()
             return
         }
 
@@ -2776,6 +2822,7 @@ struct ContentView: View {
         }
 
         ConversationStore.saveConversations(conversations)
+        removeUnreferencedConversationImages()
     }
 
     private func persistApplicationStateForLifecycle() {
@@ -2803,6 +2850,18 @@ struct ContentView: View {
             conversations[index].updatedAt = Date()
         }
         ConversationStore.saveConversations(conversations, synchronize: synchronize)
+    }
+
+    private func removeUnreferencedConversationImages() {
+        var retainedConversations = conversations
+        if let selectedConversationID,
+           let index = retainedConversations.firstIndex(where: { $0.id == selectedConversationID }) {
+            retainedConversations[index].messages = messages
+        }
+        ConversationImageStore.removeUnreferencedImages(
+            retainedBy: retainedConversations,
+            additionalAttachments: pendingImageAttachments
+        )
     }
 
     private func generateTitleIfNeeded() {

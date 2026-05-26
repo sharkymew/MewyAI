@@ -18,6 +18,36 @@ enum ConversationImageStore {
         return attachment.dataURL
     }
 
+    nonisolated static func removeUnreferencedImages(
+        retainedBy conversations: [AIConversation],
+        additionalAttachments: [ChatImageAttachment] = []
+    ) {
+        guard let imageDirectoryURL,
+              let storedFileURLs = try? FileManager.default.contentsOfDirectory(
+                at: imageDirectoryURL,
+                includingPropertiesForKeys: nil
+              ) else {
+            return
+        }
+
+        let retainedFileNames = Set(
+            conversations
+                .flatMap(\.messages)
+                .flatMap(\.imageAttachments)
+                .compactMap(\.fileName)
+                + additionalAttachments.compactMap(\.fileName)
+        )
+
+        for fileURL in storedFileURLs {
+            let fileName = fileURL.lastPathComponent
+            guard isValidStoredImageFileName(fileName),
+                  !retainedFileNames.contains(fileName) else {
+                continue
+            }
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
     nonisolated static func imageData(for attachment: ChatImageAttachment) -> Data? {
         if let fileName = attachment.fileName,
            let fileURL = fileURL(for: fileName),
@@ -68,8 +98,8 @@ enum ConversationImageStore {
         id: UUID,
         mimeType: String
     ) -> ChatImageAttachment? {
-        let md5 = md5HexString(for: data)
-        let fileName = "\(md5).\(fileExtension(for: mimeType))"
+        let digest = sha256HexString(for: data)
+        let fileName = "\(digest).\(fileExtension(for: mimeType))"
 
         guard let fileURL = fileURL(for: fileName) else { return nil }
 
@@ -86,7 +116,7 @@ enum ConversationImageStore {
             return ChatImageAttachment(
                 id: id,
                 fileName: fileName,
-                md5: md5,
+                md5: digest,
                 byteCount: data.count,
                 mimeType: mimeType
             )
@@ -105,7 +135,15 @@ enum ConversationImageStore {
     }
 
     nonisolated private static func fileURL(for fileName: String) -> URL? {
-        imageDirectoryURL?.appendingPathComponent(fileName, isDirectory: false)
+        guard isValidStoredImageFileName(fileName),
+              let imageDirectoryURL else {
+            return nil
+        }
+
+        let directoryURL = imageDirectoryURL.standardizedFileURL
+        let fileURL = directoryURL.appendingPathComponent(fileName, isDirectory: false).standardizedFileURL
+        guard fileURL.path.hasPrefix(directoryURL.path + "/") else { return nil }
+        return fileURL
     }
 
     nonisolated private static var imageDirectoryURL: URL? {
@@ -113,10 +151,24 @@ enum ConversationImageStore {
             .appendingPathComponent(imageDirectoryName, isDirectory: true)
     }
 
-    nonisolated private static func md5HexString(for data: Data) -> String {
-        Insecure.MD5.hash(data: data)
+    nonisolated private static func sha256HexString(for data: Data) -> String {
+        SHA256.hash(data: data)
             .map { String(format: "%02x", $0) }
             .joined()
+    }
+
+    nonisolated private static func isValidStoredImageFileName(_ fileName: String) -> Bool {
+        let parts = fileName.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let digest = parts.first,
+              let fileExtension = parts.last,
+              [32, 64].contains(digest.count),
+              ["jpg", "png"].contains(fileExtension.lowercased()) else {
+            return false
+        }
+
+        let lowercaseHexCharacters = Set("0123456789abcdef")
+        return digest.allSatisfy { lowercaseHexCharacters.contains($0) }
     }
 
     nonisolated private static func fileExtension(for mimeType: String) -> String {

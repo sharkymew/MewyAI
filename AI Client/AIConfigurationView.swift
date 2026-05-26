@@ -13,6 +13,7 @@ struct AIConfigurationView: View {
     @State private var selectedFetchedModelNames: Set<String> = []
     @State private var isModelImportSheetPresented = false
     @State private var isDeleteAllModelsConfirmationPresented = false
+    @State private var saveErrorMessage: String?
     @FocusState private var focusedField: ConfigurationField?
     
     private let aiService = AIService()
@@ -44,6 +45,7 @@ struct AIConfigurationView: View {
                 requestSection
                 authSection
                 customHeadersSection
+                imageContextSection
                 promptSection
                 modelsSection
             }
@@ -89,6 +91,12 @@ struct AIConfigurationView: View {
                 ForEach(configurations) { configuration in
                     Text(configuration.name).tag(configuration.id)
                 }
+            }
+
+            if let saveErrorMessage {
+                Text(saveErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
             
             Button {
@@ -164,6 +172,19 @@ struct AIConfigurationView: View {
             }
         } footer: {
             Text("每行一个请求头，格式为 Header-Name: value。Authorization、Token、API Key 等敏感请求头会存入钥匙串。")
+        }
+    }
+
+    private var imageContextSection: some View {
+        Section {
+            Toggle(
+                "使用多模态模型为文字模型生成图片描述",
+                isOn: generatesImageContextDescriptionsBinding
+            )
+        } header: {
+            Text("图片描述")
+        } footer: {
+            Text("开启后，发送图片给支持图片的模型时，会自动生成隐藏描述并保存在对话中；以后切换到文字模型时可用这段描述代替图片上下文。")
         }
     }
 
@@ -400,6 +421,17 @@ struct AIConfigurationView: View {
         binding(\.customHeaders)
     }
 
+    private var generatesImageContextDescriptionsBinding: Binding<Bool> {
+        Binding(
+            get: { selectedConfiguration?.generatesImageContextDescriptions ?? true },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    configuration.generatesImageContextDescriptions = newValue
+                }
+            }
+        )
+    }
+
     private var selectedPromptPresetIDBinding: Binding<UUID> {
         Binding(
             get: {
@@ -469,7 +501,8 @@ struct AIConfigurationView: View {
     
     private func saveCurrentState() {
         ensureSelection()
-        AIConfigurationStore.saveConfigurations(configurations)
+        let didSave = AIConfigurationStore.saveConfigurations(configurations)
+        saveErrorMessage = didSave ? nil : "配置保存失败，请检查钥匙串或本机存储权限。"
         if let selectedConfigurationID {
             AIConfigurationStore.saveSelectedConfigurationID(selectedConfigurationID)
         }

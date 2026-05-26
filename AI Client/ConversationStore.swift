@@ -229,19 +229,21 @@ enum ConversationStore {
         return [AIConversation()]
     }
 
-    static func saveConversations(_ conversations: [AIConversation], synchronize: Bool = false) {
+    @discardableResult
+    static func saveConversations(_ conversations: [AIConversation], synchronize: Bool = false) -> Bool {
         let storageConversations = migratedConversationsForStorage(conversations)
-        guard let data = try? JSONEncoder().encode(storageConversations) else { return }
+        guard let data = try? JSONEncoder().encode(storageConversations) else { return false }
 
-        if writeProtectedConversations(data) {
-            UserDefaults.standard.removeObject(forKey: conversationsKey)
-        } else {
-            UserDefaults.standard.set(data, forKey: conversationsKey)
+        guard writeProtectedConversations(data) else {
+            return false
         }
+
+        UserDefaults.standard.removeObject(forKey: conversationsKey)
 
         if synchronize {
             UserDefaults.standard.synchronize()
         }
+        return true
     }
 
     static func loadSelectedConversationID() -> UUID? {
