@@ -1526,9 +1526,11 @@ struct ContentView: View {
     private func startStreamingResponse(
         userText: String,
         imageAttachments: [ChatImageAttachment],
+        imageContextDescription: String = "",
         fileAttachments: [ChatFileAttachment],
         contextMessages: [ChatMessage],
-        appendsUserMessage: Bool
+        appendsUserMessage: Bool,
+        existingUserMessageID: UUID? = nil
     ) {
         let configuration = currentConfiguration
         let trimmedBaseURL = configuration.requestURLString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1537,11 +1539,19 @@ struct ContentView: View {
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
+        let usesImageAttachments = configuration.selectedModelSupportsImages
 
         guard !userText.isEmpty || !imageAttachments.isEmpty || !fileAttachments.isEmpty else { return }
 
-        guard imageAttachments.isEmpty || configuration.selectedModelSupportsImages else {
-            appendAssistantError("当前模型不支持图片输入，请切换到支持图片的多模态模型，或在配置页为该模型开启“支持图片”。")
+        guard imageAttachments.isEmpty
+                || usesImageAttachments
+                || !imageContextDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            appendAssistantError("当前模型不支持图片输入，且这条图片消息还没有可用的隐藏描述。请切换到支持图片的多模态模型后重试。")
+            return
+        }
+
+        guard usesImageAttachments || !containsImageWithoutContextDescription(in: contextMessages) else {
+            appendAssistantError("当前模型不支持图片输入，且上下文中有图片消息还没有可用的隐藏描述。请稍后重试，或切换到支持图片的多模态模型。")
             return
         }
 
@@ -1555,7 +1565,11 @@ struct ContentView: View {
             return
         }
 
-        aiService.resetConversation(with: contextMessages, systemPrompt: configuration.systemPrompt)
+        aiService.resetConversation(
+            with: contextMessages,
+            systemPrompt: configuration.systemPrompt,
+            usesImageAttachments: usesImageAttachments
+        )
         clearInputState()
         isGenerating = true
         chatScrollController.returnToBottom()
@@ -1567,15 +1581,17 @@ struct ContentView: View {
         isFlushScheduled = false
         activeMessageActionID = nil
 
+        var userMessageIDForImageContext = existingUserMessageID
         if appendsUserMessage {
-            messages.append(
-                ChatMessage(
-                    role: "user",
-                    content: userText,
-                    imageAttachments: imageAttachments,
-                    fileAttachments: fileAttachments
-                )
+            let userMessage = ChatMessage(
+                role: "user",
+                content: userText,
+                imageAttachments: imageAttachments,
+                imageContextDescription: imageContextDescription,
+                fileAttachments: fileAttachments
             )
+            messages.append(userMessage)
+            userMessageIDForImageContext = userMessage.id
         }
 
         let assistantMessage = ChatMessage(role: "assistant", content: "")
@@ -1590,6 +1606,7 @@ struct ContentView: View {
         aiService.sendStreamingMessage(
             message: userText,
             imageAttachments: imageAttachments,
+            imageContextDescription: imageContextDescription,
             fileAttachments: fileAttachments,
             baseURL: trimmedBaseURL,
             apiKey: trimmedAPIKey,
@@ -1597,6 +1614,7 @@ struct ContentView: View {
             model: model,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
+            usesImageAttachments: usesImageAttachments,
             isReasoningDisplayActive: {
                 activeAssistantMessageID == assistantMessageID && activeAssistantReasoningIsExpanded
             },
@@ -1659,6 +1677,24 @@ struct ContentView: View {
                 persistCurrentConversation()
             }
         )
+
+        if usesImageAttachments,
+           !imageAttachments.isEmpty,
+           imageContextDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let selectedConversationID,
+           let userMessageIDForImageContext {
+            generateImageContextDescriptionIfNeeded(
+                for: userMessageIDForImageContext,
+                in: selectedConversationID,
+                imageAttachments: imageAttachments,
+                baseURL: trimmedBaseURL,
+                apiKey: trimmedAPIKey,
+                customHeaders: trimmedCustomHeaders,
+                model: model,
+                reasoningEnabled: reasoningEnabled,
+                reasoningEffort: reasoningEffort
+            )
+        }
     }
 
     private func appendAssistantError(_ content: String) {
@@ -1666,6 +1702,75 @@ struct ContentView: View {
         messages.append(message)
         prepareMarkdownCache(for: message.id, content: content)
         persistCurrentConversation()
+    }
+
+    private func containsImageWithoutContextDescription(in messages: [ChatMessage]) -> Bool {
+        messages.contains { message in
+            message.role == "user"
+                && !message.imageAttachments.isEmpty
+                && message.imageContextDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    private func generateImageContextDescriptionIfNeeded(
+        for messageID: UUID,
+        in conversationID: UUID,
+        imageAttachments: [ChatImageAttachment],
+        baseURL: String,
+        apiKey: String,
+        customHeaders: String,
+        model: String,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?
+    ) {
+        aiService.generateImageContextDescription(
+            imageAttachments: imageAttachments,
+            baseURL: baseURL,
+            apiKey: apiKey,
+            customHeaders: customHeaders,
+            model: model,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort
+        ) { description in
+            guard let description,
+                  !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return
+            }
+
+            saveImageContextDescription(
+                description,
+                for: messageID,
+                in: conversationID,
+                matching: imageAttachments
+            )
+        }
+    }
+
+    private func saveImageContextDescription(
+        _ description: String,
+        for messageID: UUID,
+        in conversationID: UUID,
+        matching imageAttachments: [ChatImageAttachment]
+    ) {
+        let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedDescription.isEmpty else { return }
+
+        if selectedConversationID == conversationID,
+           let messageIndex = messages.firstIndex(where: { $0.id == messageID }),
+           messages[messageIndex].imageAttachments == imageAttachments {
+            messages[messageIndex].imageContextDescription = trimmedDescription
+            persistCurrentConversation(refreshesUpdatedAt: false)
+            return
+        }
+
+        guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }),
+              let messageIndex = conversations[conversationIndex].messages.firstIndex(where: { $0.id == messageID }),
+              conversations[conversationIndex].messages[messageIndex].imageAttachments == imageAttachments else {
+            return
+        }
+
+        conversations[conversationIndex].messages[messageIndex].imageContextDescription = trimmedDescription
+        ConversationStore.saveConversations(conversations)
     }
 
     private func clearInputState() {
@@ -1748,8 +1853,12 @@ struct ContentView: View {
             return
         }
 
+        let keepsImageContextDescription = messages[index].imageAttachments == pendingImageAttachments
         messages[index].content = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         messages[index].imageAttachments = pendingImageAttachments
+        if !keepsImageContextDescription {
+            messages[index].imageContextDescription = ""
+        }
         messages[index].fileAttachments = pendingFileAttachments
         invalidateMarkdownCache(for: editingMessageID)
         persistCurrentConversation()
@@ -1767,8 +1876,12 @@ struct ContentView: View {
         let editedText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let editedImages = pendingImageAttachments
         let editedFiles = pendingFileAttachments
+        let editedImageContextDescription = messages[index].imageAttachments == editedImages
+            ? messages[index].imageContextDescription
+            : ""
         messages[index].content = editedText
         messages[index].imageAttachments = editedImages
+        messages[index].imageContextDescription = editedImageContextDescription
         messages[index].fileAttachments = editedFiles
         messages.removeSubrange((index + 1)..<messages.count)
         pruneMarkdownCache()
@@ -1778,9 +1891,11 @@ struct ContentView: View {
         startStreamingResponse(
             userText: editedText,
             imageAttachments: editedImages,
+            imageContextDescription: editedImageContextDescription,
             fileAttachments: editedFiles,
             contextMessages: context,
-            appendsUserMessage: false
+            appendsUserMessage: false,
+            existingUserMessageID: editingMessageID
         )
     }
 
@@ -1803,9 +1918,11 @@ struct ContentView: View {
         startStreamingResponse(
             userText: userMessage.content,
             imageAttachments: userMessage.imageAttachments,
+            imageContextDescription: userMessage.imageContextDescription,
             fileAttachments: userMessage.fileAttachments,
             contextMessages: context,
-            appendsUserMessage: false
+            appendsUserMessage: false,
+            existingUserMessageID: userMessage.id
         )
     }
 
@@ -2448,7 +2565,11 @@ struct ContentView: View {
             activeAssistantReasoningIsExpanded = false
             activeAssistantDidCollapseReasoningAfterThinking = false
             liveAssistantDisplays = [:]
-            aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
+            aiService.resetConversation(
+                with: [],
+                systemPrompt: currentConfiguration.systemPrompt,
+                usesImageAttachments: currentConfiguration.selectedModelSupportsImages
+            )
             ConversationStore.saveSelectedConversationID(conversation.id)
             ConversationStore.saveConversations(conversations)
         }
@@ -2499,7 +2620,11 @@ struct ContentView: View {
         streamingTokenBuffer.reset()
         isFlushScheduled = false
         chatScrollController.returnToBottom()
-        aiService.resetConversation(with: messages, systemPrompt: currentConfiguration.systemPrompt)
+        aiService.resetConversation(
+            with: messages,
+            systemPrompt: currentConfiguration.systemPrompt,
+            usesImageAttachments: currentConfiguration.selectedModelSupportsImages
+        )
         ConversationStore.saveSelectedConversationID(conversation.id)
 
         if closesSidebar {
@@ -2567,7 +2692,11 @@ struct ContentView: View {
         editingMessageID = nil
         streamingTokenBuffer.reset()
         isFlushScheduled = false
-        aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
+        aiService.resetConversation(
+            with: [],
+            systemPrompt: currentConfiguration.systemPrompt,
+            usesImageAttachments: currentConfiguration.selectedModelSupportsImages
+        )
         ConversationStore.saveSelectedConversationID(conversation.id)
         ConversationStore.saveConversations(conversations)
 
@@ -2604,7 +2733,11 @@ struct ContentView: View {
             streamingTokenBuffer.reset()
             isFlushScheduled = false
             setConversationSidebarVisibility(false)
-            aiService.resetConversation(with: [], systemPrompt: currentConfiguration.systemPrompt)
+            aiService.resetConversation(
+                with: [],
+                systemPrompt: currentConfiguration.systemPrompt,
+                usesImageAttachments: currentConfiguration.selectedModelSupportsImages
+            )
             ConversationStore.saveSelectedConversationID(conversation.id)
             ConversationStore.saveConversations(conversations)
             return
@@ -2635,7 +2768,11 @@ struct ContentView: View {
             editingMessageID = nil
             streamingTokenBuffer.reset()
             isFlushScheduled = false
-            aiService.resetConversation(with: messages, systemPrompt: currentConfiguration.systemPrompt)
+            aiService.resetConversation(
+                with: messages,
+                systemPrompt: currentConfiguration.systemPrompt,
+                usesImageAttachments: currentConfiguration.selectedModelSupportsImages
+            )
             ConversationStore.saveSelectedConversationID(nextConversation.id)
         }
 

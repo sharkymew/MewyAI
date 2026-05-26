@@ -60,6 +60,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     let role: String
     var content: String
     var imageAttachments: [ChatImageAttachment] = []
+    var imageContextDescription: String = ""
     var fileAttachments: [ChatFileAttachment] = []
     var contentChunks: [String] = []
     var reasoningContent: String = ""
@@ -72,6 +73,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         role: String,
         content: String,
         imageAttachments: [ChatImageAttachment] = [],
+        imageContextDescription: String = "",
         fileAttachments: [ChatFileAttachment] = [],
         contentChunks: [String] = [],
         reasoningContent: String = "",
@@ -83,6 +85,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         self.role = role
         self.content = content
         self.imageAttachments = imageAttachments
+        self.imageContextDescription = imageContextDescription
         self.fileAttachments = fileAttachments
         self.contentChunks = contentChunks
         self.reasoningContent = reasoningContent
@@ -97,6 +100,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         role = try container.decode(String.self, forKey: .role)
         content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
         imageAttachments = try container.decodeIfPresent([ChatImageAttachment].self, forKey: .imageAttachments) ?? []
+        imageContextDescription = try container.decodeIfPresent(String.self, forKey: .imageContextDescription) ?? ""
         fileAttachments = try container.decodeIfPresent([ChatFileAttachment].self, forKey: .fileAttachments) ?? []
         contentChunks = try container.decodeIfPresent([String].self, forKey: .contentChunks) ?? []
         reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent) ?? ""
