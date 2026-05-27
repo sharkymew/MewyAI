@@ -61,6 +61,14 @@ private struct ChatScrollBottomDistancePreferenceKey: PreferenceKey {
     }
 }
 
+private struct InputBarHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 private struct SidebarLayout {
     let sidebarWidth: CGFloat
     let mainContentWidth: CGFloat
@@ -441,12 +449,49 @@ private final class AssistantLiveDisplay {
     let contentChannel = StreamingTextUpdateChannel()
 }
 
+private final class StreamingOutputHaptics: ObservableObject {
+    private let refreshGenerator = UIImpactFeedbackGenerator(style: .light)
+    private let completionGenerator = UIImpactFeedbackGenerator(style: .medium)
+    private var lastImpactAt: Date?
+    private static let minimumImpactInterval: TimeInterval = 0.055
+
+    func prepareForStreaming() {
+        lastImpactAt = nil
+        refreshGenerator.prepare()
+        completionGenerator.prepare()
+    }
+
+    func impactForOutputRefresh() {
+        let now = Date()
+        if let lastImpactAt,
+           now.timeIntervalSince(lastImpactAt) < Self.minimumImpactInterval {
+            return
+        }
+
+        refreshGenerator.impactOccurred(intensity: 0.35)
+        refreshGenerator.prepare()
+        lastImpactAt = now
+    }
+
+    func impactForOutputCompletion() {
+        completionGenerator.impactOccurred(intensity: 0.85)
+        completionGenerator.prepare()
+        lastImpactAt = nil
+    }
+
+    func reset() {
+        lastImpactAt = nil
+    }
+}
+
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var configurations = AIConfigurationStore.loadConfigurations()
     @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
+    @StateObject private var speechInputController = SpeechInputController()
+    @StateObject private var streamingOutputHaptics = StreamingOutputHaptics()
     @State private var inputText = ""
     @State private var messages: [ChatMessage] = []
     @State private var conversations = ConversationStore.loadConversations()
@@ -478,6 +523,10 @@ struct ContentView: View {
     @State private var editingMessageID: UUID?
     @State private var isInputFocused = false
     @State private var inputFocusRequestID = 0
+    @State private var speechInputBaseText = ""
+    @State private var speechInputLastTranscript = ""
+    @State private var speechInputLastMergedText = ""
+    @State private var inputBarMeasuredHeight: CGFloat = 0
     @State private var hasLoadedInitialConversation = false
     @State private var showsMainSidebarToggleFadeExclusion = true
     @State private var showsSidebarToggleFadeExclusion = false
@@ -492,6 +541,7 @@ struct ContentView: View {
     private let inputBarTopPadding: CGFloat = 8
     private let inputBarHorizontalPadding: CGFloat = 12
     private let inputBarCornerRadius: CGFloat = 34
+    private let bottomScrollContentGap: CGFloat = 10
     private let inputBottomFadeHeight: CGFloat = 178
     private let inputBottomFadeOverlap: CGFloat = 118
     private let topGlassFadeExclusionInset: CGFloat = 8
@@ -530,6 +580,12 @@ struct ContentView: View {
         Color.red.opacity(colorScheme == .dark ? 0.18 : 0.09)
     }
 
+    private var speechControlBackground: Color {
+        speechInputController.isRecording
+            ? Color.red.opacity(colorScheme == .dark ? 0.22 : 0.12)
+            : inputGlassTint
+    }
+
     private var inputBottomFadeTint: Color {
         colorScheme == .dark ? Color.black.opacity(0.40) : Color.white.opacity(0.62)
     }
@@ -544,6 +600,11 @@ struct ContentView: View {
 
     private var topScrollContentPadding: CGFloat {
         topControlsTopPadding + topControlSize + topScrollContentGap
+    }
+
+    private var bottomScrollContentPadding: CGFloat {
+        let inputBarHeight = inputBarMeasuredHeight > 0 ? inputBarMeasuredHeight : inputBottomFadeOverlap
+        return inputBarHeight + bottomScrollContentGap
     }
 
     @ViewBuilder
@@ -783,6 +844,71 @@ struct ContentView: View {
         editingMessageID != nil
     }
 
+    private func toggleSpeechInput() {
+        if speechInputController.isRecording {
+            speechInputController.stopRecording()
+            return
+        }
+
+        speechInputBaseText = inputText
+        speechInputLastTranscript = ""
+        speechInputLastMergedText = inputText
+
+        Task {
+            await speechInputController.startRecording()
+        }
+    }
+
+    private func stopSpeechInputIfNeeded() {
+        if speechInputController.isRecording {
+            speechInputController.stopRecording()
+        }
+    }
+
+    private func resetSpeechInputMergeState() {
+        speechInputBaseText = inputText
+        speechInputLastTranscript = ""
+        speechInputLastMergedText = inputText
+    }
+
+    private func applySpeechTranscript(_ transcript: String) {
+        let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTranscript.isEmpty else {
+            speechInputLastTranscript = ""
+            speechInputLastMergedText = inputText
+            return
+        }
+
+        if speechInputLastTranscript.isEmpty {
+            if inputText != speechInputBaseText {
+                speechInputBaseText = inputText
+            }
+        } else if inputText != speechInputLastMergedText {
+            speechInputBaseText = inputText
+        }
+
+        let mergedText = mergedSpeechInputText(
+            baseText: speechInputBaseText,
+            speechText: trimmedTranscript
+        )
+        inputText = mergedText
+        speechInputLastTranscript = trimmedTranscript
+        speechInputLastMergedText = mergedText
+    }
+
+    private func mergedSpeechInputText(baseText: String, speechText: String) -> String {
+        let trimmedSpeechText = speechText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSpeechText.isEmpty else { return baseText }
+        guard !baseText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return trimmedSpeechText
+        }
+
+        let needsSeparator = baseText.unicodeScalars.last.map {
+            !CharacterSet.whitespacesAndNewlines.contains($0)
+        } ?? false
+        return baseText + (needsSeparator ? " " : "") + trimmedSpeechText
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let layout = sidebarLayout(for: geometry.size)
@@ -792,7 +918,6 @@ struct ContentView: View {
             ZStack(alignment: .leading) {
                 mainContent(topSafeAreaInset: geometry.safeAreaInsets.top)
                     .frame(width: layout.mainContentWidth)
-                    .clipped()
                     .disabled(showsOverlaySidebar)
                     .offset(x: layout.mainContentOffsetX(isOverlayVisible: showsOverlaySidebar))
                     .animation(.easeOut(duration: sidebarTransitionDuration), value: showConversationSidebar)
@@ -876,8 +1001,12 @@ struct ContentView: View {
         .onChange(of: colorScheme) { _, _ in
             resetMarkdownCache(for: messages)
         }
+        .onChange(of: speechInputController.transcript) { _, transcript in
+            applySpeechTranscript(transcript)
+        }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .inactive || newPhase == .background else { return }
+            speechInputController.stopRecording()
             persistApplicationStateForLifecycle()
         }
     }
@@ -934,34 +1063,13 @@ struct ContentView: View {
 
     @ViewBuilder
     private func mainContent(topSafeAreaInset: CGFloat) -> some View {
-        if #available(iOS 26.0, *) {
-            mainContentWithSystemScrollEdges
-        } else {
-            legacyMainContent(topSafeAreaInset: topSafeAreaInset)
-        }
-    }
-
-    @available(iOS 26.0, *)
-    private var mainContentWithSystemScrollEdges: some View {
-        chatScrollView(topPadding: 12)
-            .safeAreaBar(edge: .top, spacing: 0) {
-                topFloatingControls
-                    .padding(.bottom, 8)
-            }
-            .safeAreaBar(edge: .bottom, spacing: 0) {
-                inputBar(includesLegacyFade: false)
-            }
-            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
-            .overlay(alignment: .bottom) {
-                ScrollToBottomButtonOverlay(scrollController: chatScrollController) {
-                    scrollToBottomGlassIcon()
-                }
-            }
+        legacyMainContent(topSafeAreaInset: topSafeAreaInset)
     }
 
     private func legacyMainContent(topSafeAreaInset: CGFloat) -> some View {
         ZStack(alignment: .top) {
             chatScrollView(topPadding: topScrollContentPadding)
+                .ignoresSafeArea(edges: [.top, .bottom])
 
             topChrome(
                 topSafeAreaInset: topSafeAreaInset,
@@ -1016,11 +1124,11 @@ struct ContentView: View {
 
                         if #available(iOS 18.0, *) {
                             Color.clear
-                                .frame(height: 1)
+                                .frame(height: bottomScrollContentPadding)
                                 .id("bottomAnchor")
                         } else {
                             Color.clear
-                                .frame(height: 1)
+                                .frame(height: bottomScrollContentPadding)
                                 .id("bottomAnchor")
                                 .background(
                                     GeometryReader { bottomGeometry in
@@ -1036,7 +1144,6 @@ struct ContentView: View {
                         }
                     }
                     .padding(.horizontal)
-                    .padding(.bottom)
                     .padding(.top, topPadding)
                     .frame(
                         maxWidth: .infinity,
@@ -1102,6 +1209,13 @@ struct ContentView: View {
                         .padding(.horizontal, 6)
                 }
 
+                if let speechInputError = speechInputController.errorMessage {
+                    Text(speechInputError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 6)
+                }
+
                 if isEditingMessage {
                     Text("正在修改消息")
                         .font(.caption)
@@ -1138,6 +1252,20 @@ struct ContentView: View {
                 inputBottomFadeBackdrop
                     .ignoresSafeArea(edges: .bottom)
             }
+        }
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: InputBarHeightPreferenceKey.self,
+                    value: ChatScrollMetrics.roundedDistance(geometry.size.height)
+                )
+            }
+        }
+        .onPreferenceChange(InputBarHeightPreferenceKey.self) { height in
+            guard abs(inputBarMeasuredHeight - height) > 0.5 else { return }
+
+            inputBarMeasuredHeight = height
+            chatScrollController.requestImmediateAutoScroll(animated: false)
         }
     }
 
@@ -1207,8 +1335,27 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 11)
 
+            speechInputControl
+
             inputActionControl
         }
+    }
+
+    private var speechInputControl: some View {
+        Button {
+            toggleSpeechInput()
+        } label: {
+            controlGlassIcon(
+                systemName: speechInputController.isRecording ? "mic.fill" : "mic",
+                size: 18,
+                weight: .semibold,
+                frame: 40,
+                tint: speechControlBackground,
+                foreground: speechInputController.isRecording ? .red : .primary
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(speechInputController.isRecording ? "停止语音输入" : "开始语音输入")
     }
 
     @ViewBuilder
@@ -1232,10 +1379,12 @@ struct ContentView: View {
 
                 Menu {
                     Button("仅修改") {
+                        stopSpeechInputIfNeeded()
                         saveEditingMessageOnly()
                     }
 
                     Button("修改并发送") {
+                        stopSpeechInputIfNeeded()
                         saveEditingMessageAndRegenerate()
                     }
                 } label: {
@@ -1255,6 +1404,7 @@ struct ContentView: View {
                 if isGenerating {
                     stopGenerating()
                 } else {
+                    stopSpeechInputIfNeeded()
                     sendMessage()
                 }
             } label: {
@@ -1513,6 +1663,7 @@ struct ContentView: View {
     }
 
     func sendMessage() {
+        stopSpeechInputIfNeeded()
         let userText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageAttachments = pendingImageAttachments
         let fileAttachments = pendingFileAttachments
@@ -1576,6 +1727,7 @@ struct ContentView: View {
         )
         clearInputState()
         isGenerating = true
+        streamingOutputHaptics.prepareForStreaming()
         chatScrollController.returnToBottom()
         streamingTokenBuffer.reset()
         activeAssistantHasReasoning = false
@@ -1651,6 +1803,8 @@ struct ContentView: View {
                 cancelScheduledFlush()
                 flushPendingTokens(for: assistantMessageID, invalidatesMarkdownCache: true, requestsAutoScroll: true)
                 isGenerating = false
+                streamingOutputHaptics.impactForOutputCompletion()
+                streamingOutputHaptics.reset()
                 activeAssistantMessageID = nil
                 activeAssistantHasReasoning = false
                 activeAssistantHasContent = false
@@ -1673,6 +1827,7 @@ struct ContentView: View {
                 }
 
                 isGenerating = false
+                streamingOutputHaptics.reset()
                 activeAssistantMessageID = nil
                 activeAssistantHasReasoning = false
                 activeAssistantHasContent = false
@@ -1794,6 +1949,7 @@ struct ContentView: View {
     }
 
     private func clearInputState() {
+        speechInputController.cancelRecording()
         inputText = ""
         pendingImageAttachments = []
         pendingFileAttachments = []
@@ -1802,6 +1958,7 @@ struct ContentView: View {
         editingMessageID = nil
         isInputFocused = false
         inputFocusRequestID += 1
+        resetSpeechInputMergeState()
     }
 
     private func startEditingUserMessage(_ id: UUID) {
@@ -1812,6 +1969,7 @@ struct ContentView: View {
               let message = messages.first(where: { $0.id == id && $0.role == "user" }) else {
             return
         }
+        stopSpeechInputIfNeeded()
 
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
@@ -1863,10 +2021,12 @@ struct ContentView: View {
     }
 
     private func cancelEditingMessage() {
+        stopSpeechInputIfNeeded()
         clearInputState()
     }
 
     private func saveEditingMessageOnly() {
+        stopSpeechInputIfNeeded()
         guard let editingMessageID,
               let index = messages.firstIndex(where: { $0.id == editingMessageID && $0.role == "user" }) else {
             clearInputState()
@@ -1887,6 +2047,7 @@ struct ContentView: View {
     }
 
     private func saveEditingMessageAndRegenerate() {
+        stopSpeechInputIfNeeded()
         guard !isGenerating,
               let editingMessageID,
               let index = messages.firstIndex(where: { $0.id == editingMessageID && $0.role == "user" }) else {
@@ -2083,11 +2244,14 @@ struct ContentView: View {
         resetsText: Bool,
         appendsProgressively: Bool = false
     ) {
-        liveAssistantDisplays[messageID]?.reasoningChannel.publish(
+        guard let reasoningChannel = liveAssistantDisplays[messageID]?.reasoningChannel else { return }
+
+        reasoningChannel.publish(
             chunks: chunks,
             resetsText: resetsText,
             appendsProgressively: appendsProgressively
         )
+        triggerStreamingOutputHapticIfNeeded(chunks: chunks, resetsText: resetsText)
     }
 
     private func clearLiveReasoningDisplay(for messageID: UUID) {
@@ -2095,7 +2259,17 @@ struct ContentView: View {
     }
 
     private func publishLiveContentUpdate(for messageID: UUID, chunks: [String], resetsText: Bool) {
-        liveAssistantDisplays[messageID]?.contentChannel.publish(chunks: chunks, resetsText: resetsText)
+        guard let contentChannel = liveAssistantDisplays[messageID]?.contentChannel else { return }
+
+        contentChannel.publish(chunks: chunks, resetsText: resetsText)
+        triggerStreamingOutputHapticIfNeeded(chunks: chunks, resetsText: resetsText)
+    }
+
+    private func triggerStreamingOutputHapticIfNeeded(chunks: [String], resetsText: Bool) {
+        guard !resetsText,
+              chunks.contains(where: { !$0.isEmpty }) else { return }
+
+        streamingOutputHaptics.impactForOutputRefresh()
     }
 
     private func pruneLiveAssistantDisplays() {
@@ -2182,7 +2356,7 @@ struct ContentView: View {
         pruneLiveAssistantDisplays()
     }
 
-    func stopGenerating() {
+    func stopGenerating(triggersCompletionHaptic: Bool = true) {
         let stoppedMessageID = activeAssistantMessageID
 
         aiService.cancelStreaming()
@@ -2203,6 +2377,10 @@ struct ContentView: View {
         activeAssistantReasoningIsExpanded = false
         activeAssistantDidCollapseReasoningAfterThinking = false
         isGenerating = false
+        if triggersCompletionHaptic, stoppedMessageID != nil {
+            streamingOutputHaptics.impactForOutputCompletion()
+        }
+        streamingOutputHaptics.reset()
         streamingTokenBuffer.reset()
         isFlushScheduled = false
         persistCurrentConversation()
@@ -2635,7 +2813,7 @@ struct ContentView: View {
 
     private func selectConversation(_ id: UUID, closesSidebar: Bool) {
         if isGenerating {
-            stopGenerating()
+            stopGenerating(triggersCompletionHaptic: false)
         } else {
             persistCurrentConversation()
         }
@@ -2645,10 +2823,12 @@ struct ContentView: View {
     }
 
     private func restoreConversation(_ conversation: AIConversation, closesSidebar: Bool) {
+        speechInputController.cancelRecording()
         selectedConversationID = conversation.id
         messages = conversation.messages
         resetMarkdownCache(for: messages)
         inputText = ""
+        resetSpeechInputMergeState()
         pendingImageAttachments = []
         pendingFileAttachments = []
         selectedPhotoItems = []
@@ -2697,7 +2877,7 @@ struct ContentView: View {
         }
 
         if isGenerating {
-            stopGenerating()
+            stopGenerating(triggersCompletionHaptic: false)
         } else {
             persistCurrentConversation()
         }
@@ -2721,7 +2901,9 @@ struct ContentView: View {
         selectedConversationID = conversation.id
         messages = []
         resetMarkdownCache(for: messages)
+        speechInputController.cancelRecording()
         inputText = ""
+        resetSpeechInputMergeState()
         pendingImageAttachments = []
         pendingFileAttachments = []
         selectedPhotoItems = []
@@ -2761,7 +2943,9 @@ struct ContentView: View {
             selectedConversationID = conversation.id
             messages = []
             resetMarkdownCache(for: messages)
+            speechInputController.cancelRecording()
             inputText = ""
+            resetSpeechInputMergeState()
             pendingImageAttachments = []
             pendingFileAttachments = []
             selectedPhotoItems = []
@@ -2789,7 +2973,7 @@ struct ContentView: View {
         }
 
         if selectedConversationID == id && isGenerating {
-            stopGenerating()
+            stopGenerating(triggersCompletionHaptic: false)
         }
 
         conversations.removeAll { $0.id == id }
