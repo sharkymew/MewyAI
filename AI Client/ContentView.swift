@@ -3446,7 +3446,9 @@ struct ErrorDetailContent: Equatable {
         let normalized = message
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let separatorRange = normalized.range(of: "\n\n") else { return nil }
+        guard let separatorRange = normalized.range(of: "\n\n") ?? normalized.range(of: "\n") else {
+            return nil
+        }
 
         let summary = String(normalized[..<separatorRange.lowerBound])
             .trimmingCharacters(in: .whitespacesAndNewlines)

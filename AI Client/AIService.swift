@@ -428,6 +428,7 @@ class AIService {
                         completion(.failure(.requestFailed(Self.errorMessage(
                             statusCode: statusCode,
                             body: responseText,
+                            request: request,
                             redacting: redactionValues
                         ))))
                     }
@@ -789,6 +790,7 @@ class AIService {
                         completion(Self.errorMessage(
                             statusCode: statusCode,
                             body: responseText,
+                            request: request,
                             redacting: redactionValues
                         ))
                     }
@@ -891,6 +893,7 @@ class AIService {
                         onError(Self.errorMessage(
                             statusCode: httpResponse.statusCode,
                             body: errorBody,
+                            request: request,
                             redacting: redactionValues
                         ))
                     }
@@ -1279,17 +1282,59 @@ class AIService {
     private static func errorMessage(
         statusCode: Int?,
         body: String,
+        request: URLRequest? = nil,
         redacting sensitiveValues: [String] = []
     ) -> String {
         let sanitizedBody = sanitizedErrorBody(
             String(body.prefix(maxErrorBodyCharacters)),
             redacting: sensitiveValues
         )
+        let responseBodyDetail = sanitizedBody.contains("\n")
+            ? "响应正文：\n\(sanitizedBody)"
+            : "响应正文：\(sanitizedBody)"
+        let detailText = [
+            requestDiagnosticText(for: request, redacting: sensitiveValues),
+            responseBodyDetail
+        ]
+        .compactMap { $0 }
+        .joined(separator: "\n")
+
         if let statusCode {
-            return "请求失败，状态码：\(statusCode)\n\n\(sanitizedBody)"
+            return "请求失败，状态码：\(statusCode)\n\n\(detailText)"
         }
 
-        return "请求失败\n\n\(sanitizedBody)"
+        return "请求失败\n\n\(detailText)"
+    }
+
+    private static func requestDiagnosticText(
+        for request: URLRequest?,
+        redacting sensitiveValues: [String]
+    ) -> String? {
+        guard let request else { return nil }
+
+        var lines = [String]()
+        if let method = request.httpMethod, !method.isEmpty {
+            lines.append("请求方法：\(method)")
+        }
+
+        if let urlDescription = sanitizedRequestURLDescription(request.url) {
+            lines.append("请求地址：\(sanitizedErrorBody(urlDescription, redacting: sensitiveValues))")
+        }
+
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    private static func sanitizedRequestURLDescription(_ url: URL?) -> String? {
+        guard let url,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+        return components.string
     }
 
     private static func collectErrorBody(
