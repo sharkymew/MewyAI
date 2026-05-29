@@ -272,7 +272,7 @@ struct AIConfigurationView: View {
             .disabled((selectedConfiguration?.models.isEmpty ?? true) || isFetchingModels)
             
             if let modelFetchMessage {
-                Text(modelFetchMessage)
+                CollapsibleErrorMessageView(message: modelFetchMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

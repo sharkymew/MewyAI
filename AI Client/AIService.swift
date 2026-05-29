@@ -335,6 +335,9 @@ class AIService {
     private static let maxErrorBodyCharacters = 4_000
     private static let maxStreamingContentCharacters = 200_000
     private static let maxStreamingReasoningCharacters = 120_000
+    private enum BoundedResponseDataError: Error {
+        case responseTooLarge
+    }
 
     private let session: URLSession
     private var conversationHistory = AIService.initialConversationHistory(
@@ -414,55 +417,52 @@ class AIService {
         request.httpBody = nil
         let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
 
-        session.dataTask(with: request) { data, response, error in
-            if let error {
+        Task {
+            do {
+                let (data, response) = try await boundedResponseData(for: request)
+                let statusCode = (response as? HTTPURLResponse)?.statusCode
+                let responseText = Self.responseText(from: data, redacting: redactionValues)
+
+                guard let statusCode, (200...299).contains(statusCode) else {
+                    DispatchQueue.main.async {
+                        completion(.failure(.requestFailed(Self.errorMessage(
+                            statusCode: statusCode,
+                            body: responseText,
+                            redacting: redactionValues
+                        ))))
+                    }
+                    return
+                }
+
+                DispatchQueue.main.async {
+                    guard let decoded = try? JSONDecoder().decode(ModelListResponse.self, from: data) else {
+                        completion(.failure(.decodingFailed("模型列表解析失败\n\n\(responseText)")))
+                        return
+                    }
+
+                    let models = decoded.data
+                        .filter { !$0.id.isEmpty }
+                        .filter { Self.isTextChatModel($0.id) }
+                        .map { item in
+                            AIModelConfiguration(
+                                name: item.id,
+                                supportsReasoning: item.supportsReasoning ?? Self.infersReasoningSupport(for: item.id),
+                                supportsImages: item.supportsImages ?? Self.infersImageSupport(for: item.id)
+                            )
+                        }
+                        .sorted { $0.name < $1.name }
+                    completion(.success(models))
+                }
+            } catch BoundedResponseDataError.responseTooLarge {
+                DispatchQueue.main.async {
+                    completion(.failure(.requestFailed("模型列表响应过大，已拒绝处理。")))
+                }
+            } catch {
                 DispatchQueue.main.async {
                     completion(.failure(.requestFailed("模型列表请求失败：\(error.localizedDescription)")))
                 }
-                return
-            }
-
-            let statusCode = (response as? HTTPURLResponse)?.statusCode
-            let responseText = Self.responseText(from: data, redacting: redactionValues)
-
-            guard let statusCode, (200...299).contains(statusCode) else {
-                DispatchQueue.main.async {
-                    completion(.failure(.requestFailed(Self.errorMessage(
-                        statusCode: statusCode,
-                        body: responseText,
-                        redacting: redactionValues
-                    ))))
-                }
-                return
-            }
-
-            DispatchQueue.main.async {
-                guard Self.responseDataIsAcceptable(data) else {
-                    completion(.failure(.requestFailed("模型列表响应过大，已拒绝处理。")))
-                    return
-                }
-
-                guard let data,
-                      let decoded = try? JSONDecoder().decode(ModelListResponse.self, from: data) else {
-                    completion(.failure(.decodingFailed("模型列表解析失败：\(responseText)")))
-                    return
-                }
-
-                let models = decoded.data
-                    .filter { !$0.id.isEmpty }
-                    .filter { Self.isTextChatModel($0.id) }
-                    .map { item in
-                        AIModelConfiguration(
-                            name: item.id,
-                            supportsReasoning: item.supportsReasoning ?? Self.infersReasoningSupport(for: item.id),
-                            supportsImages: item.supportsImages ?? Self.infersImageSupport(for: item.id)
-                        )
-                    }
-                    .sorted { $0.name < $1.name }
-                completion(.success(models))
             }
         }
-        .resume()
     }
 
     func generateConversationTitle(
@@ -520,25 +520,29 @@ class AIService {
         )
         request.httpBody = jsonData
 
-        session.dataTask(with: request) { data, response, _ in
-            let statusCode = (response as? HTTPURLResponse)?.statusCode
-            DispatchQueue.main.async {
-                guard let data,
-                      Self.responseDataIsAcceptable(data),
-                      let statusCode,
-                      (200...299).contains(statusCode),
-                      let decoded = try? JSONDecoder().decode(OpenAIResponse.self, from: data) else {
-                    completion(nil)
-                    return
+        Task {
+            do {
+                let (data, response) = try await boundedResponseData(for: request)
+                let statusCode = (response as? HTTPURLResponse)?.statusCode
+                DispatchQueue.main.async {
+                    guard let statusCode,
+                          (200...299).contains(statusCode),
+                          let decoded = try? JSONDecoder().decode(OpenAIResponse.self, from: data) else {
+                        completion(nil)
+                        return
+                    }
+
+                    let title = Self.sanitizedConversationTitle(decoded.choices.first?.message.content)
+                        ?? Self.fallbackConversationTitle(from: messages)
+
+                    completion(title?.isEmpty == false ? title : nil)
                 }
-
-                let title = Self.sanitizedConversationTitle(decoded.choices.first?.message.content)
-                    ?? Self.fallbackConversationTitle(from: messages)
-
-                completion(title?.isEmpty == false ? title : nil)
+            } catch {
+                DispatchQueue.main.async {
+                    completion(nil)
+                }
             }
         }
-        .resume()
     }
 
     func generateImageContextDescription(
@@ -590,22 +594,26 @@ class AIService {
         )
         request.httpBody = jsonData
 
-        session.dataTask(with: request) { data, response, _ in
-            let statusCode = (response as? HTTPURLResponse)?.statusCode
-            DispatchQueue.main.async {
-                guard let data,
-                      Self.responseDataIsAcceptable(data),
-                      let statusCode,
-                      (200...299).contains(statusCode),
-                      let decoded = try? JSONDecoder().decode(OpenAIResponse.self, from: data) else {
-                    completion(nil)
-                    return
-                }
+        Task {
+            do {
+                let (data, response) = try await boundedResponseData(for: request)
+                let statusCode = (response as? HTTPURLResponse)?.statusCode
+                DispatchQueue.main.async {
+                    guard let statusCode,
+                          (200...299).contains(statusCode),
+                          let decoded = try? JSONDecoder().decode(OpenAIResponse.self, from: data) else {
+                        completion(nil)
+                        return
+                    }
 
-                completion(Self.sanitizedImageContextDescription(decoded.choices.first?.message.content))
+                    completion(Self.sanitizedImageContextDescription(decoded.choices.first?.message.content))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    completion(nil)
+                }
             }
         }
-        .resume()
     }
 
     private nonisolated static func sanitizedConversationTitle(_ rawTitle: String?) -> String? {
@@ -770,45 +778,42 @@ class AIService {
         request.httpBody = jsonData
         let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
 
-        session.dataTask(with: request) { data, response, error in
-            if let error {
-                DispatchQueue.main.async {
-                    completion("请求失败：\(error.localizedDescription)")
-                }
-                return
-            }
+        Task {
+            do {
+                let (data, response) = try await boundedResponseData(for: request)
+                let statusCode = (response as? HTTPURLResponse)?.statusCode
+                let responseText = Self.responseText(from: data, redacting: redactionValues)
 
-            let statusCode = (response as? HTTPURLResponse)?.statusCode
-            let responseText = Self.responseText(from: data, redacting: redactionValues)
-
-            guard let statusCode, (200...299).contains(statusCode) else {
-                DispatchQueue.main.async {
-                    completion(Self.errorMessage(
-                        statusCode: statusCode,
-                        body: responseText,
-                        redacting: redactionValues
-                    ))
-                }
-                return
-            }
-
-            DispatchQueue.main.async {
-                guard Self.responseDataIsAcceptable(data) else {
-                    completion("响应过大，已拒绝处理。")
+                guard let statusCode, (200...299).contains(statusCode) else {
+                    DispatchQueue.main.async {
+                        completion(Self.errorMessage(
+                            statusCode: statusCode,
+                            body: responseText,
+                            redacting: redactionValues
+                        ))
+                    }
                     return
                 }
 
-                if let data,
-                   let decoded = try? JSONDecoder().decode(OpenAIResponse.self, from: data) {
-                    let text = decoded.choices.first?.message.content ?? "无回复"
-                    self.conversationHistory.append(ChatRequestMessage(role: "assistant", text: text))
-                    completion(text)
-                } else {
-                    completion("解析失败：\(responseText)")
+                DispatchQueue.main.async {
+                    if let decoded = try? JSONDecoder().decode(OpenAIResponse.self, from: data) {
+                        let text = decoded.choices.first?.message.content ?? "无回复"
+                        self.conversationHistory.append(ChatRequestMessage(role: "assistant", text: text))
+                        completion(text)
+                    } else {
+                        completion("解析失败\n\n\(responseText)")
+                    }
+                }
+            } catch BoundedResponseDataError.responseTooLarge {
+                DispatchQueue.main.async {
+                    completion("响应过大，已拒绝处理。")
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    completion("请求失败：\(error.localizedDescription)")
                 }
             }
         }
-        .resume()
     }
 
     func sendStreamingMessage(
@@ -1210,6 +1215,27 @@ class AIService {
         return URLSession(configuration: configuration)
     }
 
+    private func boundedResponseData(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await session.bytes(for: request)
+        let expectedLength = response.expectedContentLength
+        if expectedLength > Int64(Self.maxResponseByteCount) {
+            throw BoundedResponseDataError.responseTooLarge
+        }
+
+        var data = Data()
+        if expectedLength > 0 {
+            data.reserveCapacity(min(Int(expectedLength), Self.maxResponseByteCount))
+        }
+
+        for try await byte in bytes {
+            guard data.count < Self.maxResponseByteCount else {
+                throw BoundedResponseDataError.responseTooLarge
+            }
+            data.append(byte)
+        }
+        return (data, response)
+    }
+
     private static func validatedRequestURL(from urlString: String) throws -> URL {
         guard let url = URL(string: urlString),
               let scheme = url.scheme?.lowercased(),
@@ -1238,11 +1264,6 @@ class AIService {
         return normalizedHost == "localhost"
             || normalizedHost == "127.0.0.1"
             || normalizedHost == "::1"
-    }
-
-    private static func responseDataIsAcceptable(_ data: Data?) -> Bool {
-        guard let data else { return true }
-        return data.count <= maxResponseByteCount
     }
 
     private static func responseText(from data: Data?, redacting sensitiveValues: [String] = []) -> String {

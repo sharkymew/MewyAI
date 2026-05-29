@@ -1328,7 +1328,7 @@ struct ContentView: View {
                 isFocused: $isInputFocused,
                 focusRequestID: inputFocusRequestID,
                 placeholder: "输入消息...",
-                onPasteImages: pasteImagesFromInputMenu
+                onPasteImageProviders: pasteImageProvidersFromInputMenu
             )
             .font(.body)
             .foregroundStyle(Color.primary)
@@ -1866,17 +1866,8 @@ struct ContentView: View {
     }
 
     private func persistentAssistantErrorMessage(from error: String) -> String {
-        guard error.contains("\n\n") else { return error }
-        let headline = error
-            .components(separatedBy: .newlines)
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return [
-            headline?.isEmpty == false ? headline : "请求失败",
-            "错误响应正文已隐藏，避免把认证信息或服务端回显持久化到聊天记录。"
-        ]
-        .compactMap { $0 }
-        .joined(separator: "\n\n")
+        let trimmedError = error.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedError.isEmpty ? "请求失败" : trimmedError
     }
 
     private func containsImageWithoutContextDescription(in messages: [ChatMessage]) -> Bool {
@@ -2307,6 +2298,12 @@ struct ContentView: View {
         content: String,
         onPrepared: (() -> Void)? = nil
     ) {
+        if ErrorDetailContent.parse(content) != nil {
+            invalidateMarkdownCache(for: messageID)
+            onPrepared?()
+            return
+        }
+
         let style = MarkdownRenderStyle(
             textColor: .label,
             baseFont: .preferredFont(forTextStyle: .body),
@@ -2429,6 +2426,14 @@ struct ContentView: View {
         return storedImageAttachment(from: image)
     }
 
+    private func storedImageAttachment(fromImageFileAt url: URL) -> ChatImageAttachment? {
+        guard imageFileIsWithinLimits(url),
+              let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else {
+            return nil
+        }
+        return storedImageAttachment(from: data)
+    }
+
     private func storedImageAttachment(from image: UIImage) -> ChatImageAttachment? {
         guard imagePixelCount(image) <= maxImagePixelCount else { return nil }
         let scaledImage = image.scaledDown(maxDimension: 1600)
@@ -2447,6 +2452,38 @@ struct ContentView: View {
 
         let pixelCount = Int64(width.intValue) * Int64(height.intValue)
         return pixelCount > 0 && pixelCount <= maxImagePixelCount
+    }
+
+    private func imageFileIsWithinLimits(_ url: URL) -> Bool {
+        guard url.isFileURL,
+              let byteCount = fileByteCount(for: url),
+              byteCount <= maxImageInputByteCount,
+              let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+              let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else {
+            return false
+        }
+
+        let pixelCount = Int64(width.intValue) * Int64(height.intValue)
+        return pixelCount > 0 && pixelCount <= maxImagePixelCount
+    }
+
+    private func fileByteCount(for url: URL) -> Int? {
+        if let resourceValues = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]) {
+            if resourceValues.isRegularFile == false {
+                return nil
+            }
+            if let fileSize = resourceValues.fileSize {
+                return fileSize
+            }
+        }
+
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else {
+            return nil
+        }
+        return size.intValue
     }
 
     private func imagePixelCount(_ image: UIImage) -> Int64 {
@@ -2506,8 +2543,7 @@ struct ContentView: View {
             var attachments = [ChatImageAttachment]()
 
             for provider in imageProviders.prefix(maxImageAttachmentCount) {
-                guard let data = await imageData(from: provider),
-                      let attachment = storedImageAttachment(from: data) else {
+                guard let attachment = await imageAttachment(from: provider) else {
                     continue
                 }
 
@@ -2614,7 +2650,8 @@ struct ContentView: View {
 
     private func fileAttachment(from provider: NSItemProvider) async -> ChatFileAttachment? {
         if provider.registeredTypeIdentifiers.contains(UTType.fileURL.identifier),
-           let url = await fileURL(from: provider) {
+           let url = await fileURL(from: provider),
+           url.isFileURL {
             return try? ChatFileAttachmentReader.attachment(from: url)
         }
 
@@ -2648,14 +2685,15 @@ struct ContentView: View {
     private func fileURL(from provider: NSItemProvider) async -> URL? {
         await withCheckedContinuation { continuation in
             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                if let url = item as? URL {
+                if let url = item as? URL, url.isFileURL {
                     continuation.resume(returning: url)
                     return
                 }
 
                 if let data = item as? Data,
                    let urlString = String(data: data, encoding: .utf8),
-                   let url = URL(string: urlString) {
+                   let url = URL(string: urlString),
+                   url.isFileURL {
                     continuation.resume(returning: url)
                     return
                 }
@@ -2665,7 +2703,7 @@ struct ContentView: View {
         }
     }
 
-    private func imageData(from provider: NSItemProvider) async -> Data? {
+    private func imageAttachment(from provider: NSItemProvider) async -> ChatImageAttachment? {
         guard let identifier = provider.registeredTypeIdentifiers.first(where: { identifier in
             UTType(identifier)?.conforms(to: .image) == true
         }) else {
@@ -2673,28 +2711,38 @@ struct ContentView: View {
         }
 
         return await withCheckedContinuation { continuation in
-            provider.loadDataRepresentation(forTypeIdentifier: identifier) { data, _ in
-                continuation.resume(returning: data)
+            provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, _ in
+                guard let url,
+                      let attachment = storedImageAttachment(fromImageFileAt: url) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: attachment)
             }
         }
     }
 
-    private func pasteImagesFromInputMenu(_ images: [UIImage]) {
+    private func pasteImageProvidersFromInputMenu(_ providers: [NSItemProvider]) {
         guard currentConfiguration.selectedModelSupportsImages else {
             imageSelectionError = "当前模型不支持图片输入。"
             return
         }
 
-        guard !images.isEmpty else {
+        let imageProviders = providers.filter(providerContainsImage)
+        guard !imageProviders.isEmpty else {
             imageSelectionError = "剪贴板中没有可粘贴的图片。"
             return
         }
 
-        let attachments = images.compactMap { image -> ChatImageAttachment? in
-            storedImageAttachment(from: image)
-        }
+        Task {
+            var attachments = [ChatImageAttachment]()
+            for provider in imageProviders.prefix(maxImageAttachmentCount) {
+                guard let attachment = await imageAttachment(from: provider) else { continue }
+                attachments.append(attachment)
+            }
 
-        appendPendingImageAttachments(attachments, source: "剪贴板")
+            appendPendingImageAttachments(attachments, source: "剪贴板")
+        }
     }
 
     private func removePendingImage(_ id: UUID) {
@@ -3367,7 +3415,11 @@ struct AssistantMessageContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let streamingContentChannel {
+            if let errorContent = ErrorDetailContent.parse(content),
+               streamingContentChannel == nil,
+               !isStreaming {
+                CollapsibleErrorDetailsView(error: errorContent)
+            } else if let streamingContentChannel {
                 StreamingAssistantMarkdownText(streamingChannel: streamingContentChannel)
             } else if isStreaming {
                 StreamingAssistantMarkdownText(content)
@@ -3383,6 +3435,106 @@ struct AssistantMessageContent: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+struct ErrorDetailContent: Equatable {
+    let summary: String
+    let details: String
+
+    static func parse(_ message: String) -> ErrorDetailContent? {
+        let normalized = message
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separatorRange = normalized.range(of: "\n\n") else { return nil }
+
+        let summary = String(normalized[..<separatorRange.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let details = String(normalized[separatorRange.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !summary.isEmpty,
+              !details.isEmpty,
+              summaryLooksLikeError(summary) else {
+            return nil
+        }
+
+        return ErrorDetailContent(summary: summary, details: details)
+    }
+
+    private static func summaryLooksLikeError(_ summary: String) -> Bool {
+        summary.hasPrefix("请求失败")
+            || summary.hasPrefix("解析失败")
+            || summary.hasPrefix("模型列表解析失败")
+            || summary.hasPrefix("流式请求失败")
+            || summary.contains("状态码")
+    }
+}
+
+struct CollapsibleErrorMessageView: View {
+    let message: String
+
+    var body: some View {
+        if let error = ErrorDetailContent.parse(message) {
+            CollapsibleErrorDetailsView(error: error)
+        } else {
+            Text(message)
+        }
+    }
+}
+
+private struct CollapsibleErrorDetailsView: View {
+    let error: ErrorDetailContent
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isExpanded = false
+
+    private var detailBackground: Color {
+        colorScheme == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(error.summary)
+
+            Button {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption)
+
+                    Text("错误详细信息")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Text(error.details)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(detailBackground)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -3966,6 +4118,7 @@ nonisolated struct MarkdownRenderCacheEntry: @unchecked Sendable {
     let signature: String
     let renderedMarkdown: String
     let segments: [PreparedChatMarkdownSegment]
+    private static let maxRenderedLaTeXFormulaCount = LaTeXRenderBudget.maxFormulasPerMessage
 
     private nonisolated init(
         signature: String,
@@ -3981,6 +4134,7 @@ nonisolated struct MarkdownRenderCacheEntry: @unchecked Sendable {
         let signature = Self.signature(for: content, style: style)
         let renderedMarkdown = content
         var preparedSegments: [PreparedChatMarkdownSegment] = []
+        var renderedFormulaCount = 0
 
         for segment in ChatMarkdownBlockSegment.split(content) {
             switch segment.kind {
@@ -3995,11 +4149,22 @@ nonisolated struct MarkdownRenderCacheEntry: @unchecked Sendable {
             case let .code(language, code):
                 preparedSegments.append(PreparedChatMarkdownSegment(id: segment.id, kind: .code(language: language, code: code)))
             case let .math(formula, displayMode):
-                let preparedFormula = await LaTeXSVGRenderer.shared.render(
-                    formula: formula,
-                    displayMode: displayMode,
-                    style: style
-                )
+                let preparedFormula: PreparedLaTeXFormula
+                if renderedFormulaCount < maxRenderedLaTeXFormulaCount,
+                   LaTeXRenderBudget.canRenderFormula(formula) {
+                    renderedFormulaCount += 1
+                    preparedFormula = await LaTeXSVGRenderer.shared.render(
+                        formula: formula,
+                        displayMode: displayMode,
+                        style: style
+                    )
+                } else {
+                    preparedFormula = LaTeXSVGRenderer.fallbackFormula(
+                        formula: formula,
+                        displayMode: displayMode,
+                        error: "Formula render budget exceeded"
+                    )
+                }
                 preparedSegments.append(PreparedChatMarkdownSegment(id: segment.id, kind: .math(preparedFormula)))
             }
         }
@@ -4480,12 +4645,12 @@ struct ImagePastingTextView: UIViewRepresentable {
     @Binding var isFocused: Bool
     let focusRequestID: Int
     let placeholder: String
-    let onPasteImages: ([UIImage]) -> Void
+    let onPasteImageProviders: ([NSItemProvider]) -> Void
 
     func makeUIView(context: Context) -> ImagePastingUITextView {
         let textView = ImagePastingUITextView()
         textView.delegate = context.coordinator
-        textView.onPasteImages = onPasteImages
+        textView.onPasteImageProviders = onPasteImageProviders
         textView.backgroundColor = .clear
         textView.font = .preferredFont(forTextStyle: .body)
         textView.adjustsFontForContentSizeCategory = true
@@ -4504,7 +4669,7 @@ struct ImagePastingTextView: UIViewRepresentable {
             textView.text = text
         }
 
-        textView.onPasteImages = onPasteImages
+        textView.onPasteImageProviders = onPasteImageProviders
         textView.isEditable = true
         textView.isSelectable = true
         textView.placeholderText = placeholder
@@ -4626,7 +4791,7 @@ struct ImagePastingTextView: UIViewRepresentable {
 }
 
 final class ImagePastingUITextView: UITextView {
-    var onPasteImages: (([UIImage]) -> Void)?
+    var onPasteImageProviders: (([NSItemProvider]) -> Void)?
     private let placeholderLabel = UILabel()
 
     var placeholderText: String = "" {
@@ -4686,12 +4851,17 @@ final class ImagePastingUITextView: UITextView {
     }
 
     override func paste(_ sender: Any?) {
-        guard let images = UIPasteboard.general.images, !images.isEmpty else {
+        let imageProviders = UIPasteboard.general.itemProviders.filter { provider in
+            provider.registeredTypeIdentifiers.contains { identifier in
+                UTType(identifier)?.conforms(to: .image) == true
+            }
+        }
+        guard !imageProviders.isEmpty else {
             super.paste(sender)
             return
         }
 
-        onPasteImages?(images)
+        onPasteImageProviders?(imageProviders)
     }
 }
 

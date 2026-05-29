@@ -46,6 +46,10 @@ enum ChatFileAttachmentReader {
     }()
 
     static func attachment(from url: URL) throws -> ChatFileAttachment {
+        guard url.isFileURL else {
+            throw ChatFileAttachmentReadError.unreadable(url.lastPathComponent.isEmpty ? "文件" : url.lastPathComponent)
+        }
+
         let didAccess = url.startAccessingSecurityScopedResource()
         defer {
             if didAccess {

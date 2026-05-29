@@ -17,6 +17,20 @@ nonisolated struct PreparedLaTeXFormula: @unchecked Sendable {
     }
 }
 
+nonisolated enum LaTeXRenderBudget {
+    static let maxFormulaCharacters = 2_000
+    static let maxFormulasPerMessage = 64
+    static let maxRenderedSVGCharacters = 400_000
+
+    static func canRenderFormula(_ formula: String) -> Bool {
+        formula.trimmingCharacters(in: .whitespacesAndNewlines).count <= maxFormulaCharacters
+    }
+
+    static func fallbackText(formula: String, displayMode: Bool) -> String {
+        displayMode ? "\\[\(formula)\\]" : "\\(\(formula)\\)"
+    }
+}
+
 struct PreparedLaTeXFormulaView: View {
     let formula: PreparedLaTeXFormula
 
@@ -38,6 +52,11 @@ struct PreparedLaTeXFormulaView: View {
                 .scrollDisabled(!formula.displayMode)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: formula.imageSize.height)
+            } else if formula.errorMessage != nil {
+                LaTeXFallbackText(
+                    text: formula.fallbackText,
+                    fontSize: fontSize
+                )
             } else {
                 LaTeXFormulaWebView(
                     formula: formula.formula,
@@ -76,15 +95,24 @@ struct LaTeXFormulaView: View, Equatable {
     }
 
     var body: some View {
-        LaTeXFormulaWebView(
-            formula: formula,
-            displayMode: displayMode,
-            textColor: resolvedTextColor,
-            fontSize: fontSize,
-            height: $webHeight
-        )
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: webHeight)
+        Group {
+            if LaTeXRenderBudget.canRenderFormula(formula) {
+                LaTeXFormulaWebView(
+                    formula: formula,
+                    displayMode: displayMode,
+                    textColor: resolvedTextColor,
+                    fontSize: fontSize,
+                    height: $webHeight
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: webHeight)
+            } else {
+                LaTeXFallbackText(
+                    text: LaTeXRenderBudget.fallbackText(formula: formula, displayMode: displayMode),
+                    fontSize: fontSize
+                )
+            }
+        }
         .fixedSize(horizontal: false, vertical: true)
         .transaction { transaction in
             transaction.animation = nil
@@ -127,17 +155,28 @@ struct LaTeXInlineTextView: View, Equatable {
     }
 
     var body: some View {
-        LaTeXInlineTextWebView(
-            text: text,
-            textColor: resolvedTextColor,
-            fontSize: font.pointSize,
-            fontWeight: fontWeight,
-            fontStyle: fontStyle,
-            textAlignment: textAlignment.cssValue,
-            height: $height
-        )
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: height)
+        Group {
+            if Self.canRenderInlineText(text) {
+                LaTeXInlineTextWebView(
+                    text: text,
+                    textColor: resolvedTextColor,
+                    fontSize: font.pointSize,
+                    fontWeight: fontWeight,
+                    fontStyle: fontStyle,
+                    textAlignment: textAlignment.cssValue,
+                    height: $height
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: height)
+            } else {
+                Text(Self.attributedString(from: text))
+                    .font(.system(size: font.pointSize))
+                    .foregroundStyle(Color(textColor))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
         .fixedSize(horizontal: false, vertical: true)
         .transaction { transaction in
             transaction.animation = nil
@@ -156,6 +195,40 @@ struct LaTeXInlineTextView: View, Equatable {
 
     private var fontStyle: String {
         font.fontDescriptor.symbolicTraits.contains(.traitItalic) ? "italic" : "normal"
+    }
+
+    private static func canRenderInlineText(_ text: String) -> Bool {
+        var formulaCount = 0
+        for segment in ChatLaTeXSegmentParser.splitInlineMath(text) {
+            guard case let .math(formula, _) = segment else { continue }
+            formulaCount += 1
+            guard formulaCount <= LaTeXRenderBudget.maxFormulasPerMessage,
+                  LaTeXRenderBudget.canRenderFormula(formula) else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func attributedString(from markdown: String) -> AttributedString {
+        let inlineOptions = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        return (try? AttributedString(markdown: markdown, options: inlineOptions)) ?? AttributedString(markdown)
+    }
+}
+
+private struct LaTeXFallbackText: View {
+    let text: String
+    let fontSize: CGFloat
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: max(fontSize * 0.92, 12), design: .monospaced))
+            .foregroundStyle(.primary)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -593,7 +666,15 @@ private enum LaTeXInlineTextHTML {
             case let .text(value):
                 html += markdownHTML(from: value, state: &state)
             case let .math(formula, displayMode):
-                html += mathHTML(formula: formula, displayMode: displayMode)
+                if state.renderedFormulaCount < LaTeXRenderBudget.maxFormulasPerMessage,
+                   LaTeXRenderBudget.canRenderFormula(formula) {
+                    state.renderedFormulaCount += 1
+                    html += mathHTML(formula: formula, displayMode: displayMode)
+                } else {
+                    html += LaTeXRenderBudget
+                        .fallbackText(formula: formula, displayMode: displayMode)
+                        .htmlEscaped
+                }
             }
         }
 
@@ -609,6 +690,7 @@ private enum LaTeXInlineTextHTML {
     private struct InlineHTMLState {
         var isBold = false
         var isCode = false
+        var renderedFormulaCount = 0
     }
 
     private static func mathHTML(formula: String, displayMode: Bool) -> String {
@@ -694,6 +776,7 @@ nonisolated enum LaTeXInlineAttributedRenderer {
         }
 
         let result = NSMutableAttributedString()
+        var renderedFormulaCount = 0
         for segment in ChatLaTeXSegmentParser.splitInlineMath(text) {
             switch segment {
             case let .text(value):
@@ -711,11 +794,22 @@ nonisolated enum LaTeXInlineAttributedRenderer {
                     userInterfaceStyle: renderStyle.userInterfaceStyle,
                     displayScale: renderStyle.displayScale
                 )
-                let prepared = await LaTeXSVGRenderer.shared.render(
-                    formula: formula,
-                    displayMode: displayMode,
-                    style: formulaStyle
-                )
+                let prepared: PreparedLaTeXFormula
+                if renderedFormulaCount < LaTeXRenderBudget.maxFormulasPerMessage,
+                   LaTeXRenderBudget.canRenderFormula(formula) {
+                    renderedFormulaCount += 1
+                    prepared = await LaTeXSVGRenderer.shared.render(
+                        formula: formula,
+                        displayMode: displayMode,
+                        style: formulaStyle
+                    )
+                } else {
+                    prepared = LaTeXSVGRenderer.fallbackFormula(
+                        formula: formula,
+                        displayMode: displayMode,
+                        error: "Formula render budget exceeded"
+                    )
+                }
                 result.append(attachmentString(for: prepared, font: font, textColor: textColor))
             }
         }
@@ -784,6 +878,14 @@ actor LaTeXSVGRenderer {
             return Self.fallback(formula: formula, displayMode: displayMode, error: "Empty formula")
         }
 
+        guard LaTeXRenderBudget.canRenderFormula(trimmedFormula) else {
+            return Self.fallback(
+                formula: trimmedFormula,
+                displayMode: displayMode,
+                error: "Formula render budget exceeded"
+            )
+        }
+
         guard Self.imageRenderingEnabled else {
             return Self.fallback(
                 formula: trimmedFormula,
@@ -800,12 +902,24 @@ actor LaTeXSVGRenderer {
             )
         }
 
+        guard !Task.isCancelled else {
+            return Self.fallback(formula: trimmedFormula, displayMode: displayMode, error: "Render cancelled")
+        }
+
         guard let rawResult = rendererFunction.call(withArguments: [trimmedFormula, displayMode])?.toString(),
               let response = Self.decodeResponse(rawResult),
               response.ok,
               let rawSVG = response.svg else {
             let error = context?.exception?.toString() ?? "MathJax conversion failed"
             return Self.fallback(formula: trimmedFormula, displayMode: displayMode, error: error)
+        }
+
+        guard rawSVG.count <= LaTeXRenderBudget.maxRenderedSVGCharacters else {
+            return Self.fallback(
+                formula: trimmedFormula,
+                displayMode: displayMode,
+                error: "Rendered SVG exceeded budget"
+            )
         }
 
         guard let renderedImage = Self.renderedImage(
@@ -825,6 +939,14 @@ actor LaTeXSVGRenderer {
             fallbackText: Self.fallbackText(formula: trimmedFormula, displayMode: displayMode),
             errorMessage: nil
         )
+    }
+
+    nonisolated static func fallbackFormula(
+        formula: String,
+        displayMode: Bool,
+        error: String
+    ) -> PreparedLaTeXFormula {
+        fallback(formula: formula, displayMode: displayMode, error: error)
     }
 
     private func loadRendererFunction() -> JSValue? {
@@ -995,7 +1117,7 @@ actor LaTeXSVGRenderer {
     }
 
     private static func fallbackText(formula: String, displayMode: Bool) -> String {
-        displayMode ? "\\[\(formula)\\]" : "\\(\(formula)\\)"
+        LaTeXRenderBudget.fallbackText(formula: formula, displayMode: displayMode)
     }
 
     private static func svgNumber(_ value: CGFloat) -> String {
