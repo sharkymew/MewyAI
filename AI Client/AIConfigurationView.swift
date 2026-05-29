@@ -99,9 +99,24 @@ struct AIConfigurationView: View {
                     .foregroundStyle(.red)
             }
             
-            Button {
-                hideKeyboard()
-                addConfiguration()
+            Menu {
+                Button {
+                    hideKeyboard()
+                    addConfiguration()
+                } label: {
+                    Label("默认配置", systemImage: "plus")
+                }
+
+                Divider()
+
+                ForEach(BuiltInAIProvider.allCases) { provider in
+                    Button {
+                        hideKeyboard()
+                        addConfiguration(from: provider)
+                    } label: {
+                        Text(provider.displayName)
+                    }
+                }
             } label: {
                 Label("新增配置", systemImage: "plus")
             }
@@ -513,9 +528,11 @@ struct AIConfigurationView: View {
         KeyboardDismissal.dismissNowAndDeferred()
     }
     
-    private func addConfiguration() {
-        var configuration = AIConfiguration()
-        configuration.name = "配置 \(configurations.count + 1)"
+    private func addConfiguration(from provider: BuiltInAIProvider? = nil) {
+        var configuration = provider?.makeConfiguration() ?? AIConfiguration()
+        if provider == nil {
+            configuration.name = "配置 \(configurations.count + 1)"
+        }
         configurations.append(configuration)
         selectedConfigurationID = configuration.id
         newModelName = ""

@@ -1649,6 +1649,8 @@ struct ContentView: View {
     private var configurationSummary: String {
         let configuration = currentConfiguration
         let trimmedBaseURL = configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedModel = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelSummary = selectedModel.isEmpty ? "未选择模型" : selectedModel
         let hasAPIKey = !configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasCustomHeaders = !configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let authSummary = hasAPIKey ? "API Key" : (hasCustomHeaders ? "自定义请求头" : "未配置认证")
@@ -1659,7 +1661,7 @@ struct ContentView: View {
             ? (configuration.reasoningEnabled ? "思考 \(configuration.reasoningEffort.title)" : "思考关闭")
             : "无推理"
         let imageSummary = configuration.selectedModelSupportsImages ? "图片" : "文字"
-        return "\(configuration.name) · \(configuration.selectedModel) · \(imageSummary) · \(reasoningSummary) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(endpointSummary) · \(authSummary)"
+        return "\(configuration.name) · \(modelSummary) · \(imageSummary) · \(reasoningSummary) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(endpointSummary) · \(authSummary)"
     }
 
     func sendMessage() {

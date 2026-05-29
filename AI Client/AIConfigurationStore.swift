@@ -208,6 +208,60 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
     }
 }
 
+enum BuiltInAIProvider: String, CaseIterable, Identifiable {
+    case zhipu
+    case siliconFlow
+    case openRouter
+    case minimax
+    case zAI
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .zhipu:
+            return "智谱开放平台"
+        case .siliconFlow:
+            return "硅基流动"
+        case .openRouter:
+            return "OpenRouter"
+        case .minimax:
+            return "MiniMax"
+        case .zAI:
+            return "Z.AI"
+        }
+    }
+
+    var baseURL: String {
+        switch self {
+        case .zhipu:
+            return "https://open.bigmodel.cn/api/paas/v4"
+        case .siliconFlow:
+            return "https://api.siliconflow.cn/v1"
+        case .openRouter:
+            return "https://openrouter.ai/api/v1"
+        case .minimax:
+            return "https://api.minimaxi.com/v1"
+        case .zAI:
+            return "https://api.z.ai/api/paas/v4"
+        }
+    }
+
+    var endpoint: String {
+        "chat/completions"
+    }
+
+    func makeConfiguration() -> AIConfiguration {
+        AIConfiguration(
+            name: displayName,
+            baseURL: baseURL,
+            endpoint: endpoint,
+            models: [],
+            selectedModel: ""
+        )
+    }
+}
+
 struct AIConfiguration: Identifiable, Codable, Equatable {
     static let defaultSystemPrompt = "你是一个友好且有帮助的AI助手。"
 
