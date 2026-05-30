@@ -198,13 +198,47 @@ nonisolated enum CustomHeaderSecurity {
 struct AIModelConfiguration: Identifiable, Codable, Equatable {
     var id: String { name }
     var name: String
+    var alias: String
     var supportsReasoning: Bool
     var supportsImages: Bool
 
-    init(name: String, supportsReasoning: Bool = false, supportsImages: Bool = false) {
+    var hasAlias: Bool {
+        !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var displayName: String {
+        let trimmedAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedAlias.isEmpty ? name : trimmedAlias
+    }
+
+    init(name: String, alias: String = "", supportsReasoning: Bool = false, supportsImages: Bool = false) {
         self.name = name
+        self.alias = alias
         self.supportsReasoning = supportsReasoning
         self.supportsImages = supportsImages
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case alias
+        case supportsReasoning
+        case supportsImages
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        alias = try container.decodeIfPresent(String.self, forKey: .alias) ?? ""
+        supportsReasoning = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoning) ?? false
+        supportsImages = try container.decodeIfPresent(Bool.self, forKey: .supportsImages) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(alias, forKey: .alias)
+        try container.encode(supportsReasoning, forKey: .supportsReasoning)
+        try container.encode(supportsImages, forKey: .supportsImages)
     }
 }
 
@@ -287,6 +321,15 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
 
     var selectedModelConfiguration: AIModelConfiguration? {
         models.first { $0.name == selectedModel }
+    }
+
+    var selectedModelDisplayName: String {
+        if let selectedModelConfiguration {
+            return selectedModelConfiguration.displayName
+        }
+
+        let trimmedModel = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedModel.isEmpty ? "未选择模型" : trimmedModel
     }
 
     var selectedModelSupportsReasoning: Bool {
@@ -489,6 +532,9 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
 enum AIConfigurationStore {
     private static let configurationsKey = "aiConfigurations"
     private static let selectedConfigurationIDKey = "selectedAIConfigurationID"
+    static let hapticFeedbackEnabledKey = "hapticFeedbackEnabled"
+    static let defaultHapticFeedbackEnabled = true
+    private static let fallbackConfigurationName = "未命名配置"
 
     static func loadConfigurations() -> [AIConfiguration] {
         guard let data = UserDefaults.standard.data(forKey: configurationsKey),
@@ -538,6 +584,37 @@ enum AIConfigurationStore {
         }
 
         return configurations.first ?? migratedDefaultConfiguration()
+    }
+
+    static func uniqueConfigurationName(
+        _ name: String,
+        among configurations: [AIConfiguration],
+        excluding excludedID: UUID? = nil
+    ) -> String {
+        let baseName = normalizedConfigurationName(name)
+        let existingNames = Set(
+            configurations
+                .filter { configuration in
+                    guard let excludedID else { return true }
+                    return configuration.id != excludedID
+                }
+                .map { normalizedConfigurationName($0.name) }
+        )
+
+        guard existingNames.contains(baseName) else { return baseName }
+
+        var suffix = 2
+        var candidate = "\(baseName)-\(suffix)"
+        while existingNames.contains(candidate) {
+            suffix += 1
+            candidate = "\(baseName)-\(suffix)"
+        }
+        return candidate
+    }
+
+    private static func normalizedConfigurationName(_ name: String) -> String {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? fallbackConfigurationName : trimmedName
     }
 
     private static func migratedDefaultConfiguration() -> AIConfiguration {

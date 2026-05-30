@@ -14,6 +14,8 @@ struct AIConfigurationView: View {
     @State private var isModelImportSheetPresented = false
     @State private var isDeleteAllModelsConfirmationPresented = false
     @State private var saveErrorMessage: String?
+    @AppStorage(AIConfigurationStore.hapticFeedbackEnabledKey)
+    private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
     @FocusState private var focusedField: ConfigurationField?
     
     private let aiService = AIService()
@@ -45,6 +47,7 @@ struct AIConfigurationView: View {
                 requestSection
                 authSection
                 customHeadersSection
+                interactionSection
                 imageContextSection
                 promptSection
                 modelsSection
@@ -58,6 +61,18 @@ struct AIConfigurationView: View {
             .navigationTitle("AI 配置")
             .onAppear {
                 ensureSelection()
+                if normalizeConfigurationNames() {
+                    saveCurrentState()
+                }
+            }
+            .onDisappear {
+                commitSelectedConfigurationName()
+                saveCurrentState()
+            }
+            .onChange(of: focusedField) { oldField, newField in
+                if oldField == .name && newField != .name {
+                    commitSelectedConfigurationName()
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -104,7 +119,7 @@ struct AIConfigurationView: View {
                     hideKeyboard()
                     addConfiguration()
                 } label: {
-                    Label("默认配置", systemImage: "plus")
+                    Label("默认配置（DeepSeek）", systemImage: "plus")
                 }
 
                 Divider()
@@ -137,6 +152,9 @@ struct AIConfigurationView: View {
         Section {
             TextField("名称", text: selectedNameBinding)
                 .focused($focusedField, equals: .name)
+                .onSubmit {
+                    commitSelectedConfigurationName()
+                }
             TextField("Base URL", text: selectedBaseURLBinding)
                 .focused($focusedField, equals: .baseURL)
                 .textInputAutocapitalization(.never)
@@ -187,6 +205,16 @@ struct AIConfigurationView: View {
             }
         } footer: {
             Text("每行一个请求头，格式为 Header-Name: value。Authorization、Token、API Key 等敏感请求头会存入钥匙串。")
+        }
+    }
+
+    private var interactionSection: some View {
+        Section {
+            Toggle("开启触感反馈", isOn: $isHapticFeedbackEnabled)
+        } header: {
+            Text("交互")
+        } footer: {
+            Text("关闭后，输出刷新、输出完成和手动停止都不会触发震动。")
         }
     }
 
@@ -294,10 +322,20 @@ struct AIConfigurationView: View {
             
             ForEach(selectedConfiguration?.models ?? []) { model in
                 HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(model.name)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(model.displayName)
                             .lineLimit(2)
                             .truncationMode(.middle)
+                        if model.hasAlias {
+                            Text(model.name)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                        }
+                        TextField("别名（可选）", text: modelAliasBinding(for: model.name))
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
                         Text(model.supportsReasoning ? "支持推理" : "不支持推理")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -401,6 +439,7 @@ struct AIConfigurationView: View {
                 return selectedConfigurationID ?? configurations[0].id
             },
             set: { newValue in
+                commitSelectedConfigurationName()
                 selectedConfigurationID = newValue
                 AIConfigurationStore.saveSelectedConfigurationID(newValue)
                 saveCurrentState()
@@ -409,7 +448,14 @@ struct AIConfigurationView: View {
     }
     
     private var selectedNameBinding: Binding<String> {
-        binding(\.name)
+        Binding(
+            get: { selectedConfiguration?.name ?? "" },
+            set: { newValue in
+                ensureSelection()
+                guard let selectedIndex else { return }
+                configurations[selectedIndex].name = newValue
+            }
+        )
     }
     
     private var selectedBaseURLBinding: Binding<String> {
@@ -516,6 +562,7 @@ struct AIConfigurationView: View {
     
     private func saveCurrentState() {
         ensureSelection()
+        normalizeConfigurationNames()
         let didSave = AIConfigurationStore.saveConfigurations(configurations)
         saveErrorMessage = didSave ? nil : "配置保存失败，请检查钥匙串或本机存储权限。"
         if let selectedConfigurationID {
@@ -524,8 +571,52 @@ struct AIConfigurationView: View {
     }
 
     private func hideKeyboard() {
+        let wasEditingName = focusedField == .name
         focusedField = nil
+        if wasEditingName {
+            commitSelectedConfigurationName()
+        }
         KeyboardDismissal.dismissNowAndDeferred()
+    }
+
+    private func commitSelectedConfigurationName() {
+        ensureSelection()
+        guard let selectedIndex else { return }
+        let configurationID = configurations[selectedIndex].id
+        let uniqueName = AIConfigurationStore.uniqueConfigurationName(
+            configurations[selectedIndex].name,
+            among: configurations,
+            excluding: configurationID
+        )
+        guard configurations[selectedIndex].name != uniqueName else { return }
+        configurations[selectedIndex].name = uniqueName
+        configurations[selectedIndex].updatedAt = Date()
+        saveCurrentState()
+    }
+
+    @discardableResult
+    private func normalizeConfigurationNames() -> Bool {
+        var normalizedConfigurations: [AIConfiguration] = []
+        var didChange = false
+
+        for index in configurations.indices {
+            var configuration = configurations[index]
+            let uniqueName = AIConfigurationStore.uniqueConfigurationName(
+                configuration.name,
+                among: normalizedConfigurations
+            )
+
+            if configuration.name != uniqueName {
+                configuration.name = uniqueName
+                configuration.updatedAt = Date()
+                configurations[index] = configuration
+                didChange = true
+            }
+
+            normalizedConfigurations.append(configuration)
+        }
+
+        return didChange
     }
     
     private func addConfiguration(from provider: BuiltInAIProvider? = nil) {
@@ -610,6 +701,20 @@ struct AIConfigurationView: View {
             }
         )
     }
+
+    private func modelAliasBinding(for model: String) -> Binding<String> {
+        Binding(
+            get: {
+                selectedConfiguration?.models.first { $0.name == model }?.alias ?? ""
+            },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    guard let index = configuration.models.firstIndex(where: { $0.name == model }) else { return }
+                    configuration.models[index].alias = newValue
+                }
+            }
+        )
+    }
     
     private func fetchModels() {
         guard let configuration = selectedConfiguration else { return }
@@ -658,7 +763,9 @@ struct AIConfigurationView: View {
         updateSelectedConfiguration { configuration in
             for model in selectedModels {
                 if let index = configuration.models.firstIndex(where: { $0.name == model.name }) {
-                    configuration.models[index] = model
+                    var importedModel = model
+                    importedModel.alias = configuration.models[index].alias
+                    configuration.models[index] = importedModel
                 } else {
                     configuration.models.append(model)
                 }

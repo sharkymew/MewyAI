@@ -190,6 +190,36 @@ struct AIConversation: Identifiable, Codable, Equatable {
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
     var hasGeneratedTitle: Bool = false
+    var isPinned: Bool = false
+
+    init(
+        id: UUID = UUID(),
+        title: String = "新对话",
+        messages: [ChatMessage] = [],
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        hasGeneratedTitle: Bool = false,
+        isPinned: Bool = false
+    ) {
+        self.id = id
+        self.title = title
+        self.messages = messages
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.hasGeneratedTitle = hasGeneratedTitle
+        self.isPinned = isPinned
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? "新对话"
+        messages = try container.decodeIfPresent([ChatMessage].self, forKey: .messages) ?? []
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+        hasGeneratedTitle = try container.decodeIfPresent(Bool.self, forKey: .hasGeneratedTitle) ?? false
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+    }
 
     var normalized: AIConversation {
         var conversation = self
@@ -199,6 +229,16 @@ struct AIConversation: Identifiable, Codable, Equatable {
 
     var hasInformation: Bool {
         !messages.isEmpty
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case messages
+        case createdAt
+        case updatedAt
+        case hasGeneratedTitle
+        case isPinned
     }
 }
 

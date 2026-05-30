@@ -450,8 +450,8 @@ private final class AssistantLiveDisplay {
 }
 
 private final class StreamingOutputHaptics: ObservableObject {
-    private let refreshGenerator = UIImpactFeedbackGenerator(style: .light)
-    private let completionGenerator = UIImpactFeedbackGenerator(style: .medium)
+    private let refreshGenerator = UIImpactFeedbackGenerator(style: .medium)
+    private let completionGenerator = UIImpactFeedbackGenerator(style: .heavy)
     private var lastImpactAt: Date?
     private static let minimumImpactInterval: TimeInterval = 0.055
 
@@ -468,13 +468,13 @@ private final class StreamingOutputHaptics: ObservableObject {
             return
         }
 
-        refreshGenerator.impactOccurred(intensity: 0.35)
+        refreshGenerator.impactOccurred(intensity: 0.55)
         refreshGenerator.prepare()
         lastImpactAt = now
     }
 
     func impactForOutputCompletion() {
-        completionGenerator.impactOccurred(intensity: 0.85)
+        completionGenerator.impactOccurred(intensity: 1.0)
         completionGenerator.prepare()
         lastImpactAt = nil
     }
@@ -492,10 +492,15 @@ struct ContentView: View {
     @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
     @StateObject private var speechInputController = SpeechInputController()
     @StateObject private var streamingOutputHaptics = StreamingOutputHaptics()
+    @AppStorage(AIConfigurationStore.hapticFeedbackEnabledKey)
+    private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
     @State private var inputText = ""
     @State private var messages: [ChatMessage] = []
     @State private var conversations = ConversationStore.loadConversations()
     @State private var selectedConversationID: UUID? = ConversationStore.loadSelectedConversationID()
+    @State private var renamingConversationID: UUID?
+    @State private var renamingConversationTitle = ""
+    @State private var isRenameConversationAlertPresented = false
     @State private var isGenerating = false
     @State private var showConfiguration = false
     @State private var showConversationSidebar = false
@@ -549,7 +554,7 @@ struct ContentView: View {
     private let topControlSize: CGFloat = 44
     private let topControlsTopPadding: CGFloat = 8
     private let topControlsHorizontalPadding: CGFloat = 16
-    private let topConversationTitleButtonWidth: CGFloat = 148
+    private let topModelButtonWidth: CGFloat = 148
     private let topFadeBottomPadding: CGFloat = 155
     private let topScrollContentGap: CGFloat = 70
     private let persistentSidebarWidthRatio: CGFloat = 0.28
@@ -954,6 +959,8 @@ struct ContentView: View {
                     onOpenConfiguration: {
                         openConfigurationFromSidebar(closesSidebar: !layout.usesPersistentSidebar)
                     },
+                    onRename: beginRenamingConversation,
+                    onTogglePinned: toggleConversationPin,
                     onDelete: deleteConversation
                 )
                 .frame(width: layout.sidebarWidth)
@@ -974,6 +981,19 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showConfiguration) {
             AIConfigurationView()
+        }
+        .alert("重命名对话", isPresented: $isRenameConversationAlertPresented) {
+            TextField("名称", text: $renamingConversationTitle)
+
+            Button("取消", role: .cancel) {
+                resetRenamingConversationState()
+            }
+
+            Button("保存") {
+                commitRenamingConversation()
+            }
+        } message: {
+            Text("请输入新的对话名称。")
         }
         .photosPicker(
             isPresented: $isPhotoPickerPresented,
@@ -1003,6 +1023,13 @@ struct ContentView: View {
         }
         .onChange(of: speechInputController.transcript) { _, transcript in
             applySpeechTranscript(transcript)
+        }
+        .onChange(of: isHapticFeedbackEnabled) { _, isEnabled in
+            if isEnabled, isGenerating {
+                streamingOutputHaptics.prepareForStreaming()
+            } else {
+                streamingOutputHaptics.reset()
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .inactive || newPhase == .background else { return }
@@ -1480,9 +1507,9 @@ struct ContentView: View {
                 selectModel(model.name)
             } label: {
                 if model.name == currentConfiguration.selectedModel {
-                    Label(model.name, systemImage: "checkmark")
+                    Label(model.displayName, systemImage: "checkmark")
                 } else {
-                    Text(model.name)
+                    Text(model.displayName)
                 }
             }
         }
@@ -1513,7 +1540,7 @@ struct ContentView: View {
     }
 
     private var topConversationTitleMenu: some View {
-        let title = currentConversationTitle
+        let title = currentConfiguration.selectedModelDisplayName
 
         return topGlassControl {
             Menu {
@@ -1524,19 +1551,19 @@ struct ContentView: View {
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(width: topConversationTitleButtonWidth - 38, alignment: .center)
+                        .truncationMode(.middle)
+                        .frame(width: topModelButtonWidth - 38, alignment: .center)
 
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.secondary)
                 }
-                .frame(width: topConversationTitleButtonWidth, height: topControlSize)
+                .frame(width: topModelButtonWidth, height: topControlSize)
                 .contentShape(Capsule())
             }
         }
         .disabled(isGenerating)
-        .accessibilityLabel("当前对话：\(title)")
+        .accessibilityLabel("当前模型：\(title)")
     }
 
     private var inputOptionsMenu: some View {
@@ -1619,15 +1646,6 @@ struct ContentView: View {
             }
     }
 
-    private var currentConversationTitle: String {
-        guard let selectedConversationID,
-              let conversation = conversations.first(where: { $0.id == selectedConversationID }) else {
-            return "新对话"
-        }
-
-        return conversation.title
-    }
-
     private var canCreateConversation: Bool {
         !isGenerating
     }
@@ -1649,8 +1667,7 @@ struct ContentView: View {
     private var configurationSummary: String {
         let configuration = currentConfiguration
         let trimmedBaseURL = configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let selectedModel = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let modelSummary = selectedModel.isEmpty ? "未选择模型" : selectedModel
+        let modelSummary = configuration.selectedModelDisplayName
         let hasAPIKey = !configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasCustomHeaders = !configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let authSummary = hasAPIKey ? "API Key" : (hasCustomHeaders ? "自定义请求头" : "未配置认证")
@@ -1729,7 +1746,7 @@ struct ContentView: View {
         )
         clearInputState()
         isGenerating = true
-        streamingOutputHaptics.prepareForStreaming()
+        prepareStreamingOutputHapticsIfNeeded()
         chatScrollController.returnToBottom()
         streamingTokenBuffer.reset()
         activeAssistantHasReasoning = false
@@ -1805,7 +1822,7 @@ struct ContentView: View {
                 cancelScheduledFlush()
                 flushPendingTokens(for: assistantMessageID, invalidatesMarkdownCache: true, requestsAutoScroll: true)
                 isGenerating = false
-                streamingOutputHaptics.impactForOutputCompletion()
+                triggerOutputCompletionHapticIfNeeded()
                 streamingOutputHaptics.reset()
                 activeAssistantMessageID = nil
                 activeAssistantHasReasoning = false
@@ -2259,10 +2276,25 @@ struct ContentView: View {
     }
 
     private func triggerStreamingOutputHapticIfNeeded(chunks: [String], resetsText: Bool) {
-        guard !resetsText,
+        guard isHapticFeedbackEnabled,
+              !resetsText,
               chunks.contains(where: { !$0.isEmpty }) else { return }
 
         streamingOutputHaptics.impactForOutputRefresh()
+    }
+
+    private func prepareStreamingOutputHapticsIfNeeded() {
+        guard isHapticFeedbackEnabled else {
+            streamingOutputHaptics.reset()
+            return
+        }
+
+        streamingOutputHaptics.prepareForStreaming()
+    }
+
+    private func triggerOutputCompletionHapticIfNeeded() {
+        guard isHapticFeedbackEnabled else { return }
+        streamingOutputHaptics.impactForOutputCompletion()
     }
 
     private func pruneLiveAssistantDisplays() {
@@ -2377,7 +2409,7 @@ struct ContentView: View {
         activeAssistantDidCollapseReasoningAfterThinking = false
         isGenerating = false
         if triggersCompletionHaptic, stoppedMessageID != nil {
-            streamingOutputHaptics.impactForOutputCompletion()
+            triggerOutputCompletionHapticIfNeeded()
         }
         streamingOutputHaptics.reset()
         streamingTokenBuffer.reset()
@@ -2981,6 +3013,51 @@ struct ContentView: View {
         }
     }
 
+    private func beginRenamingConversation(_ id: UUID) {
+        guard let conversation = conversations.first(where: { $0.id == id }) else { return }
+        hideKeyboard()
+        renamingConversationID = id
+        renamingConversationTitle = conversation.title
+        isRenameConversationAlertPresented = true
+    }
+
+    private func commitRenamingConversation() {
+        guard let renamingConversationID else {
+            resetRenamingConversationState()
+            return
+        }
+
+        renameConversation(id: renamingConversationID, title: renamingConversationTitle)
+        resetRenamingConversationState()
+    }
+
+    private func resetRenamingConversationState() {
+        renamingConversationID = nil
+        renamingConversationTitle = ""
+    }
+
+    private func renameConversation(id: UUID, title: String) {
+        persistCurrentConversation(refreshesUpdatedAt: false)
+        guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
+
+        conversations[index].title = normalizedManualConversationTitle(title)
+        conversations[index].hasGeneratedTitle = true
+        ConversationStore.saveConversations(conversations)
+    }
+
+    private func normalizedManualConversationTitle(_ title: String) -> String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTitle.isEmpty ? "新对话" : trimmedTitle
+    }
+
+    private func toggleConversationPin(_ id: UUID) {
+        persistCurrentConversation(refreshesUpdatedAt: false)
+        guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
+
+        conversations[index].isPinned.toggle()
+        ConversationStore.saveConversations(conversations)
+    }
+
     private func deleteConversation(_ id: UUID) {
         if conversations.count <= 1 {
             if selectedConversationID == id && isGenerating {
@@ -3132,6 +3209,7 @@ struct ContentView: View {
 
             guard let title,
                   let currentIndex = conversations.firstIndex(where: { $0.id == selectedConversationID }),
+                  !conversations[currentIndex].hasGeneratedTitle,
                   !title.isEmpty else {
                 return
             }
