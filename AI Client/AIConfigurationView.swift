@@ -26,7 +26,9 @@ struct AIConfigurationView: View {
         case endpoint
         case apiKey
         case customHeaders
-        case systemPrompt
+        case promptPresetName
+        case promptPresetContent
+        case modelAlias(String)
         case newModel
     }
     
@@ -70,8 +72,8 @@ struct AIConfigurationView: View {
                 saveCurrentState()
             }
             .onChange(of: focusedField) { oldField, newField in
-                if oldField == .name && newField != .name {
-                    commitSelectedConfigurationName()
+                if oldField != newField {
+                    commitEditedField(oldField)
                 }
             }
             .toolbar {
@@ -240,10 +242,10 @@ struct AIConfigurationView: View {
             }
 
             TextField("提示词名称", text: selectedPromptPresetNameBinding)
-                .focused($focusedField, equals: .systemPrompt)
+                .focused($focusedField, equals: .promptPresetName)
 
             TextEditor(text: selectedPromptPresetContentBinding)
-                .focused($focusedField, equals: .systemPrompt)
+                .focused($focusedField, equals: .promptPresetContent)
                 .frame(minHeight: 140)
                 .textInputAutocapitalization(.sentences)
                 .autocorrectionDisabled()
@@ -334,6 +336,7 @@ struct AIConfigurationView: View {
                                 .truncationMode(.middle)
                         }
                         TextField("别名（可选）", text: modelAliasBinding(for: model.name))
+                            .focused($focusedField, equals: .modelAlias(model.name))
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         Text(model.supportsReasoning ? "支持推理" : "不支持推理")
@@ -439,7 +442,7 @@ struct AIConfigurationView: View {
                 return selectedConfigurationID ?? configurations[0].id
             },
             set: { newValue in
-                commitSelectedConfigurationName()
+                commitEditedField(focusedField)
                 selectedConfigurationID = newValue
                 AIConfigurationStore.saveSelectedConfigurationID(newValue)
                 saveCurrentState()
@@ -470,9 +473,8 @@ struct AIConfigurationView: View {
         Binding(
             get: { selectedConfiguration?.apiKey ?? "" },
             set: { newValue in
-                updateSelectedConfiguration { configuration in
+                updateSelectedConfiguration(persists: false) { configuration in
                     configuration.apiKey = newValue
-                    KeychainService.saveAPIKey(newValue, for: configuration.id)
                 }
             }
         )
@@ -512,7 +514,7 @@ struct AIConfigurationView: View {
         Binding(
             get: { selectedConfiguration?.selectedPromptPreset?.name ?? "" },
             set: { newValue in
-                updateSelectedConfiguration { configuration in
+                updateSelectedConfiguration(persists: false) { configuration in
                     configuration.updateSelectedPromptName(newValue)
                 }
             }
@@ -523,7 +525,7 @@ struct AIConfigurationView: View {
         Binding(
             get: { selectedConfiguration?.selectedPromptPreset?.content ?? "" },
             set: { newValue in
-                updateSelectedConfiguration { configuration in
+                updateSelectedConfiguration(persists: false) { configuration in
                     configuration.updateSelectedPromptContent(newValue)
                 }
             }
@@ -534,7 +536,7 @@ struct AIConfigurationView: View {
         Binding(
             get: { selectedConfiguration?[keyPath: keyPath] ?? "" },
             set: { newValue in
-                updateSelectedConfiguration { configuration in
+                updateSelectedConfiguration(persists: false) { configuration in
                     configuration[keyPath: keyPath] = newValue
                 }
             }
@@ -552,17 +554,24 @@ struct AIConfigurationView: View {
         }
     }
     
-    private func updateSelectedConfiguration(_ update: (inout AIConfiguration) -> Void) {
+    private func updateSelectedConfiguration(
+        persists: Bool = true,
+        _ update: (inout AIConfiguration) -> Void
+    ) {
         ensureSelection()
         guard let selectedIndex else { return }
         update(&configurations[selectedIndex])
         configurations[selectedIndex].updatedAt = Date()
-        saveCurrentState()
+        if persists {
+            saveCurrentState()
+        }
     }
     
-    private func saveCurrentState() {
+    private func saveCurrentState(normalizesNames: Bool = false) {
         ensureSelection()
-        normalizeConfigurationNames()
+        if normalizesNames {
+            normalizeConfigurationNames()
+        }
         let didSave = AIConfigurationStore.saveConfigurations(configurations)
         saveErrorMessage = didSave ? nil : "配置保存失败，请检查钥匙串或本机存储权限。"
         if let selectedConfigurationID {
@@ -571,12 +580,23 @@ struct AIConfigurationView: View {
     }
 
     private func hideKeyboard() {
-        let wasEditingName = focusedField == .name
+        let fieldToCommit = focusedField
         focusedField = nil
-        if wasEditingName {
-            commitSelectedConfigurationName()
-        }
+        commitEditedField(fieldToCommit)
         KeyboardDismissal.dismissNowAndDeferred()
+    }
+
+    private func commitEditedField(_ field: ConfigurationField?) {
+        guard let field else { return }
+
+        switch field {
+        case .name:
+            commitSelectedConfigurationName()
+        case .newModel:
+            break
+        default:
+            saveCurrentState()
+        }
     }
 
     private func commitSelectedConfigurationName() {
@@ -588,9 +608,10 @@ struct AIConfigurationView: View {
             among: configurations,
             excluding: configurationID
         )
-        guard configurations[selectedIndex].name != uniqueName else { return }
-        configurations[selectedIndex].name = uniqueName
-        configurations[selectedIndex].updatedAt = Date()
+        if configurations[selectedIndex].name != uniqueName {
+            configurations[selectedIndex].name = uniqueName
+            configurations[selectedIndex].updatedAt = Date()
+        }
         saveCurrentState()
     }
 
@@ -708,7 +729,7 @@ struct AIConfigurationView: View {
                 selectedConfiguration?.models.first { $0.name == model }?.alias ?? ""
             },
             set: { newValue in
-                updateSelectedConfiguration { configuration in
+                updateSelectedConfiguration(persists: false) { configuration in
                     guard let index = configuration.models.firstIndex(where: { $0.name == model }) else { return }
                     configuration.models[index].alias = newValue
                 }

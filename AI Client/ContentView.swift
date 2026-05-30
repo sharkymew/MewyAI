@@ -484,6 +484,41 @@ private final class StreamingOutputHaptics: ObservableObject {
     }
 }
 
+@MainActor
+private final class ChatInputDraft: ObservableObject {
+    @Published var text = ""
+    @Published var isFocused = false
+    @Published private(set) var focusRequestID = 0
+
+    var trimmedText: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var hasSubmittableText: Bool {
+        !trimmedText.isEmpty
+    }
+
+    func setText(_ newText: String) {
+        guard text != newText else { return }
+        text = newText
+    }
+
+    func clearText() {
+        setText("")
+    }
+
+    func clearAndResignFocus() {
+        clearText()
+        isFocused = false
+        focusRequestID += 1
+    }
+
+    func requestFocus() {
+        isFocused = true
+        focusRequestID += 1
+    }
+}
+
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
@@ -494,13 +529,17 @@ struct ContentView: View {
     @StateObject private var streamingOutputHaptics = StreamingOutputHaptics()
     @AppStorage(AIConfigurationStore.hapticFeedbackEnabledKey)
     private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
-    @State private var inputText = ""
+    @StateObject private var inputDraft = ChatInputDraft()
     @State private var messages: [ChatMessage] = []
     @State private var conversations = ConversationStore.loadConversations()
     @State private var selectedConversationID: UUID? = ConversationStore.loadSelectedConversationID()
     @State private var renamingConversationID: UUID?
     @State private var renamingConversationTitle = ""
     @State private var isRenameConversationAlertPresented = false
+    @State private var conversationExportDocument = ConversationMarkdownDocument(text: "")
+    @State private var conversationExportFileName = "对话"
+    @State private var isConversationExporterPresented = false
+    @State private var conversationExportErrorMessage: String?
     @State private var isGenerating = false
     @State private var showConfiguration = false
     @State private var showConversationSidebar = false
@@ -526,8 +565,6 @@ struct ContentView: View {
     @State private var activeMessageActionID: UUID?
     @State private var didTapMessageBubble = false
     @State private var editingMessageID: UUID?
-    @State private var isInputFocused = false
-    @State private var inputFocusRequestID = 0
     @State private var speechInputBaseText = ""
     @State private var speechInputLastTranscript = ""
     @State private var speechInputLastMergedText = ""
@@ -573,22 +610,6 @@ struct ContentView: View {
 
     private var controlGlassHighlight: Color {
         colorScheme == .dark ? Color.white.opacity(0.24) : Color.white.opacity(0.58)
-    }
-
-    private var sendControlBackground: Color {
-        !canSendMessage && !isGenerating
-            ? inputGlassTint
-            : Color.accentColor.opacity(colorScheme == .dark ? 0.20 : 0.11)
-    }
-
-    private var cancelControlBackground: Color {
-        Color.red.opacity(colorScheme == .dark ? 0.18 : 0.09)
-    }
-
-    private var speechControlBackground: Color {
-        speechInputController.isRecording
-            ? Color.red.opacity(colorScheme == .dark ? 0.22 : 0.12)
-            : inputGlassTint
     }
 
     private var inputBottomFadeTint: Color {
@@ -840,7 +861,7 @@ struct ContentView: View {
     }
 
     private var canSendMessage: Bool {
-        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        inputDraft.hasSubmittableText
             || !pendingImageAttachments.isEmpty
             || !pendingFileAttachments.isEmpty
     }
@@ -849,15 +870,25 @@ struct ContentView: View {
         editingMessageID != nil
     }
 
+    private var conversationExportErrorPresented: Binding<Bool> {
+        Binding {
+            conversationExportErrorMessage != nil
+        } set: { isPresented in
+            if !isPresented {
+                conversationExportErrorMessage = nil
+            }
+        }
+    }
+
     private func toggleSpeechInput() {
         if speechInputController.isRecording {
             speechInputController.stopRecording()
             return
         }
 
-        speechInputBaseText = inputText
+        speechInputBaseText = inputDraft.text
         speechInputLastTranscript = ""
-        speechInputLastMergedText = inputText
+        speechInputLastMergedText = inputDraft.text
 
         Task {
             await speechInputController.startRecording()
@@ -871,32 +902,32 @@ struct ContentView: View {
     }
 
     private func resetSpeechInputMergeState() {
-        speechInputBaseText = inputText
+        speechInputBaseText = inputDraft.text
         speechInputLastTranscript = ""
-        speechInputLastMergedText = inputText
+        speechInputLastMergedText = inputDraft.text
     }
 
     private func applySpeechTranscript(_ transcript: String) {
         let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTranscript.isEmpty else {
             speechInputLastTranscript = ""
-            speechInputLastMergedText = inputText
+            speechInputLastMergedText = inputDraft.text
             return
         }
 
         if speechInputLastTranscript.isEmpty {
-            if inputText != speechInputBaseText {
-                speechInputBaseText = inputText
+            if inputDraft.text != speechInputBaseText {
+                speechInputBaseText = inputDraft.text
             }
-        } else if inputText != speechInputLastMergedText {
-            speechInputBaseText = inputText
+        } else if inputDraft.text != speechInputLastMergedText {
+            speechInputBaseText = inputDraft.text
         }
 
         let mergedText = mergedSpeechInputText(
             baseText: speechInputBaseText,
             speechText: trimmedTranscript
         )
-        inputText = mergedText
+        inputDraft.setText(mergedText)
         speechInputLastTranscript = trimmedTranscript
         speechInputLastMergedText = mergedText
     }
@@ -961,6 +992,7 @@ struct ContentView: View {
                     },
                     onRename: beginRenamingConversation,
                     onTogglePinned: toggleConversationPin,
+                    onExport: beginExportingConversation,
                     onDelete: deleteConversation
                 )
                 .frame(width: layout.sidebarWidth)
@@ -995,6 +1027,13 @@ struct ContentView: View {
         } message: {
             Text("请输入新的对话名称。")
         }
+        .alert("导出失败", isPresented: conversationExportErrorPresented) {
+            Button("好", role: .cancel) {
+                conversationExportErrorMessage = nil
+            }
+        } message: {
+            Text(conversationExportErrorMessage ?? "")
+        }
         .photosPicker(
             isPresented: $isPhotoPickerPresented,
             selection: $selectedPhotoItems,
@@ -1006,6 +1045,13 @@ struct ContentView: View {
             allowedContentTypes: ChatFileAttachmentReader.supportedDocumentTypes,
             allowsMultipleSelection: true,
             onCompletion: loadSelectedFiles
+        )
+        .fileExporter(
+            isPresented: $isConversationExporterPresented,
+            document: conversationExportDocument,
+            contentType: ConversationMarkdownDocument.contentType,
+            defaultFilename: conversationExportFileName,
+            onCompletion: handleConversationExportResult
         )
         .onChange(of: showConfiguration) { _, isPresented in
             if !isPresented {
@@ -1347,104 +1393,34 @@ struct ContentView: View {
     }
 
     private var inputComposerContent: some View {
-        HStack(alignment: .center, spacing: 10) {
+        ChatInputComposer(
+            inputDraft: inputDraft,
+            isGenerating: isGenerating,
+            isEditingMessage: isEditingMessage,
+            isSpeechRecording: speechInputController.isRecording,
+            hasPendingAttachments: !pendingImageAttachments.isEmpty || !pendingFileAttachments.isEmpty,
+            inputGlassTint: inputGlassTint,
+            controlGlassHighlight: controlGlassHighlight,
+            onPasteImageProviders: pasteImageProvidersFromInputMenu,
+            onToggleSpeechInput: toggleSpeechInput,
+            onStopGenerating: {
+                stopGenerating()
+            },
+            onSendMessage: {
+                stopSpeechInputIfNeeded()
+                sendMessage()
+            },
+            onCancelEditingMessage: cancelEditingMessage,
+            onSaveEditingMessageOnly: {
+                stopSpeechInputIfNeeded()
+                saveEditingMessageOnly()
+            },
+            onSaveEditingMessageAndRegenerate: {
+                stopSpeechInputIfNeeded()
+                saveEditingMessageAndRegenerate()
+            }
+        ) {
             inputOptionsMenu
-
-            ImagePastingTextView(
-                text: $inputText,
-                isFocused: $isInputFocused,
-                focusRequestID: inputFocusRequestID,
-                placeholder: "输入消息...",
-                onPasteImageProviders: pasteImageProvidersFromInputMenu
-            )
-            .font(.body)
-            .foregroundStyle(Color.primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 11)
-
-            speechInputControl
-
-            inputActionControl
-        }
-    }
-
-    private var speechInputControl: some View {
-        Button {
-            toggleSpeechInput()
-        } label: {
-            controlGlassIcon(
-                systemName: speechInputController.isRecording ? "mic.fill" : "mic",
-                size: 18,
-                weight: .semibold,
-                frame: 40,
-                tint: speechControlBackground,
-                foreground: speechInputController.isRecording ? .red : .primary
-            )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(speechInputController.isRecording ? "停止语音输入" : "开始语音输入")
-    }
-
-    @ViewBuilder
-    private var inputActionControl: some View {
-        if isEditingMessage {
-            HStack(spacing: 8) {
-                Button {
-                    cancelEditingMessage()
-                } label: {
-                    controlGlassIcon(
-                        systemName: "xmark",
-                        size: 19,
-                        weight: .semibold,
-                        frame: 48,
-                        tint: cancelControlBackground,
-                        foreground: .red
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("取消修改")
-
-                Menu {
-                    Button("仅修改") {
-                        stopSpeechInputIfNeeded()
-                        saveEditingMessageOnly()
-                    }
-
-                    Button("修改并发送") {
-                        stopSpeechInputIfNeeded()
-                        saveEditingMessageAndRegenerate()
-                    }
-                } label: {
-                    controlGlassIcon(
-                        systemName: "checkmark",
-                        size: 19,
-                        weight: .semibold,
-                        frame: 48,
-                        tint: sendControlBackground
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSendMessage)
-            }
-        } else {
-            Button {
-                if isGenerating {
-                    stopGenerating()
-                } else {
-                    stopSpeechInputIfNeeded()
-                    sendMessage()
-                }
-            } label: {
-                controlGlassIcon(
-                    systemName: isGenerating ? "stop.fill" : "paperplane.fill",
-                    size: 19,
-                    weight: .semibold,
-                    frame: 48,
-                    tint: sendControlBackground
-                )
-            }
-            .buttonStyle(.plain)
-            .disabled(!isGenerating && !canSendMessage)
         }
     }
 
@@ -1652,7 +1628,7 @@ struct ContentView: View {
 
     private var currentConversationIsBlank: Bool {
         messages.isEmpty
-            && inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && inputDraft.trimmedText.isEmpty
             && pendingImageAttachments.isEmpty
             && pendingFileAttachments.isEmpty
     }
@@ -1683,7 +1659,7 @@ struct ContentView: View {
 
     func sendMessage() {
         stopSpeechInputIfNeeded()
-        let userText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userText = inputDraft.trimmedText
         let imageAttachments = pendingImageAttachments
         let fileAttachments = pendingFileAttachments
         ensureCurrentConversation()
@@ -1960,14 +1936,12 @@ struct ContentView: View {
 
     private func clearInputState() {
         speechInputController.cancelRecording()
-        inputText = ""
+        inputDraft.clearAndResignFocus()
         pendingImageAttachments = []
         pendingFileAttachments = []
         selectedPhotoItems = []
         imageSelectionError = nil
         editingMessageID = nil
-        isInputFocused = false
-        inputFocusRequestID += 1
         resetSpeechInputMergeState()
     }
 
@@ -2000,8 +1974,7 @@ struct ContentView: View {
             focusTransaction.disablesAnimations = true
 
             withTransaction(focusTransaction) {
-                isInputFocused = true
-                inputFocusRequestID += 1
+                inputDraft.requestFocus()
             }
         }
     }
@@ -2013,7 +1986,7 @@ struct ContentView: View {
         files: [ChatFileAttachment]
     ) {
         editingMessageID = id
-        inputText = text
+        inputDraft.setText(text)
         pendingImageAttachments = images
         pendingFileAttachments = files
         selectedPhotoItems = []
@@ -2044,7 +2017,7 @@ struct ContentView: View {
         }
 
         let keepsImageContextDescription = messages[index].imageAttachments == pendingImageAttachments
-        messages[index].content = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        messages[index].content = inputDraft.trimmedText
         messages[index].imageAttachments = pendingImageAttachments
         if !keepsImageContextDescription {
             messages[index].imageContextDescription = ""
@@ -2065,7 +2038,7 @@ struct ContentView: View {
             return
         }
 
-        let editedText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let editedText = inputDraft.trimmedText
         let editedImages = pendingImageAttachments
         let editedFiles = pendingFileAttachments
         let editedImageContextDescription = messages[index].imageAttachments == editedImages
@@ -2418,7 +2391,7 @@ struct ContentView: View {
     }
 
     func hideKeyboard() {
-        isInputFocused = false
+        inputDraft.isFocused = false
         KeyboardDismissal.dismissNowAndDeferred()
     }
 
@@ -2909,7 +2882,7 @@ struct ContentView: View {
         selectedConversationID = conversation.id
         messages = conversation.messages
         resetMarkdownCache(for: messages)
-        inputText = ""
+        inputDraft.clearText()
         resetSpeechInputMergeState()
         pendingImageAttachments = []
         pendingFileAttachments = []
@@ -2984,7 +2957,7 @@ struct ContentView: View {
         messages = []
         resetMarkdownCache(for: messages)
         speechInputController.cancelRecording()
-        inputText = ""
+        inputDraft.clearText()
         resetSpeechInputMergeState()
         pendingImageAttachments = []
         pendingFileAttachments = []
@@ -3058,6 +3031,40 @@ struct ContentView: View {
         ConversationStore.saveConversations(conversations)
     }
 
+    private func beginExportingConversation(_ id: UUID) {
+        hideKeyboard()
+
+        if selectedConversationID == id,
+           let activeAssistantMessageID {
+            cancelScheduledFlush()
+            flushPendingTokens(
+                for: activeAssistantMessageID,
+                invalidatesMarkdownCache: false,
+                requestsAutoScroll: false
+            )
+        }
+
+        persistCurrentConversation(refreshesUpdatedAt: false)
+
+        guard let conversation = conversations.first(where: { $0.id == id }) else { return }
+        conversationExportDocument = ConversationMarkdownDocument(
+            text: ConversationMarkdownExporter.markdown(for: conversation)
+        )
+        conversationExportFileName = ConversationMarkdownExporter.defaultFileName(for: conversation)
+        isConversationExporterPresented = true
+    }
+
+    private func handleConversationExportResult(_ result: Result<URL, Error>) {
+        switch result {
+        case .success:
+            conversationExportErrorMessage = nil
+        case .failure(let error):
+            let nsError = error as NSError
+            guard nsError.code != NSUserCancelledError else { return }
+            conversationExportErrorMessage = "无法导出 Markdown 文件：\(error.localizedDescription)"
+        }
+    }
+
     private func deleteConversation(_ id: UUID) {
         if conversations.count <= 1 {
             if selectedConversationID == id && isGenerating {
@@ -3071,7 +3078,7 @@ struct ContentView: View {
             messages = []
             resetMarkdownCache(for: messages)
             speechInputController.cancelRecording()
-            inputText = ""
+            inputDraft.clearText()
             resetSpeechInputMergeState()
             pendingImageAttachments = []
             pendingFileAttachments = []
@@ -4718,6 +4725,207 @@ enum ChatMarkdownPreprocessor {
         guard !footnotes.isEmpty else { return text }
         let renderedFootnotes = footnotes.map { "[^\($0.id)]: \($0.body)" }.joined(separator: "\n")
         return bodyLines.joined(separator: "\n") + "\n\n---\n\n" + renderedFootnotes
+    }
+}
+
+private struct ChatInputComposer<OptionsMenu: View>: View {
+    @ObservedObject var inputDraft: ChatInputDraft
+    @Environment(\.colorScheme) private var colorScheme
+
+    let isGenerating: Bool
+    let isEditingMessage: Bool
+    let isSpeechRecording: Bool
+    let hasPendingAttachments: Bool
+    let inputGlassTint: Color
+    let controlGlassHighlight: Color
+    let onPasteImageProviders: ([NSItemProvider]) -> Void
+    let onToggleSpeechInput: () -> Void
+    let onStopGenerating: () -> Void
+    let onSendMessage: () -> Void
+    let onCancelEditingMessage: () -> Void
+    let onSaveEditingMessageOnly: () -> Void
+    let onSaveEditingMessageAndRegenerate: () -> Void
+    let optionsMenu: () -> OptionsMenu
+
+    init(
+        inputDraft: ChatInputDraft,
+        isGenerating: Bool,
+        isEditingMessage: Bool,
+        isSpeechRecording: Bool,
+        hasPendingAttachments: Bool,
+        inputGlassTint: Color,
+        controlGlassHighlight: Color,
+        onPasteImageProviders: @escaping ([NSItemProvider]) -> Void,
+        onToggleSpeechInput: @escaping () -> Void,
+        onStopGenerating: @escaping () -> Void,
+        onSendMessage: @escaping () -> Void,
+        onCancelEditingMessage: @escaping () -> Void,
+        onSaveEditingMessageOnly: @escaping () -> Void,
+        onSaveEditingMessageAndRegenerate: @escaping () -> Void,
+        @ViewBuilder optionsMenu: @escaping () -> OptionsMenu
+    ) {
+        self.inputDraft = inputDraft
+        self.isGenerating = isGenerating
+        self.isEditingMessage = isEditingMessage
+        self.isSpeechRecording = isSpeechRecording
+        self.hasPendingAttachments = hasPendingAttachments
+        self.inputGlassTint = inputGlassTint
+        self.controlGlassHighlight = controlGlassHighlight
+        self.onPasteImageProviders = onPasteImageProviders
+        self.onToggleSpeechInput = onToggleSpeechInput
+        self.onStopGenerating = onStopGenerating
+        self.onSendMessage = onSendMessage
+        self.onCancelEditingMessage = onCancelEditingMessage
+        self.onSaveEditingMessageOnly = onSaveEditingMessageOnly
+        self.onSaveEditingMessageAndRegenerate = onSaveEditingMessageAndRegenerate
+        self.optionsMenu = optionsMenu
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            optionsMenu()
+
+            ImagePastingTextView(
+                text: $inputDraft.text,
+                isFocused: $inputDraft.isFocused,
+                focusRequestID: inputDraft.focusRequestID,
+                placeholder: "输入消息...",
+                onPasteImageProviders: onPasteImageProviders
+            )
+            .font(.body)
+            .foregroundStyle(Color.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 11)
+
+            speechInputControl
+
+            inputActionControl
+        }
+    }
+
+    private var canSendMessage: Bool {
+        inputDraft.hasSubmittableText || hasPendingAttachments
+    }
+
+    private var sendControlBackground: Color {
+        !canSendMessage && !isGenerating
+            ? inputGlassTint
+            : Color.accentColor.opacity(colorScheme == .dark ? 0.20 : 0.11)
+    }
+
+    private var cancelControlBackground: Color {
+        Color.red.opacity(colorScheme == .dark ? 0.18 : 0.09)
+    }
+
+    private var speechControlBackground: Color {
+        isSpeechRecording
+            ? Color.red.opacity(colorScheme == .dark ? 0.22 : 0.12)
+            : inputGlassTint
+    }
+
+    private var speechInputControl: some View {
+        Button {
+            onToggleSpeechInput()
+        } label: {
+            controlGlassIcon(
+                systemName: isSpeechRecording ? "mic.fill" : "mic",
+                size: 18,
+                weight: .semibold,
+                frame: 40,
+                tint: speechControlBackground,
+                foreground: isSpeechRecording ? .red : .primary
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isSpeechRecording ? "停止语音输入" : "开始语音输入")
+    }
+
+    @ViewBuilder
+    private var inputActionControl: some View {
+        if isEditingMessage {
+            HStack(spacing: 8) {
+                Button {
+                    onCancelEditingMessage()
+                } label: {
+                    controlGlassIcon(
+                        systemName: "xmark",
+                        size: 19,
+                        weight: .semibold,
+                        frame: 48,
+                        tint: cancelControlBackground,
+                        foreground: .red
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("取消修改")
+
+                Menu {
+                    Button("仅修改") {
+                        onSaveEditingMessageOnly()
+                    }
+
+                    Button("修改并发送") {
+                        onSaveEditingMessageAndRegenerate()
+                    }
+                } label: {
+                    controlGlassIcon(
+                        systemName: "checkmark",
+                        size: 19,
+                        weight: .semibold,
+                        frame: 48,
+                        tint: sendControlBackground
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSendMessage)
+            }
+        } else {
+            Button {
+                if isGenerating {
+                    onStopGenerating()
+                } else {
+                    onSendMessage()
+                }
+            } label: {
+                controlGlassIcon(
+                    systemName: isGenerating ? "stop.fill" : "paperplane.fill",
+                    size: 19,
+                    weight: .semibold,
+                    frame: 48,
+                    tint: sendControlBackground
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!isGenerating && !canSendMessage)
+        }
+    }
+
+    private func controlGlassBackground(_ tint: Color) -> some View {
+        Circle()
+            .fill(.ultraThinMaterial)
+            .overlay(Circle().fill(tint))
+            .overlay(
+                Circle()
+                    .stroke(controlGlassHighlight, lineWidth: 1)
+            )
+    }
+
+    private func controlGlassIcon(
+        systemName: String,
+        size: CGFloat,
+        weight: Font.Weight,
+        frame: CGFloat,
+        tint: Color,
+        foreground: Color = .primary
+    ) -> some View {
+        ZStack {
+            controlGlassBackground(tint)
+
+            Image(systemName: systemName)
+                .font(.system(size: size, weight: weight))
+                .foregroundStyle(foreground)
+        }
+        .frame(width: frame, height: frame)
     }
 }
 

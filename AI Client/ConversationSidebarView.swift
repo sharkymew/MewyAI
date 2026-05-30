@@ -62,6 +62,7 @@ struct ConversationSidebarView: View {
     let onOpenConfiguration: () -> Void
     let onRename: (UUID) -> Void
     let onTogglePinned: (UUID) -> Void
+    let onExport: (UUID) -> Void
     let onDelete: (UUID) -> Void
 
     private let topControlSize: CGFloat = 44
@@ -453,6 +454,12 @@ struct ConversationSidebarView: View {
                     conversation.isPinned ? "取消置顶" : "置顶",
                     systemImage: conversation.isPinned ? "pin.slash" : "pin"
                 )
+            }
+
+            Button {
+                onExport(conversation.id)
+            } label: {
+                Label("导出为 Markdown", systemImage: "doc.text")
             }
 
             Button(role: .destructive) {
