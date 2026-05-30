@@ -12,6 +12,7 @@ struct OpenAIRequest: Encodable {
     let stream: Bool
     let thinking: ThinkingConfig?
     let reasoningEffort: ReasoningEffort?
+    let tools: [OpenAIToolDefinition]?
     let temperature: Double?
     let topP: Double?
     let maxTokens: Int?
@@ -22,6 +23,7 @@ struct OpenAIRequest: Encodable {
         case stream
         case thinking
         case reasoningEffort = "reasoning_effort"
+        case tools
         case temperature
         case topP = "top_p"
         case maxTokens = "max_tokens"
@@ -30,10 +32,11 @@ struct OpenAIRequest: Encodable {
 
 struct OpenAIResponsesRequest: Encodable {
     let model: String
-    let input: [OpenAIResponsesInputMessage]
+    let input: [OpenAIResponsesInputItem]
     let instructions: String?
     let stream: Bool
     let reasoning: OpenAIResponsesReasoning?
+    let tools: [OpenAIResponsesToolDefinition]?
     let temperature: Double?
     let topP: Double?
     let maxOutputTokens: Int?
@@ -44,6 +47,7 @@ struct OpenAIResponsesRequest: Encodable {
         case instructions
         case stream
         case reasoning
+        case tools
         case temperature
         case topP = "top_p"
         case maxOutputTokens = "max_output_tokens"
@@ -54,9 +58,39 @@ struct OpenAIResponsesReasoning: Encodable {
     let effort: ReasoningEffort
 }
 
-struct OpenAIResponsesInputMessage: Encodable {
-    let role: String
-    let content: OpenAIResponsesContent
+enum OpenAIResponsesInputItem: Encodable {
+    case message(role: String, content: OpenAIResponsesContent)
+    case functionCall(callID: String, name: String, arguments: String)
+    case functionCallOutput(callID: String, output: String)
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case role
+        case content
+        case callID = "call_id"
+        case name
+        case arguments
+        case output
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .message(let role, let content):
+            try container.encode("message", forKey: .type)
+            try container.encode(role, forKey: .role)
+            try container.encode(content, forKey: .content)
+        case .functionCall(let callID, let name, let arguments):
+            try container.encode("function_call", forKey: .type)
+            try container.encode(callID, forKey: .callID)
+            try container.encode(name, forKey: .name)
+            try container.encode(arguments, forKey: .arguments)
+        case .functionCallOutput(let callID, let output):
+            try container.encode("function_call_output", forKey: .type)
+            try container.encode(callID, forKey: .callID)
+            try container.encode(output, forKey: .output)
+        }
+    }
 }
 
 enum OpenAIResponsesContent: Encodable {
@@ -104,6 +138,7 @@ struct AnthropicMessagesRequest: Encodable {
     let messages: [AnthropicMessage]
     let system: String?
     let stream: Bool
+    let tools: [AnthropicToolDefinition]?
     let temperature: Double?
     let topP: Double?
 
@@ -113,8 +148,39 @@ struct AnthropicMessagesRequest: Encodable {
         case messages
         case system
         case stream
+        case tools
         case temperature
         case topP = "top_p"
+    }
+}
+
+struct OpenAIToolDefinition: Encodable {
+    let type = "function"
+    let function: OpenAIFunctionDefinition
+}
+
+struct OpenAIFunctionDefinition: Encodable {
+    let name: String
+    let description: String
+    let parameters: JSONValue
+}
+
+struct OpenAIResponsesToolDefinition: Encodable {
+    let type = "function"
+    let name: String
+    let description: String
+    let parameters: JSONValue
+}
+
+struct AnthropicToolDefinition: Encodable {
+    let name: String
+    let description: String
+    let inputSchema: JSONValue
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case inputSchema = "input_schema"
     }
 }
 
@@ -142,11 +208,19 @@ enum AnthropicMessageContent: Encodable {
 enum AnthropicContentPart: Encodable {
     case text(String)
     case image(mediaType: String, data: String)
+    case toolUse(id: String, name: String, input: JSONValue)
+    case toolResult(toolUseID: String, content: String, isError: Bool)
 
     private enum CodingKeys: String, CodingKey {
         case type
         case text
         case source
+        case id
+        case name
+        case input
+        case toolUseID = "tool_use_id"
+        case content
+        case isError = "is_error"
     }
 
     private enum SourceCodingKeys: String, CodingKey {
@@ -167,6 +241,18 @@ enum AnthropicContentPart: Encodable {
             try sourceContainer.encode("base64", forKey: .type)
             try sourceContainer.encode(mediaType, forKey: .mediaType)
             try sourceContainer.encode(data, forKey: .data)
+        case .toolUse(let id, let name, let input):
+            try container.encode("tool_use", forKey: .type)
+            try container.encode(id, forKey: .id)
+            try container.encode(name, forKey: .name)
+            try container.encode(input, forKey: .input)
+        case .toolResult(let toolUseID, let content, let isError):
+            try container.encode("tool_result", forKey: .type)
+            try container.encode(toolUseID, forKey: .toolUseID)
+            try container.encode(content, forKey: .content)
+            if isError {
+                try container.encode(true, forKey: .isError)
+            }
         }
     }
 }
@@ -228,15 +314,38 @@ struct ThinkingConfig: Codable {
 struct Message: Codable {
     let role: String
     let content: String
+    let reasoningContent: String?
+    let toolCalls: [OpenAIResponseToolCall]?
+
+    enum CodingKeys: String, CodingKey {
+        case role
+        case content
+        case reasoningContent = "reasoning_content"
+        case toolCalls = "tool_calls"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        role = try container.decodeIfPresent(String.self, forKey: .role) ?? "assistant"
+        content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent)
+        toolCalls = try container.decodeIfPresent([OpenAIResponseToolCall].self, forKey: .toolCalls)
+    }
 }
 
 struct ChatRequestMessage: Encodable {
     let role: String
     let content: ChatRequestContent
+    let reasoningContent: String?
+    let toolCalls: [ChatToolCall]
+    let toolCallID: String?
 
     init(role: String, text: String) {
         self.role = role
         self.content = .text(text)
+        self.reasoningContent = nil
+        self.toolCalls = []
+        self.toolCallID = nil
     }
 
     init(
@@ -248,6 +357,9 @@ struct ChatRequestMessage: Encodable {
         usesImageAttachments: Bool = true
     ) {
         self.role = role
+        self.reasoningContent = nil
+        self.toolCalls = []
+        self.toolCallID = nil
         let fileText = Self.textByAppendingFileContext(text, fileAttachments: fileAttachments)
         let imageURLs = usesImageAttachments
             ? imageAttachments.compactMap(ConversationImageStore.dataURL(for:))
@@ -271,6 +383,52 @@ struct ChatRequestMessage: Encodable {
         }
         parts.append(contentsOf: imageURLs.map { .imageURL($0) })
         content = .parts(parts)
+    }
+
+    init(
+        role: String,
+        text: String,
+        reasoningContent: String,
+        toolCalls: [ChatToolCall]
+    ) {
+        self.role = role
+        self.content = .text(text)
+        self.reasoningContent = reasoningContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil
+            : reasoningContent
+        self.toolCalls = toolCalls
+        self.toolCallID = nil
+    }
+
+    init(toolCallID: String, name: String, content: String) {
+        self.role = "tool"
+        self.content = .text(content)
+        self.reasoningContent = nil
+        self.toolCalls = []
+        self.toolCallID = toolCallID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case role
+        case content
+        case reasoningContent = "reasoning_content"
+        case toolCalls = "tool_calls"
+        case toolCallID = "tool_call_id"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(role, forKey: .role)
+        if role == "assistant", !toolCalls.isEmpty, content.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            try container.encodeNil(forKey: .content)
+        } else {
+            try container.encode(content, forKey: .content)
+        }
+        try container.encodeIfPresent(reasoningContent, forKey: .reasoningContent)
+        if !toolCalls.isEmpty {
+            try container.encode(toolCalls.map(OpenAIRequestToolCall.init), forKey: .toolCalls)
+        }
+        try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
     }
 
     private static func textByAppendingFileContext(
@@ -504,12 +662,39 @@ enum ChatRequestContent: Encodable {
     }
 }
 
+struct OpenAIRequestToolCall: Encodable {
+    let id: String
+    let type = "function"
+    let function: Function
+
+    struct Function: Encodable {
+        let name: String
+        let arguments: String
+    }
+
+    nonisolated init(_ call: ChatToolCall) {
+        id = call.id
+        function = Function(name: call.name, arguments: call.argumentsJSON)
+    }
+}
+
 struct OpenAIResponse: Codable {
     let choices: [Choice]
 }
 
 struct Choice: Codable {
     let message: Message
+}
+
+struct OpenAIResponseToolCall: Codable {
+    let id: String?
+    let type: String?
+    let function: Function?
+
+    struct Function: Codable {
+        let name: String?
+        let arguments: String?
+    }
 }
 
 struct OpenAIStreamResponse: Codable {
@@ -534,7 +719,19 @@ struct OpenAIResponsesResponse: Decodable {
     let output: [OutputItem]?
 
     struct OutputItem: Decodable {
+        let type: String?
+        let callID: String?
+        let name: String?
+        let arguments: String?
         let content: [ContentItem]?
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case callID = "call_id"
+            case name
+            case arguments
+            case content
+        }
     }
 
     struct ContentItem: Decodable {
@@ -550,6 +747,21 @@ struct OpenAIResponsesResponse: Decodable {
                 return item.text
             }
             .joined() ?? ""
+    }
+
+    var toolCalls: [ModelToolCall] {
+        output?.compactMap { item in
+            guard item.type == "function_call",
+                  let callID = item.callID,
+                  let name = item.name else {
+                return nil
+            }
+            return ModelToolCall(
+                id: callID,
+                name: name,
+                argumentsJSON: item.arguments ?? "{}"
+            )
+        } ?? []
     }
 }
 
@@ -569,6 +781,9 @@ struct AnthropicResponse: Decodable {
     struct ContentItem: Decodable {
         let type: String?
         let text: String?
+        let id: String?
+        let name: String?
+        let input: JSONValue?
     }
 
     var outputText: String {
@@ -579,6 +794,27 @@ struct AnthropicResponse: Decodable {
             }
             .joined()
     }
+
+    var toolCalls: [ModelToolCall] {
+        content.compactMap { item in
+            guard item.type == "tool_use",
+                  let id = item.id,
+                  let name = item.name else {
+                return nil
+            }
+            return ModelToolCall(
+                id: id,
+                name: name,
+                argumentsJSON: item.input?.compactJSONString ?? "{}"
+            )
+        }
+    }
+}
+
+struct ModelToolCall: Equatable {
+    let id: String
+    let name: String
+    let argumentsJSON: String
 }
 
 struct AnthropicStreamEvent: Decodable {
@@ -633,11 +869,15 @@ struct ModelItem: Decodable {
     let id: String
     let supportsReasoning: Bool?
     let supportsImages: Bool?
+    let supportsTools: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
         case supportsReasoning = "supports_reasoning"
         case supportsImages = "supports_images"
+        case supportsTools = "supports_tools"
+        case toolCalling = "tool_calling"
+        case functionCalling = "function_calling"
         case multimodal
         case vision
         case reasoning
@@ -654,6 +894,9 @@ struct ModelItem: Decodable {
         let directImageSupport = try container.decodeIfPresent(Bool.self, forKey: .supportsImages)
         let multimodalSupport = try container.decodeIfPresent(Bool.self, forKey: .multimodal)
         let visionSupport = try container.decodeIfPresent(Bool.self, forKey: .vision)
+        let directToolSupport = try container.decodeIfPresent(Bool.self, forKey: .supportsTools)
+        let toolCallingSupport = try container.decodeIfPresent(Bool.self, forKey: .toolCalling)
+        let functionCallingSupport = try container.decodeIfPresent(Bool.self, forKey: .functionCalling)
         let capabilities = try container.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities)
         supportsReasoning = directSupport
             ?? reasoningSupport
@@ -663,16 +906,24 @@ struct ModelItem: Decodable {
             ?? multimodalSupport
             ?? visionSupport
             ?? capabilities?.supportsImages
+        supportsTools = directToolSupport
+            ?? toolCallingSupport
+            ?? functionCallingSupport
+            ?? capabilities?.supportsTools
     }
 }
 
 struct ModelCapabilities: Decodable {
     let supportsReasoning: Bool?
     let supportsImages: Bool?
+    let supportsTools: Bool?
 
     enum CodingKeys: String, CodingKey {
         case supportsReasoning = "supports_reasoning"
         case supportsImages = "supports_images"
+        case supportsTools = "supports_tools"
+        case toolCalling = "tool_calling"
+        case functionCalling = "function_calling"
         case multimodal
         case vision
         case reasoning
@@ -687,6 +938,9 @@ struct ModelCapabilities: Decodable {
         supportsImages = try container.decodeIfPresent(Bool.self, forKey: .supportsImages)
             ?? container.decodeIfPresent(Bool.self, forKey: .multimodal)
             ?? container.decodeIfPresent(Bool.self, forKey: .vision)
+        supportsTools = try container.decodeIfPresent(Bool.self, forKey: .supportsTools)
+            ?? container.decodeIfPresent(Bool.self, forKey: .toolCalling)
+            ?? container.decodeIfPresent(Bool.self, forKey: .functionCalling)
     }
 }
 
@@ -744,23 +998,44 @@ class AIService {
         conversationHistory = Self.initialConversationHistory(systemPrompt: systemPrompt)
 
         conversationHistory.append(
-            contentsOf: messages.compactMap { message in
+            contentsOf: messages.flatMap { message -> [ChatRequestMessage] in
                 let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
                 let hasImages = !message.imageAttachments.isEmpty
                 let hasFiles = !message.fileAttachments.isEmpty
-                guard (hasImages || hasFiles || !content.isEmpty),
+                let hasTools = !message.toolExchanges.isEmpty
+                guard (hasImages || hasFiles || hasTools || !content.isEmpty),
                       message.role == "user" || message.role == "assistant" else {
-                    return nil
+                    return []
                 }
 
-                return ChatRequestMessage(
+                var requestMessages = [ChatRequestMessage]()
+                if message.role == "assistant", !message.toolExchanges.isEmpty {
+                    for exchange in message.toolExchanges {
+                        requestMessages.append(ChatRequestMessage(
+                            role: "assistant",
+                            text: exchange.assistantContent,
+                            reasoningContent: exchange.reasoningContent,
+                            toolCalls: exchange.toolCalls
+                        ))
+                        requestMessages.append(contentsOf: exchange.toolResults.map { result in
+                            ChatRequestMessage(
+                                toolCallID: result.toolCallID,
+                                name: result.name,
+                                content: result.content
+                            )
+                        })
+                    }
+                }
+
+                requestMessages.append(ChatRequestMessage(
                     role: message.role,
                     text: content,
                     imageAttachments: message.role == "user" ? message.imageAttachments : [],
                     imageContextDescription: message.role == "user" ? message.imageContextDescription : "",
                     fileAttachments: message.role == "user" ? message.fileAttachments : [],
                     usesImageAttachments: usesImageAttachments
-                )
+                ))
+                return requestMessages
             }
         )
     }
@@ -779,7 +1054,8 @@ class AIService {
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         modelParameters: AIModelConfiguration?,
-        anthropicMaxTokens: Int
+        anthropicMaxTokens: Int,
+        tools: [AgentToolDefinition] = []
     ) throws -> Data {
         let encoder = JSONEncoder()
         switch apiFormat {
@@ -790,6 +1066,7 @@ class AIService {
                 stream: stream,
                 thinking: thinkingConfig(from: reasoningEnabled),
                 reasoningEffort: reasoningEnabled == true ? reasoningEffort : nil,
+                tools: openAITools(from: tools),
                 temperature: modelParameters?.temperature,
                 topP: modelParameters?.topP,
                 maxTokens: modelParameters?.maxOutputTokens
@@ -802,6 +1079,7 @@ class AIService {
                 instructions: responseMessages.instructions,
                 stream: stream,
                 reasoning: reasoningEnabled == true ? reasoningEffort.map(OpenAIResponsesReasoning.init(effort:)) : nil,
+                tools: openAIResponsesTools(from: tools),
                 temperature: modelParameters?.temperature,
                 topP: modelParameters?.topP,
                 maxOutputTokens: modelParameters?.maxOutputTokens
@@ -814,6 +1092,7 @@ class AIService {
                 messages: anthropicMessages.messages,
                 system: anthropicMessages.system,
                 stream: stream,
+                tools: anthropicTools(from: tools),
                 temperature: modelParameters?.temperature,
                 topP: modelParameters?.topP
             ))
@@ -828,9 +1107,9 @@ class AIService {
 
     private static func openAIResponsesMessages(
         from messages: [ChatRequestMessage]
-    ) -> (instructions: String?, input: [OpenAIResponsesInputMessage]) {
+    ) -> (instructions: String?, input: [OpenAIResponsesInputItem]) {
         var instructions = [String]()
-        var input = [OpenAIResponsesInputMessage]()
+        var input = [OpenAIResponsesInputItem]()
 
         for message in messages {
             if message.role == "system" {
@@ -841,8 +1120,27 @@ class AIService {
                 continue
             }
 
+            if message.role == "tool", let toolCallID = message.toolCallID {
+                input.append(.functionCallOutput(
+                    callID: toolCallID,
+                    output: message.content.plainText
+                ))
+                continue
+            }
+
+            if message.role == "assistant", !message.toolCalls.isEmpty {
+                for call in message.toolCalls {
+                    input.append(.functionCall(
+                        callID: call.id,
+                        name: call.name,
+                        arguments: call.argumentsJSON
+                    ))
+                }
+                continue
+            }
+
             let role = message.role == "assistant" ? "assistant" : "user"
-            input.append(OpenAIResponsesInputMessage(
+            input.append(.message(
                 role: role,
                 content: message.content.openAIResponsesContent
             ))
@@ -866,6 +1164,37 @@ class AIService {
                 if !text.isEmpty {
                     systemMessages.append(text)
                 }
+                continue
+            }
+
+            if message.role == "tool", let toolCallID = message.toolCallID {
+                requestMessages.append(AnthropicMessage(
+                    role: "user",
+                    content: .parts([
+                        .toolResult(
+                            toolUseID: toolCallID,
+                            content: message.content.plainText,
+                            isError: false
+                        )
+                    ])
+                ))
+                continue
+            }
+
+            if message.role == "assistant", !message.toolCalls.isEmpty {
+                var parts = [AnthropicContentPart]()
+                let text = message.content.plainText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    parts.append(.text(text))
+                }
+                parts.append(contentsOf: message.toolCalls.map { call in
+                    .toolUse(
+                        id: call.id,
+                        name: call.name,
+                        input: Self.jsonValue(from: call.argumentsJSON)
+                    )
+                })
+                requestMessages.append(AnthropicMessage(role: "assistant", content: .parts(parts)))
                 continue
             }
 
@@ -927,6 +1256,47 @@ class AIService {
             topP: modelParameters?.topP,
             maxOutputTokens: modelParameters?.maxOutputTokens
         )
+    }
+
+    private func openAITools(from tools: [AgentToolDefinition]) -> [OpenAIToolDefinition]? {
+        guard !tools.isEmpty else { return nil }
+        return tools.map { tool in
+            OpenAIToolDefinition(function: OpenAIFunctionDefinition(
+                name: tool.functionName,
+                description: tool.description,
+                parameters: tool.inputSchema
+            ))
+        }
+    }
+
+    private func openAIResponsesTools(from tools: [AgentToolDefinition]) -> [OpenAIResponsesToolDefinition]? {
+        guard !tools.isEmpty else { return nil }
+        return tools.map { tool in
+            OpenAIResponsesToolDefinition(
+                name: tool.functionName,
+                description: tool.description,
+                parameters: tool.inputSchema
+            )
+        }
+    }
+
+    private func anthropicTools(from tools: [AgentToolDefinition]) -> [AnthropicToolDefinition]? {
+        guard !tools.isEmpty else { return nil }
+        return tools.map { tool in
+            AnthropicToolDefinition(
+                name: tool.functionName,
+                description: tool.description,
+                inputSchema: tool.inputSchema
+            )
+        }
+    }
+
+    private static func jsonValue(from json: String) -> JSONValue {
+        guard let data = json.data(using: .utf8),
+              let value = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+            return .object([:])
+        }
+        return value
     }
 
     func fetchModels(
@@ -994,7 +1364,8 @@ class AIService {
                             AIModelConfiguration(
                                 name: item.id,
                                 supportsReasoning: item.supportsReasoning ?? Self.infersReasoningSupport(for: item.id),
-                                supportsImages: item.supportsImages ?? Self.infersImageSupport(for: item.id)
+                                supportsImages: item.supportsImages ?? Self.infersImageSupport(for: item.id),
+                                supportsTools: item.supportsTools ?? AIModelConfiguration.defaultToolsSupport(for: item.id)
                             )
                         }
                         .sorted { $0.name < $1.name }
@@ -1412,6 +1783,9 @@ class AIService {
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         usesImageAttachments: Bool,
+        agentTools: [AgentToolDefinition] = [],
+        toolExecutor: ((AgentToolCallRequest) async -> AgentToolCallResult)? = nil,
+        onToolExchangesUpdated: @escaping ([ChatToolExchange]) -> Void = { _ in },
         isReasoningDisplayActive: @escaping @MainActor () -> Bool,
         onReasoningToken: @escaping (String) -> Void,
         onContentToken: @escaping (String) -> Void,
@@ -1419,6 +1793,33 @@ class AIService {
         onError: @escaping (String) -> Void
     ) {
         cancelStreaming()
+
+        if !agentTools.isEmpty, let toolExecutor {
+            sendToolEnabledMessage(
+                message: message,
+                imageAttachments: imageAttachments,
+                imageContextDescription: imageContextDescription,
+                fileAttachments: fileAttachments,
+                baseURL: baseURL,
+                apiFormat: apiFormat,
+                apiKey: apiKey,
+                customHeaders: customHeaders,
+                model: model,
+                modelParameters: modelParameters,
+                anthropicMaxTokens: anthropicMaxTokens,
+                reasoningEnabled: reasoningEnabled,
+                reasoningEffort: reasoningEffort,
+                usesImageAttachments: usesImageAttachments,
+                agentTools: agentTools,
+                toolExecutor: toolExecutor,
+                onToolExchangesUpdated: onToolExchangesUpdated,
+                onReasoningToken: onReasoningToken,
+                onContentToken: onContentToken,
+                onComplete: onComplete,
+                onError: onError
+            )
+            return
+        }
 
         let url: URL
         do {
@@ -1665,6 +2066,255 @@ class AIService {
         }
     }
 
+    private func sendToolEnabledMessage(
+        message: String,
+        imageAttachments: [ChatImageAttachment],
+        imageContextDescription: String,
+        fileAttachments: [ChatFileAttachment],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        apiKey: String,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        usesImageAttachments: Bool,
+        agentTools: [AgentToolDefinition],
+        toolExecutor: @escaping (AgentToolCallRequest) async -> AgentToolCallResult,
+        onToolExchangesUpdated: @escaping ([ChatToolExchange]) -> Void,
+        onReasoningToken: @escaping (String) -> Void,
+        onContentToken: @escaping (String) -> Void,
+        onComplete: @escaping (_ contentText: String) -> Void,
+        onError: @escaping (String) -> Void
+    ) {
+        guard apiFormat != .vertexAIExpress else {
+            onError("Vertex Express 暂不支持工具调用。")
+            return
+        }
+
+        let url: URL
+        do {
+            url = try requestURL(
+                from: baseURL,
+                apiFormat: apiFormat,
+                model: model,
+                apiKey: apiKey,
+                isStreaming: false
+            )
+        } catch let error as AIServiceError {
+            onError(error.localizedDescription)
+            return
+        } catch {
+            onError("Base URL 无效")
+            return
+        }
+
+        conversationHistory.append(
+            ChatRequestMessage(
+                role: "user",
+                text: message,
+                imageAttachments: imageAttachments,
+                imageContextDescription: imageContextDescription,
+                fileAttachments: fileAttachments,
+                usesImageAttachments: usesImageAttachments
+            )
+        )
+
+        let toolsByName = Dictionary(
+            agentTools.map { ($0.functionName, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
+
+        streamingTask = Task {
+            var workingMessages = conversationHistory
+            var exchanges = [ChatToolExchange]()
+            var executedToolCallCount = 0
+            var accumulatedFinalReasoning = ""
+
+            for _ in 0...AgentTooling.maxToolRounds {
+                guard !Task.isCancelled else { return }
+
+                let jsonData: Data
+                do {
+                    jsonData = try requestBodyData(
+                        apiFormat: apiFormat,
+                        model: model,
+                        messages: workingMessages,
+                        stream: false,
+                        reasoningEnabled: reasoningEnabled,
+                        reasoningEffort: reasoningEffort,
+                        modelParameters: modelParameters,
+                        anthropicMaxTokens: anthropicMaxTokens,
+                        tools: agentTools
+                    )
+                } catch {
+                    await MainActor.run { onError("请求体编码失败") }
+                    streamingTask = nil
+                    return
+                }
+
+                var request = makeRequest(
+                    url: url,
+                    apiFormat: apiFormat,
+                    apiKey: apiKey,
+                    customHeaders: customHeaders,
+                    acceptsEventStream: false
+                )
+                request.httpBody = jsonData
+
+                do {
+                    let (data, response) = try await boundedResponseData(for: request)
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode
+                    let responseText = Self.responseText(from: data, redacting: redactionValues)
+
+                    guard let statusCode, (200...299).contains(statusCode) else {
+                        await MainActor.run {
+                            onError(Self.errorMessage(
+                                statusCode: statusCode,
+                                body: responseText,
+                                request: request,
+                                redacting: redactionValues
+                            ))
+                        }
+                        streamingTask = nil
+                        return
+                    }
+
+                    guard let modelResponse = Self.toolModelResponse(from: data, apiFormat: apiFormat) else {
+                        await MainActor.run {
+                            onError("工具调用响应解析失败\n\n\(responseText)")
+                        }
+                        streamingTask = nil
+                        return
+                    }
+
+                    if modelResponse.toolCalls.isEmpty {
+                        let content = modelResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? "无回复"
+                            : modelResponse.content
+                        conversationHistory = workingMessages + [ChatRequestMessage(role: "assistant", text: content)]
+                        await MainActor.run {
+                            if !modelResponse.reasoningContent.isEmpty {
+                                onReasoningToken(modelResponse.reasoningContent)
+                            } else if !accumulatedFinalReasoning.isEmpty {
+                                onReasoningToken(accumulatedFinalReasoning)
+                            }
+                            onToolExchangesUpdated(exchanges)
+                            onContentToken(content)
+                            onComplete(content)
+                        }
+                        streamingTask = nil
+                        return
+                    }
+
+                    executedToolCallCount += modelResponse.toolCalls.count
+                    guard executedToolCallCount <= AgentTooling.maxToolCalls else {
+                        await MainActor.run {
+                            onError("工具调用次数过多，已停止。")
+                        }
+                        streamingTask = nil
+                        return
+                    }
+
+                    let chatToolCalls = modelResponse.toolCalls.map { call -> ChatToolCall in
+                        let tool = toolsByName[call.name]
+                        return ChatToolCall(
+                            id: call.id,
+                            name: call.name,
+                            displayName: tool?.displayName ?? call.name,
+                            argumentsJSON: call.argumentsJSON,
+                            mcpServerID: tool?.mcpServerID,
+                            mcpServerName: tool?.mcpServerName ?? "",
+                            mcpToolName: tool?.mcpToolName ?? call.name
+                        )
+                    }
+
+                    workingMessages.append(ChatRequestMessage(
+                        role: "assistant",
+                        text: modelResponse.content,
+                        reasoningContent: modelResponse.reasoningContent,
+                        toolCalls: chatToolCalls
+                    ))
+                    accumulatedFinalReasoning += modelResponse.reasoningContent
+
+                    var exchange = ChatToolExchange(
+                        assistantContent: modelResponse.content,
+                        reasoningContent: modelResponse.reasoningContent,
+                        toolCalls: chatToolCalls,
+                        toolResults: []
+                    )
+
+                    for call in modelResponse.toolCalls {
+                        guard let tool = toolsByName[call.name] else {
+                            let result = ChatToolResult(
+                                toolCallID: call.id,
+                                name: call.name,
+                                content: "模型请求了未知工具：\(call.name)",
+                                isError: true
+                            )
+                            exchange.toolResults.append(result)
+                            workingMessages.append(ChatRequestMessage(
+                                toolCallID: call.id,
+                                name: call.name,
+                                content: result.content
+                            ))
+                            continue
+                        }
+
+                        let result = await toolExecutor(AgentToolCallRequest(
+                            id: call.id,
+                            functionName: call.name,
+                            argumentsJSON: call.argumentsJSON,
+                            tool: tool
+                        ))
+                        let limitedContent = String(result.content.prefix(AgentTooling.maxToolResultCharacters))
+                        let chatResult = ChatToolResult(
+                            toolCallID: call.id,
+                            name: call.name,
+                            content: limitedContent,
+                            isError: result.isError
+                        )
+                        exchange.toolResults.append(chatResult)
+                        workingMessages.append(ChatRequestMessage(
+                            toolCallID: call.id,
+                            name: call.name,
+                            content: limitedContent
+                        ))
+                    }
+
+                    exchanges.append(exchange)
+                    await MainActor.run {
+                        onToolExchangesUpdated(exchanges)
+                    }
+                } catch BoundedResponseDataError.responseTooLarge {
+                    await MainActor.run {
+                        onError("响应过大，已拒绝处理。")
+                    }
+                    streamingTask = nil
+                    return
+                } catch {
+                    await MainActor.run {
+                        let sanitizedMessage = Self.sanitizedErrorBody(
+                            error.localizedDescription,
+                            redacting: redactionValues
+                        )
+                        onError("工具调用请求失败：\(sanitizedMessage)")
+                    }
+                    streamingTask = nil
+                    return
+                }
+            }
+
+            await MainActor.run {
+                onError("工具调用轮数过多，已停止。")
+            }
+            streamingTask = nil
+        }
+    }
+
     private func makeRequest(
         url: URL,
         apiFormat: AIAPIFormat,
@@ -1765,6 +2415,68 @@ class AIService {
             return (try? decoder.decode(AnthropicResponse.self, from: data))?.outputText
         case .vertexAIExpress:
             return (try? decoder.decode(VertexGenerateContentResponse.self, from: data))?.outputText
+        }
+    }
+
+    private struct ToolModelResponse {
+        let content: String
+        let reasoningContent: String
+        let toolCalls: [ModelToolCall]
+    }
+
+    private static func toolModelResponse(from data: Data, apiFormat: AIAPIFormat) -> ToolModelResponse? {
+        let decoder = JSONDecoder()
+        switch apiFormat {
+        case .openAIChatCompletions:
+            guard let message = (try? decoder.decode(OpenAIResponse.self, from: data))?
+                .choices
+                .first?
+                .message else {
+                return nil
+            }
+            let calls = message.toolCalls?.compactMap { call -> ModelToolCall? in
+                guard let id = call.id,
+                      let name = call.function?.name else {
+                    return nil
+                }
+                return ModelToolCall(
+                    id: id,
+                    name: name,
+                    argumentsJSON: call.function?.arguments ?? "{}"
+                )
+            } ?? []
+            return ToolModelResponse(
+                content: message.content,
+                reasoningContent: message.reasoningContent ?? "",
+                toolCalls: calls
+            )
+        case .openAIResponses:
+            guard let response = try? decoder.decode(OpenAIResponsesResponse.self, from: data) else {
+                return nil
+            }
+            return ToolModelResponse(
+                content: response.outputText,
+                reasoningContent: "",
+                toolCalls: response.toolCalls
+            )
+        case .anthropicMessages:
+            guard let response = try? decoder.decode(AnthropicResponse.self, from: data) else {
+                return nil
+            }
+            return ToolModelResponse(
+                content: response.outputText,
+                reasoningContent: "",
+                toolCalls: response.toolCalls
+            )
+        case .vertexAIExpress:
+            guard let response = try? decoder.decode(VertexGenerateContentResponse.self, from: data) else {
+                return nil
+            }
+            return ToolModelResponse(
+                content: response.outputText,
+                reasoningContent: "",
+                toolCalls: []
+            )
         }
     }
 

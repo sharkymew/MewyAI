@@ -262,6 +262,7 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
     var alias: String
     var supportsReasoning: Bool
     var supportsImages: Bool
+    var supportsTools: Bool
     var temperature: Double?
     var topP: Double?
     var contextWindowTokens: Int?
@@ -281,6 +282,7 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         alias: String = "",
         supportsReasoning: Bool = false,
         supportsImages: Bool = false,
+        supportsTools: Bool? = nil,
         temperature: Double? = nil,
         topP: Double? = nil,
         contextWindowTokens: Int? = nil,
@@ -290,6 +292,7 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         self.alias = alias
         self.supportsReasoning = supportsReasoning
         self.supportsImages = supportsImages
+        self.supportsTools = supportsTools ?? Self.defaultToolsSupport(for: name)
         self.temperature = temperature
         self.topP = topP
         self.contextWindowTokens = contextWindowTokens
@@ -301,6 +304,7 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         case alias
         case supportsReasoning
         case supportsImages
+        case supportsTools
         case temperature
         case topP
         case contextWindowTokens
@@ -313,6 +317,8 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         alias = try container.decodeIfPresent(String.self, forKey: .alias) ?? ""
         supportsReasoning = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoning) ?? false
         supportsImages = try container.decodeIfPresent(Bool.self, forKey: .supportsImages) ?? false
+        supportsTools = try container.decodeIfPresent(Bool.self, forKey: .supportsTools)
+            ?? Self.defaultToolsSupport(for: name)
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
         topP = try container.decodeIfPresent(Double.self, forKey: .topP)
         contextWindowTokens = try container.decodeIfPresent(Int.self, forKey: .contextWindowTokens)
@@ -325,10 +331,18 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         try container.encode(alias, forKey: .alias)
         try container.encode(supportsReasoning, forKey: .supportsReasoning)
         try container.encode(supportsImages, forKey: .supportsImages)
+        try container.encode(supportsTools, forKey: .supportsTools)
         try container.encodeIfPresent(temperature, forKey: .temperature)
         try container.encodeIfPresent(topP, forKey: .topP)
         try container.encodeIfPresent(contextWindowTokens, forKey: .contextWindowTokens)
         try container.encodeIfPresent(maxOutputTokens, forKey: .maxOutputTokens)
+    }
+
+    static func defaultToolsSupport(for modelName: String) -> Bool {
+        modelName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .hasPrefix("deepseek-v4-")
     }
 }
 
@@ -501,6 +515,10 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         selectedModelConfiguration?.supportsImages == true
     }
 
+    var selectedModelSupportsTools: Bool {
+        selectedModelConfiguration?.supportsTools == true
+    }
+
     var selectedPromptPreset: AIPromptPreset? {
         promptPresets.first { $0.id == selectedPromptPresetID } ?? promptPresets.first
     }
@@ -517,7 +535,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         systemPrompt: String = AIConfiguration.defaultSystemPrompt,
         promptPresets: [AIPromptPreset]? = nil,
         selectedPromptPresetID: UUID? = nil,
-        models: [AIModelConfiguration] = [AIModelConfiguration(name: "deepseek-v4-pro")],
+        models: [AIModelConfiguration] = [AIModelConfiguration(name: "deepseek-v4-pro", supportsTools: true)],
         selectedModel: String = "deepseek-v4-pro",
         reasoningEnabled: Bool = true,
         reasoningEffort: ReasoningEffort = .medium,
@@ -609,7 +627,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
                   let legacyModels = try? container.decode([String].self, forKey: .models) {
             models = legacyModels.map { AIModelConfiguration(name: $0) }
         } else {
-            models = [AIModelConfiguration(name: "deepseek-v4-pro")]
+            models = [AIModelConfiguration(name: "deepseek-v4-pro", supportsTools: true)]
         }
 
         selectedModel = try container.decodeIfPresent(String.self, forKey: .selectedModel) ?? models.first?.name ?? ""
@@ -808,7 +826,7 @@ enum AIConfigurationStore {
             endpoint: split.endpoint,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            models: [AIModelConfiguration(name: "deepseek-v4-pro")],
+            models: [AIModelConfiguration(name: "deepseek-v4-pro", supportsTools: true)],
             selectedModel: "deepseek-v4-pro"
         )
     }

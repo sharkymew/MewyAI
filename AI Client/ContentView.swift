@@ -9,12 +9,8 @@ private enum ChatScrollMetrics {
     static let coordinateSpaceName = "ChatScrollCoordinateSpace"
     static let bottomThreshold: CGFloat = 12
     static let dragIntentMinimumDistance: CGFloat = 3
-    static let scrollToBottomButtonBottomPadding: CGFloat = 92
     static let scrollToBottomButtonHitOutset: CGFloat = 8
     static let scrollToBottomButtonHitSize: CGFloat = 52
-    static var scrollToBottomButtonHitAdjustedBottomPadding: CGFloat {
-        max(scrollToBottomButtonBottomPadding - scrollToBottomButtonHitOutset, 0)
-    }
 
     static func roundedDistance(_ distance: CGFloat) -> CGFloat {
         let scale = max(UIScreen.main.scale, 1)
@@ -381,9 +377,11 @@ private final class ChatScrollController: ObservableObject {
 
 private struct ScrollToBottomButtonOverlay<Label: View>: View {
     @ObservedObject var scrollController: ChatScrollController
+    let bottomPadding: CGFloat
     let label: () -> Label
 
     var body: some View {
+        let adjustedBottomPadding = max(bottomPadding - ChatScrollMetrics.scrollToBottomButtonHitOutset, 0)
         ZStack {
             if scrollController.shouldShowScrollToBottomButton {
                 Button {
@@ -397,7 +395,7 @@ private struct ScrollToBottomButtonOverlay<Label: View>: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.bottom, ChatScrollMetrics.scrollToBottomButtonHitAdjustedBottomPadding)
+                .padding(.bottom, adjustedBottomPadding)
                 .transition(.scale.combined(with: .opacity))
             }
         }
@@ -556,12 +554,64 @@ private final class ChatInputDraft: ObservableObject {
     }
 }
 
+private struct PendingToolApproval: Identifiable {
+    let id = UUID()
+    let toolName: String
+    let arguments: String
+}
+
+private struct ActiveAgentCapsule: Identifiable {
+    enum Kind {
+        case skill
+        case mcp
+    }
+
+    let id: UUID
+    let kind: Kind
+    let title: String
+    let icon: String
+}
+
+private struct ActiveAgentCapsuleView: View {
+    let capsule: ActiveAgentCapsule
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: capsule.icon)
+                .font(.system(size: 17, weight: .semibold))
+
+            Text(capsule.title)
+                .font(.headline.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .bold))
+            }
+            .buttonStyle(.plain)
+        }
+        .foregroundStyle(Color.blue)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+        .background(Capsule().fill(Color.black.opacity(0.92)))
+        .accessibilityLabel(capsule.kind == .skill ? "已启用 Skill：\(capsule.title)" : "已启用 MCP：\(capsule.title)")
+    }
+}
+
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var configurations = AIConfigurationStore.loadConfigurations()
     @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
+    @State private var agentSkills = AgentCapabilityStore.loadSkills()
+    @State private var mcpServers = AgentCapabilityStore.loadMCPServers()
+    @State private var activeSkillIDs = Set<UUID>()
+    @State private var activeMCPServerIDs = Set<UUID>()
+    @State private var pendingToolApproval: PendingToolApproval?
+    @State private var toolApprovalContinuation: CheckedContinuation<Bool, Never>?
     @StateObject private var speechInputController = SpeechInputController()
     @StateObject private var streamingOutputHaptics = StreamingOutputHaptics()
     @AppStorage(AIConfigurationStore.hapticFeedbackEnabledKey)
@@ -580,6 +630,7 @@ struct ContentView: View {
     @State private var isGenerating = false
     @State private var showConfiguration = false
     @State private var showPromptSettings = false
+    @State private var showAgentCapabilities = false
     @State private var showConversationSidebar = false
     @State private var chatScrollController = ChatScrollController()
     @State private var streamingTokenBuffer = StreamingTokenBuffer()
@@ -669,7 +720,13 @@ struct ContentView: View {
 
     private var bottomScrollContentPadding: CGFloat {
         let inputBarHeight = inputBarMeasuredHeight > 0 ? inputBarMeasuredHeight : inputBottomFadeOverlap
-        return inputBarHeight + bottomScrollContentGap
+        let capsuleClearance: CGFloat = activeAgentCapsules.isEmpty ? 0 : 64
+        return inputBarHeight + capsuleClearance + bottomScrollContentGap
+    }
+
+    private var scrollToBottomButtonBottomPadding: CGFloat {
+        let inputBarHeight = inputBarMeasuredHeight > 0 ? inputBarMeasuredHeight : inputBottomFadeOverlap
+        return inputBarHeight + 12
     }
 
     @ViewBuilder
@@ -785,7 +842,7 @@ struct ContentView: View {
         GeometryReader { geometry in
             let fadeTop = geometry.size.height - inputBottomFadeOverlap - inputBarBottomPadding
             let scrollButtonCenterY = geometry.size.height
-                - ChatScrollMetrics.scrollToBottomButtonHitAdjustedBottomPadding
+                - max(scrollToBottomButtonBottomPadding - ChatScrollMetrics.scrollToBottomButtonHitOutset, 0)
                 - ChatScrollMetrics.scrollToBottomButtonHitSize / 2
 
             ZStack(alignment: .topLeading) {
@@ -940,6 +997,13 @@ struct ContentView: View {
         }
     }
 
+    private func resolveToolApproval(_ isAllowed: Bool) {
+        let continuation = toolApprovalContinuation
+        toolApprovalContinuation = nil
+        pendingToolApproval = nil
+        continuation?.resume(returning: isAllowed)
+    }
+
     private func resetSpeechInputMergeState() {
         speechInputBaseText = inputDraft.text
         speechInputLastTranscript = ""
@@ -1073,6 +1137,9 @@ struct ContentView: View {
         .sheet(isPresented: $showPromptSettings) {
             AIPromptSettingsView(configurationID: currentConfiguration.id)
         }
+        .sheet(isPresented: $showAgentCapabilities) {
+            AgentCapabilitiesView()
+        }
         .alert("重命名对话", isPresented: $isRenameConversationAlertPresented) {
             TextField("名称", text: $renamingConversationTitle)
 
@@ -1092,6 +1159,26 @@ struct ContentView: View {
             }
         } message: {
             Text(conversationExportErrorMessage ?? "")
+        }
+        .alert(
+            "允许工具调用？",
+            isPresented: Binding(
+                get: { pendingToolApproval != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        resolveToolApproval(false)
+                    }
+                }
+            )
+        ) {
+            Button("拒绝", role: .cancel) {
+                resolveToolApproval(false)
+            }
+            Button("允许") {
+                resolveToolApproval(true)
+            }
+        } message: {
+            Text(toolApprovalMessage)
         }
         .photosPicker(
             isPresented: $isPhotoPickerPresented,
@@ -1115,11 +1202,17 @@ struct ContentView: View {
         .onChange(of: showConfiguration) { _, isPresented in
             if !isPresented {
                 reloadConfigurations()
+                reloadAgentCapabilities()
             }
         }
         .onChange(of: showPromptSettings) { _, isPresented in
             if !isPresented {
                 reloadConfigurations()
+            }
+        }
+        .onChange(of: showAgentCapabilities) { _, isPresented in
+            if !isPresented {
+                reloadAgentCapabilities()
             }
         }
         .onChange(of: selectedPhotoItems) { _, newItems in
@@ -1223,7 +1316,10 @@ struct ContentView: View {
             chatScrollController.requestImmediateAutoScroll(animated: false)
         }
         .overlay(alignment: .bottom) {
-            ScrollToBottomButtonOverlay(scrollController: chatScrollController) {
+            ScrollToBottomButtonOverlay(
+                scrollController: chatScrollController,
+                bottomPadding: scrollToBottomButtonBottomPadding
+            ) {
                 scrollToBottomGlassIcon()
             }
         }
@@ -1340,53 +1436,61 @@ struct ContentView: View {
     }
 
     private func inputBar(includesLegacyFade: Bool) -> some View {
-        inputGlassContainer {
-            VStack(alignment: .leading, spacing: 8) {
-                if !pendingImageAttachments.isEmpty || !pendingFileAttachments.isEmpty {
-                    pendingAttachmentPreview
-                }
-
-                if let imageSelectionError {
-                    Text(imageSelectionError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 6)
-                }
-
-                if let speechInputError = speechInputController.errorMessage {
-                    Text(speechInputError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 6)
-                }
-
-                if isEditingMessage {
-                    Text("正在修改消息")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                }
-
-                inputComposer
+        VStack(alignment: .leading, spacing: 8) {
+            if !activeAgentCapsules.isEmpty {
+                activeAgentCapsuleRow
+                    .padding(.horizontal, 6)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: inputBarCornerRadius, style: .continuous)
-                .stroke(
-                    isAttachmentDropTargeted ? Color.accentColor.opacity(0.56) : Color.secondary.opacity(0.12),
-                    lineWidth: isAttachmentDropTargeted ? 2 : 1
-                )
-        )
-        .onDrop(
-            of: [UTType.image.identifier] + ChatFileAttachmentReader.dropTypeIdentifiers,
-            isTargeted: $isAttachmentDropTargeted,
-            perform: handleDroppedAttachments
-        )
-        .transaction { transaction in
-            transaction.animation = nil
-            transaction.disablesAnimations = true
+
+            inputGlassContainer {
+                VStack(alignment: .leading, spacing: 8) {
+                    if !pendingImageAttachments.isEmpty || !pendingFileAttachments.isEmpty {
+                        pendingAttachmentPreview
+                    }
+
+                    if let imageSelectionError {
+                        Text(imageSelectionError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 6)
+                    }
+
+                    if let speechInputError = speechInputController.errorMessage {
+                        Text(speechInputError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 6)
+                    }
+
+                    if isEditingMessage {
+                        Text("正在修改消息")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                    }
+
+                    inputComposer
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+            .frame(maxWidth: .infinity)
+            .overlay(
+                RoundedRectangle(cornerRadius: inputBarCornerRadius, style: .continuous)
+                    .stroke(
+                        isAttachmentDropTargeted ? Color.accentColor.opacity(0.56) : Color.secondary.opacity(0.12),
+                        lineWidth: isAttachmentDropTargeted ? 2 : 1
+                    )
+            )
+            .onDrop(
+                of: [UTType.image.identifier] + ChatFileAttachmentReader.dropTypeIdentifiers,
+                isTargeted: $isAttachmentDropTargeted,
+                perform: handleDroppedAttachments
+            )
+            .transaction { transaction in
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
         }
         .padding(.horizontal, inputBarHorizontalPadding)
         .padding(.top, inputBarTopPadding)
@@ -1547,6 +1651,29 @@ struct ContentView: View {
         }
     }
 
+    private var activeAgentCapsules: [ActiveAgentCapsule] {
+        let skillCapsules = activeSkills.map { skill in
+            ActiveAgentCapsule(id: skill.id, kind: .skill, title: skill.displayName, icon: "wand.and.sparkles")
+        }
+        let mcpCapsules = activeMCPServers.map { server in
+            ActiveAgentCapsule(id: server.id, kind: .mcp, title: server.name, icon: server.kind == .tavily ? "globe" : "point.3.connected.trianglepath.dotted")
+        }
+        return skillCapsules + mcpCapsules
+    }
+
+    private var activeAgentCapsuleRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(activeAgentCapsules) { capsule in
+                    ActiveAgentCapsuleView(capsule: capsule) {
+                        deactivateAgentCapsule(capsule)
+                    }
+                }
+            }
+            .padding(.horizontal, 6)
+        }
+    }
+
     @ViewBuilder
     private var modelChoiceMenuItems: some View {
         ForEach(currentConfiguration.models) { model in
@@ -1652,6 +1779,62 @@ struct ContentView: View {
                 Label("上传文件", systemImage: "doc")
             }
 
+            Divider()
+
+            Menu {
+                if agentSkills.isEmpty {
+                    Text("没有可用 Skill")
+                } else {
+                    ForEach(agentSkills) { skill in
+                        Button {
+                            toggleSkill(skill.id)
+                        } label: {
+                            if activeSkillIDs.contains(skill.id) {
+                                Label(skill.displayName, systemImage: "checkmark")
+                            } else {
+                                Label(skill.displayName, systemImage: "wand.and.sparkles")
+                            }
+                        }
+                    }
+                }
+
+                Button {
+                    hideKeyboard()
+                    showAgentCapabilities = true
+                } label: {
+                    Label("管理 Skills", systemImage: "slider.horizontal.3")
+                }
+            } label: {
+                Label("Agent Skills", systemImage: "wand.and.sparkles")
+            }
+
+            Menu {
+                if mcpServers.isEmpty {
+                    Text("没有可用 MCP")
+                } else {
+                    ForEach(mcpServers) { server in
+                        Button {
+                            toggleMCPServer(server.id)
+                        } label: {
+                            if activeMCPServerIDs.contains(server.id) {
+                                Label(server.name, systemImage: "checkmark")
+                            } else {
+                                Label(server.name, systemImage: server.kind == .tavily ? "globe" : "point.3.connected.trianglepath.dotted")
+                            }
+                        }
+                    }
+                }
+
+                Button {
+                    hideKeyboard()
+                    showAgentCapabilities = true
+                } label: {
+                    Label("管理 MCP", systemImage: "slider.horizontal.3")
+                }
+            } label: {
+                Label("MCP 工具", systemImage: "point.3.connected.trianglepath.dotted")
+            }
+
             if currentConfiguration.selectedModelSupportsReasoning {
                 Divider()
 
@@ -1732,6 +1915,23 @@ struct ContentView: View {
         )
     }
 
+    private var activeSkills: [AgentSkill] {
+        agentSkills.filter { activeSkillIDs.contains($0.id) }
+    }
+
+    private var activeMCPServers: [MCPServerConfiguration] {
+        mcpServers.filter { activeMCPServerIDs.contains($0.id) }
+    }
+
+    private var toolApprovalMessage: String {
+        guard let pendingToolApproval else { return "" }
+        let arguments = pendingToolApproval.arguments.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !arguments.isEmpty else {
+            return pendingToolApproval.toolName
+        }
+        return "\(pendingToolApproval.toolName)\n\n\(String(arguments.prefix(1_000)))"
+    }
+
     private var configurationSummary: String {
         let configuration = currentConfiguration
         let trimmedBaseURL = configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1751,6 +1951,247 @@ struct ContentView: View {
             ? " · max_tokens \(configuration.anthropicMaxTokens)"
             : ""
         return "\(configuration.name) · \(apiSummary) · \(modelSummary) · \(imageSummary) · \(reasoningSummary)\(anthropicSummary) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(endpointSummary) · \(authSummary)"
+    }
+
+    private func reloadAgentCapabilities() {
+        agentSkills = AgentCapabilityStore.loadSkills()
+        mcpServers = AgentCapabilityStore.loadMCPServers()
+        activeSkillIDs = activeSkillIDs.intersection(Set(agentSkills.map(\.id)))
+        activeMCPServerIDs = activeMCPServerIDs.intersection(Set(mcpServers.map(\.id)))
+        persistCurrentConversation(refreshesUpdatedAt: false)
+    }
+
+    private func toggleSkill(_ id: UUID) {
+        if activeSkillIDs.contains(id) {
+            activeSkillIDs.remove(id)
+        } else {
+            activeSkillIDs.insert(id)
+        }
+        persistCurrentConversation(refreshesUpdatedAt: false)
+    }
+
+    private func toggleMCPServer(_ id: UUID) {
+        if activeMCPServerIDs.contains(id) {
+            activeMCPServerIDs.remove(id)
+        } else {
+            activeMCPServerIDs.insert(id)
+        }
+        persistCurrentConversation(refreshesUpdatedAt: false)
+    }
+
+    private func deactivateAgentCapsule(_ capsule: ActiveAgentCapsule) {
+        switch capsule.kind {
+        case .skill:
+            activeSkillIDs.remove(capsule.id)
+        case .mcp:
+            activeMCPServerIDs.remove(capsule.id)
+        }
+        persistCurrentConversation(refreshesUpdatedAt: false)
+    }
+
+    private func activeAgentToolDefinitions() -> [AgentToolDefinition] {
+        var definitions = [AgentToolDefinition]()
+        var usedFunctionNames = Set<String>()
+
+        for server in activeMCPServers {
+            for tool in effectiveMCPTools(for: server) {
+                let definition = AgentToolDefinition.make(server: server, tool: tool)
+                guard usedFunctionNames.insert(definition.functionName).inserted else { continue }
+                definitions.append(definition)
+            }
+        }
+
+        return definitions
+    }
+
+    private func effectiveMCPTools(for server: MCPServerConfiguration) -> [MCPToolDefinition] {
+        var tools = server.cachedTools.map { tool in
+            var normalizedTool = tool
+            if server.kind == .tavily {
+                normalizedTool.name = AgentCapabilityStore.normalizedTavilyToolName(tool.name)
+            }
+            return normalizedTool
+        }
+        if server.kind == .tavily {
+            for defaultTool in MCPServerConfiguration.tavilyDefault().cachedTools
+            where !tools.contains(where: { $0.name == defaultTool.name }) {
+                tools.append(defaultTool)
+            }
+        }
+
+        let allowedToolNames: [String]
+        if server.kind == .tavily {
+            let normalizedAllowedToolNames = server.allowedToolNames.map(AgentCapabilityStore.normalizedTavilyToolName)
+            allowedToolNames = normalizedAllowedToolNames.isEmpty
+                ? MCPServerConfiguration.tavilyDefault().allowedToolNames
+                : normalizedAllowedToolNames
+        } else {
+            allowedToolNames = server.allowedToolNames
+        }
+        let allowedNames = Set(allowedToolNames)
+        let filteredTools = tools.filter { allowedNames.isEmpty || allowedNames.contains($0.name) }
+
+        if filteredTools.isEmpty && server.kind == .tavily {
+            return MCPServerConfiguration.tavilyDefault().cachedTools
+        }
+        return filteredTools
+    }
+
+    private func executeAgentTool(_ request: AgentToolCallRequest) async -> AgentToolCallResult {
+        if request.tool.requiresApproval {
+            let isAllowed = await requestToolApproval(
+                toolName: request.tool.displayName,
+                arguments: request.argumentsJSON
+            )
+            guard isAllowed else {
+                return AgentToolCallResult(content: "用户拒绝了这次工具调用。", isError: true)
+            }
+        }
+
+        let server = currentMCPServerConfiguration(for: request.tool)
+        let mcpToolName = server.kind == .tavily
+            ? AgentCapabilityStore.normalizedTavilyToolName(request.tool.mcpToolName)
+            : request.tool.mcpToolName
+
+        do {
+            let result = try await RemoteMCPClient(configuration: server).callTool(
+                name: mcpToolName,
+                arguments: jsonValue(from: request.argumentsJSON)
+            )
+            if result.isError,
+               shouldRefreshTools(after: result.content),
+               let retryResult = await retryAgentToolAfterRefreshingTools(
+                request,
+                server: server,
+                failedToolName: mcpToolName
+               ) {
+                return retryResult
+            }
+            return AgentToolCallResult(content: result.content, isError: result.isError)
+        } catch {
+            return AgentToolCallResult(content: error.localizedDescription, isError: true)
+        }
+    }
+
+    private func currentMCPServerConfiguration(for tool: AgentToolDefinition) -> MCPServerConfiguration {
+        if var server = mcpServers.first(where: { $0.id == tool.mcpServerID }) {
+            if server.authorizationToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                server.authorizationToken = tool.authorizationToken
+            }
+            return server
+        }
+
+        return MCPServerConfiguration(
+            id: tool.mcpServerID,
+            name: tool.mcpServerName,
+            serverURL: tool.mcpServerURL,
+            kind: tool.mcpServerID == MCPServerConfiguration.tavilyID ? .tavily : .custom,
+            requiresApproval: tool.requiresApproval,
+            authorizationToken: tool.authorizationToken
+        )
+    }
+
+    private func shouldRefreshTools(after errorContent: String) -> Bool {
+        let lowercasedContent = errorContent.lowercased()
+        return lowercasedContent.contains("unknown tool")
+            || lowercasedContent.contains("tool not found")
+            || lowercasedContent.contains("not found")
+    }
+
+    private func retryAgentToolAfterRefreshingTools(
+        _ request: AgentToolCallRequest,
+        server: MCPServerConfiguration,
+        failedToolName: String
+    ) async -> AgentToolCallResult? {
+        do {
+            let refreshedTools = try await RemoteMCPClient(configuration: server).listTools()
+            guard !refreshedTools.isEmpty else { return nil }
+
+            let normalizedTools = refreshedTools.map { tool in
+                var normalizedTool = tool
+                if server.kind == .tavily {
+                    normalizedTool.name = AgentCapabilityStore.normalizedTavilyToolName(tool.name)
+                }
+                return normalizedTool
+            }
+            saveRefreshedTools(normalizedTools, for: server)
+
+            guard let replacementTool = replacementToolName(
+                for: failedToolName,
+                in: normalizedTools,
+                serverKind: server.kind
+            ) else {
+                return nil
+            }
+
+            let retryResult = try await RemoteMCPClient(configuration: server).callTool(
+                name: replacementTool,
+                arguments: jsonValue(from: request.argumentsJSON)
+            )
+            return AgentToolCallResult(content: retryResult.content, isError: retryResult.isError)
+        } catch {
+            return nil
+        }
+    }
+
+    private func replacementToolName(
+        for failedToolName: String,
+        in tools: [MCPToolDefinition],
+        serverKind: MCPServerKind
+    ) -> String? {
+        let normalizedFailedToolName = serverKind == .tavily
+            ? AgentCapabilityStore.normalizedTavilyToolName(failedToolName)
+            : failedToolName
+        if tools.contains(where: { $0.name == normalizedFailedToolName }) {
+            return normalizedFailedToolName
+        }
+
+        let underscoreName = normalizedFailedToolName.replacingOccurrences(of: "-", with: "_")
+        if tools.contains(where: { $0.name == underscoreName }) {
+            return underscoreName
+        }
+
+        if serverKind == .tavily,
+           normalizedFailedToolName.contains("search"),
+           tools.contains(where: { $0.name == MCPServerConfiguration.tavilySearchToolName }) {
+            return MCPServerConfiguration.tavilySearchToolName
+        }
+
+        return nil
+    }
+
+    private func saveRefreshedTools(_ tools: [MCPToolDefinition], for server: MCPServerConfiguration) {
+        guard let index = mcpServers.firstIndex(where: { $0.id == server.id }) else { return }
+
+        mcpServers[index].cachedTools = tools
+        if server.kind == .tavily {
+            let toolNames = Set(tools.map(\.name))
+            let normalizedAllowedToolNames = mcpServers[index].allowedToolNames
+                .map(AgentCapabilityStore.normalizedTavilyToolName)
+                .filter { toolNames.contains($0) }
+            mcpServers[index].allowedToolNames = normalizedAllowedToolNames.isEmpty
+                ? MCPServerConfiguration.tavilyDefault().allowedToolNames
+                : normalizedAllowedToolNames
+        }
+        mcpServers[index].updatedAt = Date()
+        AgentCapabilityStore.saveMCPServers(mcpServers)
+    }
+
+    @MainActor
+    private func requestToolApproval(toolName: String, arguments: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            toolApprovalContinuation?.resume(returning: false)
+            toolApprovalContinuation = continuation
+            pendingToolApproval = PendingToolApproval(toolName: toolName, arguments: arguments)
+        }
+    }
+
+    private func jsonValue(from json: String) -> JSONValue {
+        guard let data = json.data(using: .utf8),
+              let value = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+            return .object([:])
+        }
+        return value
     }
 
     func sendMessage() {
@@ -1788,9 +2229,27 @@ struct ContentView: View {
         let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
         let usesImageAttachments = configuration.selectedModelSupportsImages
+        let usesAgentTools = !activeMCPServers.isEmpty
+        let agentTools = usesAgentTools ? activeAgentToolDefinitions() : []
+        let effectiveSystemPrompt = configuration.systemPrompt + AgentTooling.promptAppendix(for: activeSkills)
         let generatesImageContextDescriptions = configuration.generatesImageContextDescriptions
 
         guard !userText.isEmpty || !imageAttachments.isEmpty || !fileAttachments.isEmpty else { return }
+
+        guard !usesAgentTools || configuration.apiFormat != .vertexAIExpress else {
+            appendAssistantError("Vertex Express 暂不支持 MCP 工具调用，请关闭 MCP 胶囊或切换 API 类型。")
+            return
+        }
+
+        guard !usesAgentTools || configuration.selectedModelSupportsTools else {
+            appendAssistantError("当前模型未标记为支持工具调用。请在模型设置里勾选“工具”，或关闭 MCP 胶囊后再发送。")
+            return
+        }
+
+        guard !usesAgentTools || !agentTools.isEmpty else {
+            appendAssistantError("当前启用的 MCP 没有可用工具。请在设置里刷新工具列表，或检查允许工具名称。")
+            return
+        }
 
         guard imageAttachments.isEmpty
                 || usesImageAttachments
@@ -1816,7 +2275,7 @@ struct ContentView: View {
 
         aiService.resetConversation(
             with: contextMessages,
-            systemPrompt: configuration.systemPrompt,
+            systemPrompt: effectiveSystemPrompt,
             usesImageAttachments: usesImageAttachments
         )
         clearInputState()
@@ -1868,6 +2327,16 @@ struct ContentView: View {
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             usesImageAttachments: usesImageAttachments,
+            agentTools: agentTools,
+            toolExecutor: { request in
+                await executeAgentTool(request)
+            },
+            onToolExchangesUpdated: { exchanges in
+                guard activeAssistantMessageID == assistantMessageID else { return }
+                guard let index = messages.firstIndex(where: { $0.id == assistantMessageID }) else { return }
+                messages[index].toolExchanges = exchanges
+                persistCurrentConversation(refreshesUpdatedAt: false)
+            },
             isReasoningDisplayActive: {
                 activeAssistantMessageID == assistantMessageID && activeAssistantReasoningIsExpanded
             },
@@ -2967,6 +3436,8 @@ struct ContentView: View {
             conversations = [conversation]
             selectedConversationID = conversation.id
             messages = []
+            activeSkillIDs = Set(conversation.activeSkillIDs)
+            activeMCPServerIDs = Set(conversation.activeMCPServerIDs)
             resetMarkdownCache(for: messages)
             activeAssistantHasReasoning = false
             activeAssistantHasContent = false
@@ -2989,6 +3460,8 @@ struct ContentView: View {
             let conversation = AIConversation()
             conversations.insert(conversation, at: 0)
             selectedConversationID = conversation.id
+            activeSkillIDs = []
+            activeMCPServerIDs = []
             ConversationStore.saveSelectedConversationID(conversation.id)
             ConversationStore.saveConversations(conversations)
         }
@@ -3013,6 +3486,8 @@ struct ContentView: View {
         speechInputController.cancelRecording()
         selectedConversationID = conversation.id
         messages = conversation.messages
+        activeSkillIDs = Set(conversation.activeSkillIDs)
+        activeMCPServerIDs = Set(conversation.activeMCPServerIDs)
         resetMarkdownCache(for: messages)
         inputDraft.clearText()
         resetSpeechInputMergeState()
@@ -3094,6 +3569,8 @@ struct ContentView: View {
         conversations.insert(conversation, at: 0)
         selectedConversationID = conversation.id
         messages = []
+        activeSkillIDs = []
+        activeMCPServerIDs = []
         resetMarkdownCache(for: messages)
         speechInputController.cancelRecording()
         inputDraft.clearText()
@@ -3216,6 +3693,8 @@ struct ContentView: View {
             conversations = [conversation]
             selectedConversationID = conversation.id
             messages = []
+            activeSkillIDs = []
+            activeMCPServerIDs = []
             resetMarkdownCache(for: messages)
             speechInputController.cancelRecording()
             inputDraft.clearText()
@@ -3257,6 +3736,8 @@ struct ContentView: View {
             let nextConversation = conversations[0]
             selectedConversationID = nextConversation.id
             messages = nextConversation.messages
+            activeSkillIDs = Set(nextConversation.activeSkillIDs)
+            activeMCPServerIDs = Set(nextConversation.activeMCPServerIDs)
             resetMarkdownCache(for: messages)
             pendingImageAttachments = []
             pendingFileAttachments = []
@@ -3306,6 +3787,8 @@ struct ContentView: View {
         }
 
         conversations[index].messages = messages
+        conversations[index].activeSkillIDs = Array(activeSkillIDs)
+        conversations[index].activeMCPServerIDs = Array(activeMCPServerIDs)
         if refreshesUpdatedAt {
             conversations[index].updatedAt = Date()
         }
@@ -3525,6 +4008,10 @@ struct MessageBubble: View {
                 reasoningBlock
             }
 
+            if !message.toolExchanges.isEmpty {
+                toolActivityBlock
+            }
+
             if shouldShowMessageContentBubble {
                 messageContentBubble
             }
@@ -3545,6 +4032,73 @@ struct MessageBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(.easeOut(duration: 0.16), value: showsActions)
+    }
+
+    private var toolActivityBlock: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(message.toolExchanges) { exchange in
+                    ForEach(exchange.toolCalls) { call in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "point.3.connected.trianglepath.dotted")
+                                Text(call.displayName.isEmpty ? call.name : call.displayName)
+                                    .fontWeight(.semibold)
+                            }
+
+                            if let result = exchange.toolResults.first(where: { $0.toolCallID == call.id }) {
+                                Text(result.isError ? "调用失败" : "调用完成")
+                                    .foregroundStyle(result.isError ? Color.red : Color.secondary)
+
+                                let content = toolResultPreview(result.content)
+                                if !content.isEmpty {
+                                    Text(content)
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(result.isError ? Color.red : Color.primary)
+                                        .textSelection(.enabled)
+                                        .padding(8)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                .fill(Color.black.opacity(colorScheme == .dark ? 0.18 : 0.05))
+                                        )
+                                }
+                            } else {
+                                Text("正在调用...")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.secondary.opacity(0.10))
+                        )
+                    }
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            Label("工具调用", systemImage: "wrench.and.screwdriver")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.secondary.opacity(0.28), lineWidth: 1)
+        )
+    }
+
+    private func toolResultPreview(_ content: String) -> String {
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedContent.isEmpty else { return "" }
+
+        let limit = 4_000
+        guard trimmedContent.count > limit else { return trimmedContent }
+        return "\(String(trimmedContent.prefix(limit)))\n\n...（结果过长，已截断显示）"
     }
 
     private var messageImages: some View {

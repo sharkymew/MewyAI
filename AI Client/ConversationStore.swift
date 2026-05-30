@@ -116,6 +116,78 @@ struct ChatFileAttachment: Identifiable, Codable, Equatable {
     }
 }
 
+struct ChatToolCall: Identifiable, Codable, Equatable {
+    var id: String
+    var name: String
+    var displayName: String
+    var argumentsJSON: String
+    var mcpServerID: UUID?
+    var mcpServerName: String
+    var mcpToolName: String
+
+    init(
+        id: String,
+        name: String,
+        displayName: String,
+        argumentsJSON: String,
+        mcpServerID: UUID? = nil,
+        mcpServerName: String = "",
+        mcpToolName: String = ""
+    ) {
+        self.id = id
+        self.name = name
+        self.displayName = displayName
+        self.argumentsJSON = argumentsJSON
+        self.mcpServerID = mcpServerID
+        self.mcpServerName = mcpServerName
+        self.mcpToolName = mcpToolName
+    }
+}
+
+struct ChatToolResult: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var toolCallID: String
+    var name: String
+    var content: String
+    var isError: Bool
+
+    init(
+        id: UUID = UUID(),
+        toolCallID: String,
+        name: String,
+        content: String,
+        isError: Bool = false
+    ) {
+        self.id = id
+        self.toolCallID = toolCallID
+        self.name = name
+        self.content = content
+        self.isError = isError
+    }
+}
+
+struct ChatToolExchange: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var assistantContent: String
+    var reasoningContent: String
+    var toolCalls: [ChatToolCall]
+    var toolResults: [ChatToolResult]
+
+    init(
+        id: UUID = UUID(),
+        assistantContent: String = "",
+        reasoningContent: String = "",
+        toolCalls: [ChatToolCall] = [],
+        toolResults: [ChatToolResult] = []
+    ) {
+        self.id = id
+        self.assistantContent = assistantContent
+        self.reasoningContent = reasoningContent
+        self.toolCalls = toolCalls
+        self.toolResults = toolResults
+    }
+}
+
 struct ChatMessage: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     let role: String
@@ -126,6 +198,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var contentChunks: [String] = []
     var reasoningContent: String = ""
     var reasoningChunks: [String] = []
+    var toolExchanges: [ChatToolExchange] = []
     var isReasoningExpanded: Bool = false
     var isStopped: Bool = false
 
@@ -139,6 +212,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         contentChunks: [String] = [],
         reasoningContent: String = "",
         reasoningChunks: [String] = [],
+        toolExchanges: [ChatToolExchange] = [],
         isReasoningExpanded: Bool = false,
         isStopped: Bool = false
     ) {
@@ -151,6 +225,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         self.contentChunks = contentChunks
         self.reasoningContent = reasoningContent
         self.reasoningChunks = reasoningChunks
+        self.toolExchanges = toolExchanges
         self.isReasoningExpanded = isReasoningExpanded
         self.isStopped = isStopped
     }
@@ -166,6 +241,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         contentChunks = try container.decodeIfPresent([String].self, forKey: .contentChunks) ?? []
         reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent) ?? ""
         reasoningChunks = try container.decodeIfPresent([String].self, forKey: .reasoningChunks) ?? []
+        toolExchanges = try container.decodeIfPresent([ChatToolExchange].self, forKey: .toolExchanges) ?? []
         isReasoningExpanded = try container.decodeIfPresent(Bool.self, forKey: .isReasoningExpanded) ?? false
         isStopped = try container.decodeIfPresent(Bool.self, forKey: .isStopped) ?? false
     }
@@ -178,6 +254,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         if !message.reasoningContent.isEmpty {
             message.reasoningChunks = []
         }
+        message.toolExchanges = message.toolExchanges.filter { !$0.toolCalls.isEmpty || !$0.toolResults.isEmpty }
         message.contentChunks = []
         return message
     }
@@ -191,6 +268,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
     var updatedAt: Date = Date()
     var hasGeneratedTitle: Bool = false
     var isPinned: Bool = false
+    var activeSkillIDs: [UUID] = []
+    var activeMCPServerIDs: [UUID] = []
 
     init(
         id: UUID = UUID(),
@@ -199,7 +278,9 @@ struct AIConversation: Identifiable, Codable, Equatable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         hasGeneratedTitle: Bool = false,
-        isPinned: Bool = false
+        isPinned: Bool = false,
+        activeSkillIDs: [UUID] = [],
+        activeMCPServerIDs: [UUID] = []
     ) {
         self.id = id
         self.title = title
@@ -208,6 +289,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
         self.updatedAt = updatedAt
         self.hasGeneratedTitle = hasGeneratedTitle
         self.isPinned = isPinned
+        self.activeSkillIDs = activeSkillIDs
+        self.activeMCPServerIDs = activeMCPServerIDs
     }
 
     init(from decoder: Decoder) throws {
@@ -219,6 +302,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
         hasGeneratedTitle = try container.decodeIfPresent(Bool.self, forKey: .hasGeneratedTitle) ?? false
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        activeSkillIDs = try container.decodeIfPresent([UUID].self, forKey: .activeSkillIDs) ?? []
+        activeMCPServerIDs = try container.decodeIfPresent([UUID].self, forKey: .activeMCPServerIDs) ?? []
     }
 
     var normalized: AIConversation {
@@ -239,6 +324,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
         case updatedAt
         case hasGeneratedTitle
         case isPinned
+        case activeSkillIDs
+        case activeMCPServerIDs
     }
 }
 

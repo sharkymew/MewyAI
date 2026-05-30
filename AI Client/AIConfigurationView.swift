@@ -15,6 +15,7 @@ struct AIConfigurationView: View {
     @State private var isDeleteAllModelsConfirmationPresented = false
     @State private var editingModelParameterName: String?
     @State private var saveErrorMessage: String?
+    @State private var showAgentCapabilities = false
     @AppStorage(AIConfigurationStore.hapticFeedbackEnabledKey)
     private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
     @FocusState private var focusedField: ConfigurationField?
@@ -102,6 +103,7 @@ struct AIConfigurationView: View {
                 authSection
                 modelsSection
                 customHeadersSection
+                agentCapabilitiesSection
                 interactionSection
                 imageContextSection
             }
@@ -141,6 +143,9 @@ struct AIConfigurationView: View {
             }
             .sheet(isPresented: modelParameterEditorIsPresented) {
                 modelParameterEditorSheet
+            }
+            .sheet(isPresented: $showAgentCapabilities) {
+                AgentCapabilitiesView()
             }
             .confirmationDialog(
                 "删除本配置下的所有模型？",
@@ -291,6 +296,21 @@ struct AIConfigurationView: View {
         }
     }
 
+    private var agentCapabilitiesSection: some View {
+        Section {
+            Button {
+                hideKeyboard()
+                showAgentCapabilities = true
+            } label: {
+                Label("管理 Agent Skills 和 MCP", systemImage: "sparkles.square.filled.on.square")
+            }
+        } header: {
+            Text("Agent 能力")
+        } footer: {
+            Text("Skills 是文本指令包；MCP 仅支持远程 HTTPS 服务器。本机不会执行 Python、shell 或本地脚本。")
+        }
+    }
+
     private var imageContextSection: some View {
         Section {
             Toggle(
@@ -364,7 +384,7 @@ struct AIConfigurationView: View {
                                 .textFieldStyle(.roundedBorder)
                         }
 
-                        Text("\(model.supportsReasoning ? "支持推理" : "不支持推理") · \(model.supportsImages ? "支持图片" : "仅文字")")
+                        Text("\(model.supportsReasoning ? "支持推理" : "不支持推理") · \(model.supportsImages ? "支持图片" : "仅文字") · \(model.supportsTools ? "支持工具" : "无工具")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
@@ -390,6 +410,7 @@ struct AIConfigurationView: View {
                     VStack(alignment: .trailing, spacing: 10) {
                         CheckboxButton("推理", isOn: supportsReasoningBinding(for: model.name))
                         CheckboxButton("图片", isOn: supportsImagesBinding(for: model.name))
+                        CheckboxButton("工具", isOn: supportsToolsBinding(for: model.name))
 
                         Button(role: .destructive) {
                             deleteModel(model.name)
@@ -441,6 +462,7 @@ struct AIConfigurationView: View {
                                     HStack(spacing: 8) {
                                         Text(model.supportsReasoning ? "支持推理" : "不支持推理")
                                         Text(model.supportsImages ? "支持图片" : "仅文字")
+                                        Text(model.supportsTools ? "支持工具" : "无工具")
                                         if selectedConfiguration?.models.contains(where: { $0.name == model.name }) == true {
                                             Text("已在当前配置中")
                                         }
@@ -800,7 +822,10 @@ struct AIConfigurationView: View {
         
         updateSelectedConfiguration { configuration in
             if !configuration.models.contains(where: { $0.name == model }) {
-                configuration.models.append(AIModelConfiguration(name: model))
+                    configuration.models.append(AIModelConfiguration(
+                        name: model,
+                        supportsTools: AIModelConfiguration.defaultToolsSupport(for: model)
+                    ))
             }
             configuration.selectedModel = model
         }
@@ -849,6 +874,20 @@ struct AIConfigurationView: View {
                 updateSelectedConfiguration { configuration in
                     guard let index = configuration.models.firstIndex(where: { $0.name == model }) else { return }
                     configuration.models[index].supportsImages = newValue
+                }
+            }
+        )
+    }
+
+    private func supportsToolsBinding(for model: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                selectedConfiguration?.models.first { $0.name == model }?.supportsTools == true
+            },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    guard let index = configuration.models.firstIndex(where: { $0.name == model }) else { return }
+                    configuration.models[index].supportsTools = newValue
                 }
             }
         )
@@ -975,7 +1014,8 @@ struct AIConfigurationView: View {
                 fetchedModels = uniqueFetchedModels
                 let reasoningModelCount = uniqueFetchedModels.filter(\.supportsReasoning).count
                 let imageModelCount = uniqueFetchedModels.filter(\.supportsImages).count
-                modelFetchMessage = "已获取 \(fetchedModels.count) 个模型，识别到 \(reasoningModelCount) 个支持推理、\(imageModelCount) 个支持图片，请选择要导入的模型。"
+                let toolModelCount = uniqueFetchedModels.filter(\.supportsTools).count
+                modelFetchMessage = "已获取 \(fetchedModels.count) 个模型，识别到 \(reasoningModelCount) 个支持推理、\(imageModelCount) 个支持图片、\(toolModelCount) 个支持工具，请选择要导入的模型。"
                 isModelImportSheetPresented = true
             case .failure(let error):
                 modelFetchMessage = error.localizedDescription

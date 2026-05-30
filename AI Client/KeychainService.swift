@@ -3,6 +3,7 @@ import Security
 
 nonisolated enum KeychainService {
     private static let apiKeyService = "AIClient.APIKey"
+    private static let agentSecretService = "AIClient.AgentSecret"
     private static let headerSecretServicePrefix = "AIClient.HeaderSecret."
     private static let accessible = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
 
@@ -18,6 +19,20 @@ nonisolated enum KeychainService {
     @discardableResult
     static func deleteAPIKey(for configurationID: UUID) -> Bool {
         deleteSecret(service: apiKeyService, account: configurationID.uuidString)
+    }
+
+    static func readAgentSecret(for id: UUID) -> String {
+        readSecret(service: agentSecretService, account: id.uuidString)
+    }
+
+    @discardableResult
+    static func saveAgentSecret(_ value: String, for id: UUID) -> Bool {
+        saveSecret(value, service: agentSecretService, account: id.uuidString)
+    }
+
+    @discardableResult
+    static func deleteAgentSecret(for id: UUID) -> Bool {
+        deleteSecret(service: agentSecretService, account: id.uuidString)
     }
 
     static func readHeaderSecret(for configurationID: UUID, headerName: String) -> String {
