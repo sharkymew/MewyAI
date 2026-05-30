@@ -100,10 +100,10 @@ struct AIConfigurationView: View {
                 configurationPickerSection
                 requestSection
                 authSection
+                modelsSection
                 customHeadersSection
                 interactionSection
                 imageContextSection
-                modelsSection
             }
             .background(
                 KeyboardDismissTapLayer {
@@ -111,7 +111,7 @@ struct AIConfigurationView: View {
                 }
             )
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("AI 配置")
+            .navigationTitle("设置")
             .onAppear {
                 ensureSelection()
                 if normalizeConfigurationNames() {
