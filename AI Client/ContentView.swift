@@ -1142,7 +1142,7 @@ struct ContentView: View {
     private func legacyMainContent(topSafeAreaInset: CGFloat) -> some View {
         ZStack(alignment: .top) {
             chatScrollView(topPadding: topScrollContentPadding)
-                .ignoresSafeArea(edges: [.top, .bottom])
+                .ignoresSafeArea(.container, edges: [.top, .bottom])
 
             topChrome(
                 topSafeAreaInset: topSafeAreaInset,
@@ -1151,6 +1151,12 @@ struct ContentView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             inputBar(includesLegacyFade: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
+            chatScrollController.requestImmediateAutoScroll(animated: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+            chatScrollController.requestImmediateAutoScroll(animated: false)
         }
         .overlay(alignment: .bottom) {
             ScrollToBottomButtonOverlay(scrollController: chatScrollController) {
