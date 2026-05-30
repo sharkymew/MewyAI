@@ -22,6 +22,67 @@ enum ReasoningEffort: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+enum AIAPIFormat: String, CaseIterable, Codable, Identifiable {
+    case openAIChatCompletions
+    case openAIResponses
+    case anthropicMessages
+    case vertexAIExpress
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .openAIChatCompletions:
+            return "Chat Completions"
+        case .openAIResponses:
+            return "OpenAI Responses"
+        case .anthropicMessages:
+            return "Anthropic Messages"
+        case .vertexAIExpress:
+            return "Google Vertex AI Express"
+        }
+    }
+
+    var defaultBaseURL: String {
+        switch self {
+        case .openAIChatCompletions:
+            return "https://api.deepseek.com"
+        case .openAIResponses:
+            return "https://api.openai.com/v1"
+        case .anthropicMessages:
+            return "https://api.anthropic.com"
+        case .vertexAIExpress:
+            return "https://aiplatform.googleapis.com"
+        }
+    }
+
+    var defaultEndpoint: String {
+        switch self {
+        case .openAIChatCompletions:
+            return "chat/completions"
+        case .openAIResponses:
+            return "responses"
+        case .anthropicMessages:
+            return "v1/messages"
+        case .vertexAIExpress:
+            return "v1/publishers/google/models/{model}:generateContent"
+        }
+    }
+
+    var requestFooterText: String {
+        switch self {
+        case .openAIChatCompletions:
+            return "Chat Completions 会把 Endpoint 与 Base URL 拼成最终请求地址，默认 endpoint 是 chat/completions。"
+        case .openAIResponses:
+            return "Responses API 默认 endpoint 是 responses，模型参数会按 Responses 字段名发送。"
+        case .anthropicMessages:
+            return "Anthropic Messages 默认 endpoint 是 v1/messages，认证使用 x-api-key。Max Tokens 仅对当前配置生效。"
+        case .vertexAIExpress:
+            return "Vertex Express 默认 endpoint 使用 {model} 占位符，发送时会替换为当前模型 ID。"
+        }
+    }
+}
+
 nonisolated enum CustomHeaderSecurity {
     static let keychainPlaceholder = "__AI_CLIENT_KEYCHAIN_SECRET__"
 
@@ -201,6 +262,10 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
     var alias: String
     var supportsReasoning: Bool
     var supportsImages: Bool
+    var temperature: Double?
+    var topP: Double?
+    var contextWindowTokens: Int?
+    var maxOutputTokens: Int?
 
     var hasAlias: Bool {
         !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -211,11 +276,24 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         return trimmedAlias.isEmpty ? name : trimmedAlias
     }
 
-    init(name: String, alias: String = "", supportsReasoning: Bool = false, supportsImages: Bool = false) {
+    init(
+        name: String,
+        alias: String = "",
+        supportsReasoning: Bool = false,
+        supportsImages: Bool = false,
+        temperature: Double? = nil,
+        topP: Double? = nil,
+        contextWindowTokens: Int? = nil,
+        maxOutputTokens: Int? = nil
+    ) {
         self.name = name
         self.alias = alias
         self.supportsReasoning = supportsReasoning
         self.supportsImages = supportsImages
+        self.temperature = temperature
+        self.topP = topP
+        self.contextWindowTokens = contextWindowTokens
+        self.maxOutputTokens = maxOutputTokens
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -223,6 +301,10 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         case alias
         case supportsReasoning
         case supportsImages
+        case temperature
+        case topP
+        case contextWindowTokens
+        case maxOutputTokens
     }
 
     init(from decoder: Decoder) throws {
@@ -231,6 +313,10 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         alias = try container.decodeIfPresent(String.self, forKey: .alias) ?? ""
         supportsReasoning = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoning) ?? false
         supportsImages = try container.decodeIfPresent(Bool.self, forKey: .supportsImages) ?? false
+        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
+        topP = try container.decodeIfPresent(Double.self, forKey: .topP)
+        contextWindowTokens = try container.decodeIfPresent(Int.self, forKey: .contextWindowTokens)
+        maxOutputTokens = try container.decodeIfPresent(Int.self, forKey: .maxOutputTokens)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -239,10 +325,18 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         try container.encode(alias, forKey: .alias)
         try container.encode(supportsReasoning, forKey: .supportsReasoning)
         try container.encode(supportsImages, forKey: .supportsImages)
+        try container.encodeIfPresent(temperature, forKey: .temperature)
+        try container.encodeIfPresent(topP, forKey: .topP)
+        try container.encodeIfPresent(contextWindowTokens, forKey: .contextWindowTokens)
+        try container.encodeIfPresent(maxOutputTokens, forKey: .maxOutputTokens)
     }
 }
 
 enum BuiltInAIProvider: String, CaseIterable, Identifiable {
+    case openAIChatCompletions
+    case openAIResponses
+    case anthropicMessages
+    case vertexAIExpress
     case zhipu
     case siliconFlow
     case openRouter
@@ -253,6 +347,14 @@ enum BuiltInAIProvider: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
+        case .openAIChatCompletions:
+            return "OpenAI (Chat Completions)"
+        case .openAIResponses:
+            return "OpenAI (Responses)"
+        case .anthropicMessages:
+            return "Anthropic Messages"
+        case .vertexAIExpress:
+            return "Google Vertex AI (Express Mode)"
         case .zhipu:
             return "智谱开放平台"
         case .siliconFlow:
@@ -266,8 +368,48 @@ enum BuiltInAIProvider: String, CaseIterable, Identifiable {
         }
     }
 
+    var menuSortKey: String {
+        switch self {
+        case .openAIChatCompletions:
+            return "openai-chat-completions"
+        case .openAIResponses:
+            return "openai-responses"
+        case .anthropicMessages:
+            return "anthropic-messages"
+        case .vertexAIExpress:
+            return "google-vertex-ai-express"
+        case .zhipu:
+            return "zhipu-kaifang-pingtai"
+        case .siliconFlow:
+            return "guiji-liudong"
+        case .openRouter:
+            return "openrouter"
+        case .minimax:
+            return "minimax"
+        case .zAI:
+            return "z-ai"
+        }
+    }
+
+    var isDefaultConfigurationTemplate: Bool {
+        switch self {
+        case .openAIChatCompletions, .openAIResponses, .anthropicMessages, .vertexAIExpress:
+            return true
+        case .zhipu, .siliconFlow, .openRouter, .minimax, .zAI:
+            return false
+        }
+    }
+
     var baseURL: String {
         switch self {
+        case .openAIChatCompletions:
+            return "https://api.openai.com/v1"
+        case .openAIResponses:
+            return AIAPIFormat.openAIResponses.defaultBaseURL
+        case .anthropicMessages:
+            return AIAPIFormat.anthropicMessages.defaultBaseURL
+        case .vertexAIExpress:
+            return AIAPIFormat.vertexAIExpress.defaultBaseURL
         case .zhipu:
             return "https://open.bigmodel.cn/api/paas/v4"
         case .siliconFlow:
@@ -282,7 +424,22 @@ enum BuiltInAIProvider: String, CaseIterable, Identifiable {
     }
 
     var endpoint: String {
-        "chat/completions"
+        apiFormat.defaultEndpoint
+    }
+
+    var apiFormat: AIAPIFormat {
+        switch self {
+        case .openAIChatCompletions:
+            return .openAIChatCompletions
+        case .openAIResponses:
+            return .openAIResponses
+        case .anthropicMessages:
+            return .anthropicMessages
+        case .vertexAIExpress:
+            return .vertexAIExpress
+        case .zhipu, .siliconFlow, .openRouter, .minimax, .zAI:
+            return .openAIChatCompletions
+        }
     }
 
     func makeConfiguration() -> AIConfiguration {
@@ -290,6 +447,7 @@ enum BuiltInAIProvider: String, CaseIterable, Identifiable {
             name: displayName,
             baseURL: baseURL,
             endpoint: endpoint,
+            apiFormat: apiFormat,
             models: [],
             selectedModel: ""
         )
@@ -298,11 +456,14 @@ enum BuiltInAIProvider: String, CaseIterable, Identifiable {
 
 struct AIConfiguration: Identifiable, Codable, Equatable {
     static let defaultSystemPrompt = "你是一个友好且有帮助的AI助手。"
+    static let defaultAnthropicMaxTokens = 4096
 
     var id: UUID
     var name: String
     var baseURL: String
     var endpoint: String
+    var apiFormat: AIAPIFormat
+    var anthropicMaxTokens: Int
     var apiKey: String
     var customHeaders: String
     var systemPrompt: String
@@ -349,6 +510,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         name: String = "默认配置",
         baseURL: String = "https://api.deepseek.com",
         endpoint: String = "chat/completions",
+        apiFormat: AIAPIFormat = .openAIChatCompletions,
+        anthropicMaxTokens: Int = AIConfiguration.defaultAnthropicMaxTokens,
         apiKey: String = "",
         customHeaders: String = "",
         systemPrompt: String = AIConfiguration.defaultSystemPrompt,
@@ -365,6 +528,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         self.name = name
         self.baseURL = baseURL
         self.endpoint = endpoint
+        self.apiFormat = apiFormat
+        self.anthropicMaxTokens = max(1, anthropicMaxTokens)
         self.apiKey = apiKey
         if !apiKey.isEmpty {
             KeychainService.saveAPIKey(apiKey, for: id)
@@ -391,6 +556,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         case name
         case baseURL
         case endpoint
+        case apiFormat
+        case anthropicMaxTokens
         case customHeaders
         case systemPrompt
         case promptPresets
@@ -424,6 +591,10 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         promptPresets = promptSelection.presets
         selectedPromptPresetID = promptSelection.selectedID
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        apiFormat = try container.decodeIfPresent(AIAPIFormat.self, forKey: .apiFormat) ?? .openAIChatCompletions
+        let decodedAnthropicMaxTokens = try container.decodeIfPresent(Int.self, forKey: .anthropicMaxTokens)
+            ?? Self.defaultAnthropicMaxTokens
+        anthropicMaxTokens = max(1, decodedAnthropicMaxTokens)
         reasoningEnabled = try container.decodeIfPresent(Bool.self, forKey: .reasoningEnabled) ?? true
         reasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort) ?? .medium
         generatesImageContextDescriptions = try container.decodeIfPresent(
@@ -478,6 +649,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         try container.encode(name, forKey: .name)
         try container.encode(baseURL, forKey: .baseURL)
         try container.encode(endpoint, forKey: .endpoint)
+        try container.encode(apiFormat, forKey: .apiFormat)
+        try container.encode(anthropicMaxTokens, forKey: .anthropicMaxTokens)
         try container.encode(
             CustomHeaderSecurity.encodedHeaders(customHeaders),
             forKey: .customHeaders
@@ -517,7 +690,12 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
 
     static func splitBaseURLAndEndpoint(_ urlString: String) -> (baseURL: String, endpoint: String) {
         let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        let knownEndpoints = ["chat/completions", "responses"]
+        let knownEndpoints = [
+            "chat/completions",
+            "responses",
+            "v1/messages",
+            "v1/publishers/google/models/{model}:generateContent"
+        ]
 
         for endpoint in knownEndpoints {
             let suffix = "/" + endpoint

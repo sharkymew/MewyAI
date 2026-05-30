@@ -1716,7 +1716,11 @@ struct ContentView: View {
             ? (configuration.reasoningEnabled ? "思考 \(configuration.reasoningEffort.title)" : "思考关闭")
             : "无推理"
         let imageSummary = configuration.selectedModelSupportsImages ? "图片" : "文字"
-        return "\(configuration.name) · \(modelSummary) · \(imageSummary) · \(reasoningSummary) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(endpointSummary) · \(authSummary)"
+        let apiSummary = configuration.apiFormat.title
+        let anthropicSummary = configuration.apiFormat == .anthropicMessages
+            ? " · max_tokens \(configuration.anthropicMaxTokens)"
+            : ""
+        return "\(configuration.name) · \(apiSummary) · \(modelSummary) · \(imageSummary) · \(reasoningSummary)\(anthropicSummary) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(endpointSummary) · \(authSummary)"
     }
 
     func sendMessage() {
@@ -1745,9 +1749,12 @@ struct ContentView: View {
     ) {
         let configuration = currentConfiguration
         let trimmedBaseURL = configuration.requestURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiFormat = configuration.apiFormat
         let trimmedAPIKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCustomHeaders = configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelParameters = configuration.selectedModelConfiguration
+        let anthropicMaxTokens = configuration.anthropicMaxTokens
         let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
         let usesImageAttachments = configuration.selectedModelSupportsImages
@@ -1822,9 +1829,12 @@ struct ContentView: View {
             imageContextDescription: imageContextDescription,
             fileAttachments: fileAttachments,
             baseURL: trimmedBaseURL,
+            apiFormat: apiFormat,
             apiKey: trimmedAPIKey,
             customHeaders: trimmedCustomHeaders,
             model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             usesImageAttachments: usesImageAttachments,
@@ -1906,9 +1916,12 @@ struct ContentView: View {
                 in: selectedConversationID,
                 imageAttachments: imageAttachments,
                 baseURL: trimmedBaseURL,
+                apiFormat: apiFormat,
                 apiKey: trimmedAPIKey,
                 customHeaders: trimmedCustomHeaders,
                 model: model,
+                modelParameters: modelParameters,
+                anthropicMaxTokens: anthropicMaxTokens,
                 reasoningEnabled: reasoningEnabled,
                 reasoningEffort: reasoningEffort
             )
@@ -1940,18 +1953,24 @@ struct ContentView: View {
         in conversationID: UUID,
         imageAttachments: [ChatImageAttachment],
         baseURL: String,
+        apiFormat: AIAPIFormat,
         apiKey: String,
         customHeaders: String,
         model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?
     ) {
         aiService.generateImageContextDescription(
             imageAttachments: imageAttachments,
             baseURL: baseURL,
+            apiFormat: apiFormat,
             apiKey: apiKey,
             customHeaders: customHeaders,
             model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { description in
@@ -3259,9 +3278,12 @@ struct ContentView: View {
         let titleMessages = conversations[index].messages
         let configuration = currentConfiguration
         let trimmedBaseURL = configuration.requestURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiFormat = configuration.apiFormat
         let trimmedAPIKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCustomHeaders = configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelParameters = configuration.selectedModelConfiguration
+        let anthropicMaxTokens = configuration.anthropicMaxTokens
         let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
 
@@ -3270,9 +3292,12 @@ struct ContentView: View {
         aiService.generateConversationTitle(
             messages: titleMessages,
             baseURL: trimmedBaseURL,
+            apiFormat: apiFormat,
             apiKey: trimmedAPIKey,
             customHeaders: trimmedCustomHeaders,
             model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { title in

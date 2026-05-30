@@ -13,6 +13,7 @@ struct AIConfigurationView: View {
     @State private var selectedFetchedModelNames: Set<String> = []
     @State private var isModelImportSheetPresented = false
     @State private var isDeleteAllModelsConfirmationPresented = false
+    @State private var editingModelParameterName: String?
     @State private var saveErrorMessage: String?
     @AppStorage(AIConfigurationStore.hapticFeedbackEnabledKey)
     private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
@@ -30,6 +31,59 @@ struct AIConfigurationView: View {
         case promptPresetContent
         case modelAlias(String)
         case newModel
+    }
+
+    private enum AddConfigurationMenuItem: Identifiable {
+        case deepSeek
+        case provider(BuiltInAIProvider)
+
+        var id: String {
+            switch self {
+            case .deepSeek:
+                return "deepseek"
+            case .provider(let provider):
+                return provider.id
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .deepSeek:
+                return "DeepSeek"
+            case .provider(let provider):
+                return provider.displayName
+            }
+        }
+
+        var sortKey: String {
+            switch self {
+            case .deepSeek:
+                return "deepseek"
+            case .provider(let provider):
+                return provider.menuSortKey
+            }
+        }
+    }
+
+    private var defaultConfigurationMenuItems: [AddConfigurationMenuItem] {
+        let defaultProviders = BuiltInAIProvider.allCases
+            .filter(\.isDefaultConfigurationTemplate)
+            .map(AddConfigurationMenuItem.provider)
+        return sortedMenuItems(defaultProviders)
+    }
+
+    private var providerMenuItems: [AddConfigurationMenuItem] {
+        let providers = BuiltInAIProvider.allCases
+            .filter { !$0.isDefaultConfigurationTemplate }
+            .map(AddConfigurationMenuItem.provider)
+        let items = [AddConfigurationMenuItem.deepSeek] + providers
+        return sortedMenuItems(items)
+    }
+
+    private func sortedMenuItems(_ items: [AddConfigurationMenuItem]) -> [AddConfigurationMenuItem] {
+        return items.sorted { lhs, rhs in
+            lhs.sortKey.localizedStandardCompare(rhs.sortKey) == .orderedAscending
+        }
     }
     
     private var selectedIndex: Int? {
@@ -88,6 +142,9 @@ struct AIConfigurationView: View {
             .sheet(isPresented: $isModelImportSheetPresented) {
                 modelImportSheet
             }
+            .sheet(isPresented: modelParameterEditorIsPresented) {
+                modelParameterEditorSheet
+            }
             .confirmationDialog(
                 "删除本配置下的所有模型？",
                 isPresented: $isDeleteAllModelsConfirmationPresented,
@@ -117,22 +174,14 @@ struct AIConfigurationView: View {
             }
             
             Menu {
-                Button {
-                    hideKeyboard()
-                    addConfiguration()
-                } label: {
-                    Label("默认配置（DeepSeek）", systemImage: "plus")
+                Menu("默认配置") {
+                    ForEach(defaultConfigurationMenuItems) { item in
+                        addConfigurationButton(for: item)
+                    }
                 }
 
-                Divider()
-
-                ForEach(BuiltInAIProvider.allCases) { provider in
-                    Button {
-                        hideKeyboard()
-                        addConfiguration(from: provider)
-                    } label: {
-                        Text(provider.displayName)
-                    }
+                ForEach(providerMenuItems) { item in
+                    addConfigurationButton(for: item)
                 }
             } label: {
                 Label("新增配置", systemImage: "plus")
@@ -149,6 +198,20 @@ struct AIConfigurationView: View {
             Text("配置组")
         }
     }
+
+    private func addConfigurationButton(for item: AddConfigurationMenuItem) -> some View {
+        Button {
+            hideKeyboard()
+            switch item {
+            case .deepSeek:
+                addConfiguration()
+            case .provider(let provider):
+                addConfiguration(from: provider)
+            }
+        } label: {
+            Text(item.title)
+        }
+    }
     
     private var requestSection: some View {
         Section {
@@ -157,6 +220,11 @@ struct AIConfigurationView: View {
                 .onSubmit {
                     commitSelectedConfigurationName()
                 }
+            Picker("API 类型", selection: selectedAPIFormatBinding) {
+                ForEach(AIAPIFormat.allCases) { format in
+                    Text(format.title).tag(format)
+                }
+            }
             TextField("Base URL", text: selectedBaseURLBinding)
                 .focused($focusedField, equals: .baseURL)
                 .textInputAutocapitalization(.never)
@@ -166,10 +234,16 @@ struct AIConfigurationView: View {
                 .focused($focusedField, equals: .endpoint)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+            if selectedConfiguration?.apiFormat == .anthropicMessages {
+                TextField("Max Tokens", text: anthropicMaxTokensBinding)
+                    .keyboardType(.numberPad)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
         } header: {
             Text("请求地址")
         } footer: {
-            Text("Endpoint 默认是 chat/completions，会与 Base URL 拼成最终请求地址。")
+            Text(selectedConfiguration?.apiFormat.requestFooterText ?? AIAPIFormat.openAIChatCompletions.requestFooterText)
         }
     }
     
@@ -191,7 +265,7 @@ struct AIConfigurationView: View {
         } header: {
             Text("认证")
         } footer: {
-            Text("填写 API Key 时会自动发送 Authorization: Bearer <API Key>。API Key 会存入钥匙串。")
+            Text(authFooterText)
         }
     }
     
@@ -323,50 +397,67 @@ struct AIConfigurationView: View {
             }
             
             ForEach(selectedConfiguration?.models ?? []) { model in
-                HStack {
+                HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(model.displayName)
+                        Text(model.name)
+                            .font(.headline)
                             .lineLimit(2)
                             .truncationMode(.middle)
-                        if model.hasAlias {
-                            Text(model.name)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("别名")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
+                            TextField("输入模型别名（可选）", text: modelAliasBinding(for: model.name))
+                                .focused($focusedField, equals: .modelAlias(model.name))
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .textFieldStyle(.roundedBorder)
                         }
-                        TextField("别名（可选）", text: modelAliasBinding(for: model.name))
-                            .focused($focusedField, equals: .modelAlias(model.name))
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        Text(model.supportsReasoning ? "支持推理" : "不支持推理")
+
+                        Text("\(model.supportsReasoning ? "支持推理" : "不支持推理") · \(model.supportsImages ? "支持图片" : "仅文字")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(model.supportsImages ? "支持图片" : "仅文字")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+
+                        Button {
+                            hideKeyboard()
+                            editingModelParameterName = model.name
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text("详细参数")
+                                Text(modelParameterSummary(for: model))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Image(systemName: "slider.horizontal.3")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .trailing, spacing: 10) {
                         CheckboxButton("推理", isOn: supportsReasoningBinding(for: model.name))
                         CheckboxButton("图片", isOn: supportsImagesBinding(for: model.name))
+
+                        Button(role: .destructive) {
+                            deleteModel(model.name)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                        .disabled((selectedConfiguration?.models.count ?? 0) <= 1)
                     }
                     .fixedSize()
-                    
-                    Button(role: .destructive) {
-                        deleteModel(model.name)
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.plain)
-                    .disabled((selectedConfiguration?.models.count ?? 0) <= 1)
+                    .padding(.top, 2)
                 }
             }
         } header: {
             Text("模型")
         } footer: {
-            Text("自动获取会根据 Base URL 推断 /models 地址，适用于 OpenAI-compatible 服务；获取结果需要确认后才会加入当前配置。")
+            Text("模型参数按模型独立保存。空参数不会发送；上下文窗口仅作为模型能力信息保存。")
         }
     }
 
@@ -434,6 +525,81 @@ struct AIConfigurationView: View {
             }
         }
     }
+
+    private var modelParameterEditorIsPresented: Binding<Bool> {
+        Binding(
+            get: { editingModelParameterName != nil },
+            set: { isPresented in
+                if !isPresented {
+                    editingModelParameterName = nil
+                }
+            }
+        )
+    }
+
+    private var modelParameterEditorSheet: some View {
+        NavigationStack {
+            Form {
+                if let modelName = editingModelParameterName,
+                   let model = selectedConfiguration?.models.first(where: { $0.name == modelName }) {
+                    Section {
+                        Text(model.name)
+                            .font(.headline)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+
+                        TextField("温度（空为默认）", text: modelOptionalDoubleBinding(
+                            for: model.name,
+                            keyPath: \.temperature,
+                            range: 0...Double.greatestFiniteMagnitude
+                        ))
+                        .keyboardType(.decimalPad)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                        TextField("top_p（0-1，空为默认）", text: modelOptionalDoubleBinding(
+                            for: model.name,
+                            keyPath: \.topP,
+                            range: 0.000001...1
+                        ))
+                        .keyboardType(.decimalPad)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                        TextField(
+                            "上下文窗口 tokens（仅保存）",
+                            text: modelOptionalIntBinding(for: model.name, keyPath: \.contextWindowTokens)
+                        )
+                        .keyboardType(.numberPad)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                        TextField(
+                            "最大输出 tokens（空为默认）",
+                            text: modelOptionalIntBinding(for: model.name, keyPath: \.maxOutputTokens)
+                        )
+                        .keyboardType(.numberPad)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    } footer: {
+                        Text("空参数不会发送；上下文窗口只作为模型能力信息保存。Anthropic 的 max_tokens 使用 provider 级设置。")
+                    }
+                } else {
+                    Text("未找到模型。")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("详细参数")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") {
+                        hideKeyboard()
+                        editingModelParameterName = nil
+                    }
+                }
+            }
+        }
+    }
     
     private var selectedConfigurationBinding: Binding<UUID> {
         Binding(
@@ -468,6 +634,48 @@ struct AIConfigurationView: View {
     private var selectedEndpointBinding: Binding<String> {
         binding(\.endpoint)
     }
+
+    private var selectedAPIFormatBinding: Binding<AIAPIFormat> {
+        Binding(
+            get: { selectedConfiguration?.apiFormat ?? .openAIChatCompletions },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    let defaultEndpoints = Set(AIAPIFormat.allCases.map(\.defaultEndpoint))
+                    let defaultBaseURLs = Set(AIAPIFormat.allCases.map(\.defaultBaseURL))
+                    let currentEndpoint = configuration.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let currentBaseURL = configuration.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    configuration.apiFormat = newValue
+                    if currentBaseURL.isEmpty || defaultBaseURLs.contains(currentBaseURL) {
+                        configuration.baseURL = newValue.defaultBaseURL
+                    }
+                    if currentEndpoint.isEmpty || defaultEndpoints.contains(currentEndpoint) {
+                        configuration.endpoint = newValue.defaultEndpoint
+                    }
+                }
+            }
+        )
+    }
+
+    private var anthropicMaxTokensBinding: Binding<String> {
+        Binding(
+            get: {
+                "\(selectedConfiguration?.anthropicMaxTokens ?? AIConfiguration.defaultAnthropicMaxTokens)"
+            },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    let trimmedValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmedValue.isEmpty,
+                          let maxTokens = Int(trimmedValue),
+                          maxTokens > 0 else {
+                        configuration.anthropicMaxTokens = AIConfiguration.defaultAnthropicMaxTokens
+                        return
+                    }
+                    configuration.anthropicMaxTokens = maxTokens
+                }
+            }
+        )
+    }
     
     private var selectedAPIKeyBinding: Binding<String> {
         Binding(
@@ -482,6 +690,17 @@ struct AIConfigurationView: View {
     
     private var selectedCustomHeadersBinding: Binding<String> {
         binding(\.customHeaders)
+    }
+
+    private var authFooterText: String {
+        switch selectedConfiguration?.apiFormat ?? .openAIChatCompletions {
+        case .openAIChatCompletions, .openAIResponses:
+            return "填写 API Key 时会自动发送 Authorization: Bearer <API Key>。API Key 会存入钥匙串。"
+        case .anthropicMessages:
+            return "Anthropic Messages 会把 API Key 作为 x-api-key 发送，并自动附加 anthropic-version。API Key 会存入钥匙串。"
+        case .vertexAIExpress:
+            return "Vertex Express 会把 API Key 加到请求 query 中；错误诊断会隐藏 query，API Key 会存入钥匙串。"
+        }
     }
 
     private var generatesImageContextDescriptionsBinding: Binding<Bool> {
@@ -736,6 +955,88 @@ struct AIConfigurationView: View {
             }
         )
     }
+
+    private func modelParameterSummary(for model: AIModelConfiguration) -> String {
+        var parts = [String]()
+        if let temperature = model.temperature {
+            parts.append("温度 \(Self.parameterString(from: temperature))")
+        }
+        if let topP = model.topP {
+            parts.append("top_p \(Self.parameterString(from: topP))")
+        }
+        if let contextWindowTokens = model.contextWindowTokens {
+            parts.append("上下文 \(contextWindowTokens)")
+        }
+        if let maxOutputTokens = model.maxOutputTokens {
+            parts.append("输出 \(maxOutputTokens)")
+        }
+
+        return parts.isEmpty ? "默认" : parts.joined(separator: " · ")
+    }
+
+    private func modelOptionalDoubleBinding(
+        for model: String,
+        keyPath: WritableKeyPath<AIModelConfiguration, Double?>,
+        range: ClosedRange<Double>
+    ) -> Binding<String> {
+        Binding(
+            get: {
+                guard let value = selectedConfiguration?.models.first(where: { $0.name == model })?[keyPath: keyPath] else {
+                    return ""
+                }
+                return Self.parameterString(from: value)
+            },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    guard let index = configuration.models.firstIndex(where: { $0.name == model }) else { return }
+                    let trimmedValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmedValue.isEmpty else {
+                        configuration.models[index][keyPath: keyPath] = nil
+                        return
+                    }
+                    guard let value = Double(trimmedValue),
+                          value.isFinite,
+                          range.contains(value) else {
+                        return
+                    }
+                    configuration.models[index][keyPath: keyPath] = value
+                }
+            }
+        )
+    }
+
+    private func modelOptionalIntBinding(
+        for model: String,
+        keyPath: WritableKeyPath<AIModelConfiguration, Int?>
+    ) -> Binding<String> {
+        Binding(
+            get: {
+                guard let value = selectedConfiguration?.models.first(where: { $0.name == model })?[keyPath: keyPath] else {
+                    return ""
+                }
+                return "\(value)"
+            },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    guard let index = configuration.models.firstIndex(where: { $0.name == model }) else { return }
+                    let trimmedValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmedValue.isEmpty else {
+                        configuration.models[index][keyPath: keyPath] = nil
+                        return
+                    }
+                    guard let value = Int(trimmedValue), value > 0 else { return }
+                    configuration.models[index][keyPath: keyPath] = value
+                }
+            }
+        )
+    }
+
+    private static func parameterString(from value: Double) -> String {
+        let formatted = String(format: "%.4f", value)
+        return formatted
+            .replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\.$"#, with: "", options: .regularExpression)
+    }
     
     private func fetchModels() {
         guard let configuration = selectedConfiguration else { return }
@@ -745,7 +1046,8 @@ struct AIConfigurationView: View {
         selectedFetchedModelNames.removeAll()
         
         aiService.fetchModels(
-            baseURL: configuration.baseURL,
+            baseURL: configuration.requestURLString,
+            apiFormat: configuration.apiFormat,
             apiKey: configuration.apiKey,
             customHeaders: configuration.customHeaders
         ) { result in
@@ -785,7 +1087,12 @@ struct AIConfigurationView: View {
             for model in selectedModels {
                 if let index = configuration.models.firstIndex(where: { $0.name == model.name }) {
                     var importedModel = model
-                    importedModel.alias = configuration.models[index].alias
+                    let existingModel = configuration.models[index]
+                    importedModel.alias = existingModel.alias
+                    importedModel.temperature = existingModel.temperature
+                    importedModel.topP = existingModel.topP
+                    importedModel.contextWindowTokens = existingModel.contextWindowTokens
+                    importedModel.maxOutputTokens = existingModel.maxOutputTokens
                     configuration.models[index] = importedModel
                 } else {
                     configuration.models.append(model)
@@ -823,11 +1130,10 @@ private struct CheckboxButton: View {
         Button {
             isOn.toggle()
         } label: {
-            Label {
+            HStack(spacing: 6) {
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(.primary)
-            } icon: {
                 CheckboxIndicator(isOn: isOn)
             }
         }
