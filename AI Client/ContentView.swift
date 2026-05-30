@@ -1035,7 +1035,7 @@ struct ContentView: View {
                     selectedConversationID: selectedConversationID,
                     topSafeAreaInset: geometry.safeAreaInsets.top,
                     showsSidebarToggleFadeExclusion: showsSidebarToggleFadeExclusion && !layout.usesPersistentSidebar,
-                    showsCloseButton: !layout.usesPersistentSidebar,
+                    showsCloseButton: false,
                     onSelect: { id in
                         selectConversation(id, closesSidebar: !layout.usesPersistentSidebar)
                     },
@@ -1056,7 +1056,7 @@ struct ContentView: View {
                 .offset(x: showsSidebar ? 0 : -layout.sidebarWidth)
                 .animation(.easeOut(duration: sidebarTransitionDuration), value: showConversationSidebar)
 
-                if !showsSidebar {
+                if !layout.usesPersistentSidebar {
                     sidebarToggleControl
                 }
             }
