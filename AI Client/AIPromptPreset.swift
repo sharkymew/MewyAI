@@ -62,6 +62,17 @@ extension AIConfiguration {
         updateSelectedPromptContent(Self.defaultSystemPrompt)
     }
 
+    mutating func selectBuiltInDefaultPrompt() {
+        if let preset = promptPresets.first(where: { $0.content == Self.defaultSystemPrompt }) {
+            selectPromptPreset(preset.id)
+            return
+        }
+
+        let preset = AIPromptPreset(name: "默认提示词", content: Self.defaultSystemPrompt)
+        promptPresets.insert(preset, at: 0)
+        selectPromptPreset(preset.id)
+    }
+
     static func normalizedPromptSelection(
         promptPresets: [AIPromptPreset]?,
         selectedPromptPresetID: UUID?,

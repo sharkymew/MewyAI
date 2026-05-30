@@ -27,8 +27,6 @@ struct AIConfigurationView: View {
         case endpoint
         case apiKey
         case customHeaders
-        case promptPresetName
-        case promptPresetContent
         case modelAlias(String)
         case newModel
     }
@@ -105,7 +103,6 @@ struct AIConfigurationView: View {
                 customHeadersSection
                 interactionSection
                 imageContextSection
-                promptSection
                 modelsSection
             }
             .background(
@@ -307,54 +304,6 @@ struct AIConfigurationView: View {
         }
     }
 
-    private var promptSection: some View {
-        Section {
-            Picker("当前提示词", selection: selectedPromptPresetIDBinding) {
-                ForEach(selectedConfiguration?.promptPresets ?? []) { promptPreset in
-                    Text(promptPreset.displayName).tag(promptPreset.id)
-                }
-            }
-
-            TextField("提示词名称", text: selectedPromptPresetNameBinding)
-                .focused($focusedField, equals: .promptPresetName)
-
-            TextEditor(text: selectedPromptPresetContentBinding)
-                .focused($focusedField, equals: .promptPresetContent)
-                .frame(minHeight: 140)
-                .textInputAutocapitalization(.sentences)
-                .autocorrectionDisabled()
-
-            Button("新增提示词") {
-                hideKeyboard()
-                updateSelectedConfiguration { configuration in
-                    configuration.addPromptPreset()
-                }
-            }
-
-            Button("恢复默认内容") {
-                hideKeyboard()
-                updateSelectedConfiguration { configuration in
-                    configuration.restoreDefaultSelectedPrompt()
-                }
-            }
-            .disabled(selectedConfiguration?.systemPrompt == AIConfiguration.defaultSystemPrompt)
-
-            Button(role: .destructive) {
-                hideKeyboard()
-                updateSelectedConfiguration { configuration in
-                    configuration.deleteSelectedPromptPreset()
-                }
-            } label: {
-                Label("删除当前提示词", systemImage: "trash")
-            }
-            .disabled((selectedConfiguration?.promptPresets.count ?? 0) <= 1)
-        } header: {
-            Text("提示词")
-        } footer: {
-            Text("当前选中的内容会作为每次对话的 system message 发送。留空则不发送提示词。")
-        }
-    }
-    
     private var modelsSection: some View {
         Section {
             HStack {
@@ -714,43 +663,6 @@ struct AIConfigurationView: View {
         )
     }
 
-    private var selectedPromptPresetIDBinding: Binding<UUID> {
-        Binding(
-            get: {
-                selectedConfiguration?.selectedPromptPreset?.id
-                    ?? selectedConfiguration?.promptPresets.first?.id
-                    ?? UUID()
-            },
-            set: { newValue in
-                updateSelectedConfiguration { configuration in
-                    configuration.selectPromptPreset(newValue)
-                }
-            }
-        )
-    }
-
-    private var selectedPromptPresetNameBinding: Binding<String> {
-        Binding(
-            get: { selectedConfiguration?.selectedPromptPreset?.name ?? "" },
-            set: { newValue in
-                updateSelectedConfiguration(persists: false) { configuration in
-                    configuration.updateSelectedPromptName(newValue)
-                }
-            }
-        )
-    }
-
-    private var selectedPromptPresetContentBinding: Binding<String> {
-        Binding(
-            get: { selectedConfiguration?.selectedPromptPreset?.content ?? "" },
-            set: { newValue in
-                updateSelectedConfiguration(persists: false) { configuration in
-                    configuration.updateSelectedPromptContent(newValue)
-                }
-            }
-        )
-    }
-    
     private func binding(_ keyPath: WritableKeyPath<AIConfiguration, String>) -> Binding<String> {
         Binding(
             get: { selectedConfiguration?[keyPath: keyPath] ?? "" },

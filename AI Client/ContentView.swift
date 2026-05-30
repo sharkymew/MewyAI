@@ -579,6 +579,7 @@ struct ContentView: View {
     @State private var conversationExportErrorMessage: String?
     @State private var isGenerating = false
     @State private var showConfiguration = false
+    @State private var showPromptSettings = false
     @State private var showConversationSidebar = false
     @State private var chatScrollController = ChatScrollController()
     @State private var streamingTokenBuffer = StreamingTokenBuffer()
@@ -1069,6 +1070,9 @@ struct ContentView: View {
         .sheet(isPresented: $showConfiguration) {
             AIConfigurationView()
         }
+        .sheet(isPresented: $showPromptSettings) {
+            AIPromptSettingsView(configurationID: currentConfiguration.id)
+        }
         .alert("重命名对话", isPresented: $isRenameConversationAlertPresented) {
             TextField("名称", text: $renamingConversationTitle)
 
@@ -1109,6 +1113,11 @@ struct ContentView: View {
             onCompletion: handleConversationExportResult
         )
         .onChange(of: showConfiguration) { _, isPresented in
+            if !isPresented {
+                reloadConfigurations()
+            }
+        }
+        .onChange(of: showPromptSettings) { _, isPresented in
             if !isPresented {
                 reloadConfigurations()
             }
@@ -1539,7 +1548,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private var modelSelectionMenuItems: some View {
+    private var modelChoiceMenuItems: some View {
         ForEach(currentConfiguration.models) { model in
             Button {
                 selectModel(model.name)
@@ -1551,15 +1560,36 @@ struct ContentView: View {
                 }
             }
         }
+    }
 
-        Divider()
-
+    @ViewBuilder
+    private var modelManagementMenuItem: some View {
         Button {
             hideKeyboard()
             showConfiguration = true
         } label: {
             Label("管理模型", systemImage: "slider.horizontal.3")
         }
+    }
+
+    @ViewBuilder
+    private var modelSelectionMenuItems: some View {
+        modelChoiceMenuItems
+        Divider()
+        modelManagementMenuItem
+    }
+
+    @ViewBuilder
+    private var topModelSelectionMenuItems: some View {
+        modelChoiceMenuItems
+        Divider()
+        Button {
+            hideKeyboard()
+            showPromptSettings = true
+        } label: {
+            Label("提示词设置", systemImage: "text.quote")
+        }
+        modelManagementMenuItem
     }
 
     private var modelMenu: some View {
@@ -1582,7 +1612,7 @@ struct ContentView: View {
 
         return topGlassControl {
             Menu {
-                modelSelectionMenuItems
+                topModelSelectionMenuItems
             } label: {
                 HStack(spacing: 5) {
                     Text(title)
@@ -2896,6 +2926,26 @@ struct ContentView: View {
         AIConfigurationStore.saveConfigurations(configurations)
     }
 
+    @discardableResult
+    private func selectBuiltInDefaultPromptForCurrentConfiguration() -> AIConfiguration {
+        if configurations.isEmpty {
+            let configuration = AIConfiguration()
+            configurations = [configuration]
+            selectedConfigurationID = configuration.id
+        }
+
+        guard let index = configurations.firstIndex(where: { $0.id == currentConfiguration.id }) ?? configurations.indices.first else {
+            return currentConfiguration
+        }
+
+        configurations[index].selectBuiltInDefaultPrompt()
+        configurations[index].updatedAt = Date()
+        selectedConfigurationID = configurations[index].id
+        AIConfigurationStore.saveSelectedConfigurationID(configurations[index].id)
+        AIConfigurationStore.saveConfigurations(configurations)
+        return configurations[index]
+    }
+
     private func reloadConfigurations() {
         configurations = AIConfigurationStore.loadConfigurations()
         selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
@@ -3013,6 +3063,8 @@ struct ContentView: View {
             return
         }
 
+        let defaultPromptConfiguration = selectBuiltInDefaultPromptForCurrentConfiguration()
+
         if isGenerating {
             stopGenerating(triggersCompletionHaptic: false)
         } else {
@@ -3020,6 +3072,11 @@ struct ContentView: View {
         }
 
         if currentConversationIsBlank {
+            aiService.resetConversation(
+                with: [],
+                systemPrompt: defaultPromptConfiguration.systemPrompt,
+                usesImageAttachments: defaultPromptConfiguration.selectedModelSupportsImages
+            )
             if closesSidebar {
                 setConversationSidebarVisibility(false)
             }
@@ -3058,8 +3115,8 @@ struct ContentView: View {
         restoreChatScrollAfterConversationChange()
         aiService.resetConversation(
             with: [],
-            systemPrompt: currentConfiguration.systemPrompt,
-            usesImageAttachments: currentConfiguration.selectedModelSupportsImages
+            systemPrompt: defaultPromptConfiguration.systemPrompt,
+            usesImageAttachments: defaultPromptConfiguration.selectedModelSupportsImages
         )
         ConversationStore.saveSelectedConversationID(conversation.id)
         ConversationStore.saveConversations(conversations)
