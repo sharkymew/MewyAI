@@ -304,6 +304,18 @@ private final class ChatScrollController: ObservableObject {
         requestImmediateAutoScroll(animated: false)
     }
 
+    func resetForConversationChange() {
+        cancelScheduledAutoScroll()
+        isUserDragging = false
+        hasUserPausedAutoScroll = false
+        hasLeftBottomAfterUserPause = false
+        isBottomDistanceUpdateScheduled = false
+        pendingDistanceFromBottom = nil
+        lastDistanceFromBottom = 0
+        setIsScrolledToBottom(true)
+        setShouldAutoScroll(true)
+    }
+
     func requestImmediateAutoScroll(animated: Bool = false) {
         guard shouldAutoScroll else { return }
         cancelScheduledAutoScroll()
@@ -486,21 +498,39 @@ private final class StreamingOutputHaptics: ObservableObject {
 
 @MainActor
 private final class ChatInputDraft: ObservableObject {
-    @Published var text = ""
+    private static let blankScalarSet = CharacterSet.whitespacesAndNewlines
+
     @Published var isFocused = false
     @Published private(set) var focusRequestID = 0
+    @Published private(set) var textRevision = 0
+    @Published private(set) var layoutRevision = 0
+    @Published private(set) var hasSubmittableText = false
+
+    private(set) var text = ""
+    private var measuredLineCount = 1
 
     var trimmedText: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var hasSubmittableText: Bool {
-        !trimmedText.isEmpty
+    func updateFromTextView(_ newText: String) {
+        guard text != newText else { return }
+        text = newText
+        updateSubmittableTextState()
+    }
+
+    func updateMeasuredLineCount(_ lineCount: Int) {
+        let lineCount = min(max(lineCount, 1), 5)
+        guard measuredLineCount != lineCount else { return }
+        measuredLineCount = lineCount
+        layoutRevision += 1
     }
 
     func setText(_ newText: String) {
         guard text != newText else { return }
         text = newText
+        updateSubmittableTextState()
+        textRevision += 1
     }
 
     func clearText() {
@@ -516,6 +546,13 @@ private final class ChatInputDraft: ObservableObject {
     func requestFocus() {
         isFocused = true
         focusRequestID += 1
+    }
+
+    private func updateSubmittableTextState() {
+        let newValue = text.unicodeScalars.contains { !Self.blankScalarSet.contains($0) }
+        if hasSubmittableText != newValue {
+            hasSubmittableText = newValue
+        }
     }
 }
 
@@ -573,6 +610,7 @@ struct ContentView: View {
     @State private var showsMainSidebarToggleFadeExclusion = true
     @State private var showsSidebarToggleFadeExclusion = false
     @State private var sidebarVisibilityTransitionTask: Task<Void, Never>?
+    @State private var conversationScrollRestoreTask: Task<Void, Never>?
 
     let aiService = AIService()
     private let maxImageAttachmentCount = 4
@@ -907,6 +945,23 @@ struct ContentView: View {
         speechInputLastMergedText = inputDraft.text
     }
 
+    private func restoreChatScrollAfterConversationChange() {
+        conversationScrollRestoreTask?.cancel()
+        chatScrollController.resetForConversationChange()
+        chatScrollController.requestImmediateAutoScroll(animated: false)
+
+        conversationScrollRestoreTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            chatScrollController.requestImmediateAutoScroll(animated: false)
+
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            chatScrollController.requestImmediateAutoScroll(animated: false)
+            conversationScrollRestoreTask = nil
+        }
+    }
+
     private func applySpeechTranscript(_ transcript: String) {
         let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTranscript.isEmpty else {
@@ -1227,7 +1282,7 @@ struct ContentView: View {
                     .frame(
                         maxWidth: .infinity,
                         minHeight: scrollGeometry.size.height,
-                        alignment: .top
+                        alignment: .bottom
                     )
                     .contentShape(Rectangle())
                 }
@@ -1266,6 +1321,7 @@ struct ContentView: View {
                     chatScrollController.setScrollAction { animated in
                         forceScrollToBottom(proxy: proxy, animated: animated)
                     }
+                    chatScrollController.requestImmediateAutoScroll(animated: false)
                 }
                 .onDisappear {
                     chatScrollController.clearScrollAction()
@@ -2848,6 +2904,7 @@ struct ContentView: View {
             activeAssistantReasoningIsExpanded = false
             activeAssistantDidCollapseReasoningAfterThinking = false
             liveAssistantDisplays = [:]
+            restoreChatScrollAfterConversationChange()
             aiService.resetConversation(
                 with: [],
                 systemPrompt: currentConfiguration.systemPrompt,
@@ -2904,7 +2961,7 @@ struct ContentView: View {
         editingMessageID = nil
         streamingTokenBuffer.reset()
         isFlushScheduled = false
-        chatScrollController.returnToBottom()
+        restoreChatScrollAfterConversationChange()
         aiService.resetConversation(
             with: messages,
             systemPrompt: currentConfiguration.systemPrompt,
@@ -2979,6 +3036,7 @@ struct ContentView: View {
         editingMessageID = nil
         streamingTokenBuffer.reset()
         isFlushScheduled = false
+        restoreChatScrollAfterConversationChange()
         aiService.resetConversation(
             with: [],
             systemPrompt: currentConfiguration.systemPrompt,
@@ -3100,6 +3158,7 @@ struct ContentView: View {
             editingMessageID = nil
             streamingTokenBuffer.reset()
             isFlushScheduled = false
+            restoreChatScrollAfterConversationChange()
             setConversationSidebarVisibility(false)
             aiService.resetConversation(
                 with: [],
@@ -3137,6 +3196,7 @@ struct ContentView: View {
             editingMessageID = nil
             streamingTokenBuffer.reset()
             isFlushScheduled = false
+            restoreChatScrollAfterConversationChange()
             aiService.resetConversation(
                 with: messages,
                 systemPrompt: currentConfiguration.systemPrompt,
@@ -4792,10 +4852,13 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
             optionsMenu()
 
             ImagePastingTextView(
-                text: $inputDraft.text,
+                text: inputDraft.text,
+                textRevision: inputDraft.textRevision,
                 isFocused: $inputDraft.isFocused,
                 focusRequestID: inputDraft.focusRequestID,
                 placeholder: "输入消息...",
+                onTextChanged: inputDraft.updateFromTextView,
+                onMeasuredLineCountChanged: inputDraft.updateMeasuredLineCount,
                 onPasteImageProviders: onPasteImageProviders
             )
             .font(.body)
@@ -4936,11 +4999,13 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
 }
 
 struct ImagePastingTextView: UIViewRepresentable {
-    @Binding var text: String
-
+    let text: String
+    let textRevision: Int
     @Binding var isFocused: Bool
     let focusRequestID: Int
     let placeholder: String
+    let onTextChanged: (String) -> Void
+    let onMeasuredLineCountChanged: (Int) -> Void
     let onPasteImageProviders: ([NSItemProvider]) -> Void
 
     func makeUIView(context: Context) -> ImagePastingUITextView {
@@ -4961,10 +5026,14 @@ struct ImagePastingTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: ImagePastingUITextView, context: Context) {
-        if (textView.text ?? "") != text {
+        if context.coordinator.lastAppliedTextRevision != textRevision,
+           (textView.text ?? "") != text {
             textView.text = text
         }
+        context.coordinator.lastAppliedTextRevision = textRevision
 
+        context.coordinator.onTextChanged = onTextChanged
+        context.coordinator.onMeasuredLineCountChanged = onMeasuredLineCountChanged
         textView.onPasteImageProviders = onPasteImageProviders
         textView.isEditable = true
         textView.isSelectable = true
@@ -4996,25 +5065,35 @@ struct ImagePastingTextView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, isFocused: $isFocused)
+        Coordinator(
+            isFocused: $isFocused,
+            onTextChanged: onTextChanged,
+            onMeasuredLineCountChanged: onMeasuredLineCountChanged
+        )
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
-        private let text: Binding<String>
         private let isFocused: Binding<Bool>
+        var onTextChanged: (String) -> Void
+        var onMeasuredLineCountChanged: (Int) -> Void
         private var lastHandledFocusRequestID: Int?
+        var lastAppliedTextRevision: Int?
 
-        init(text: Binding<String>, isFocused: Binding<Bool>) {
-            self.text = text
+        init(
+            isFocused: Binding<Bool>,
+            onTextChanged: @escaping (String) -> Void,
+            onMeasuredLineCountChanged: @escaping (Int) -> Void
+        ) {
             self.isFocused = isFocused
+            self.onTextChanged = onTextChanged
+            self.onMeasuredLineCountChanged = onMeasuredLineCountChanged
         }
 
         func textViewDidChange(_ textView: UITextView) {
             let updatedText = textView.text ?? ""
-            if text.wrappedValue != updatedText {
-                text.wrappedValue = updatedText
-            }
+            onTextChanged(updatedText)
             (textView as? ImagePastingUITextView)?.updatePlaceholderVisibility()
+            publishMeasuredLineCount(for: textView)
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -5082,6 +5161,17 @@ struct ImagePastingTextView: UIViewRepresentable {
                     textView.resignFirstResponder()
                 }
             }
+        }
+
+        private func publishMeasuredLineCount(for textView: UITextView) {
+            let lineHeight = max(
+                textView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight,
+                1
+            )
+            let verticalInsets = textView.textContainerInset.top + textView.textContainerInset.bottom
+            let contentHeight = max(textView.contentSize.height - verticalInsets, lineHeight)
+            let lineCount = Int(ceil(contentHeight / lineHeight))
+            onMeasuredLineCountChanged(lineCount)
         }
     }
 }
