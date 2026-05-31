@@ -590,10 +590,22 @@ private struct ActiveAgentCapsule: Identifiable {
 }
 
 private struct ActiveAgentCapsuleView: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let capsule: ActiveAgentCapsule
     let onClose: () -> Void
 
+    private var glassTint: Color {
+        colorScheme == .dark ? Color.black.opacity(0.28) : Color.white.opacity(0.18)
+    }
+
+    private var glassHighlight: Color {
+        colorScheme == .dark ? Color.white.opacity(0.20) : Color.white.opacity(0.62)
+    }
+
     var body: some View {
+        let shape = Capsule()
+
         HStack(spacing: 8) {
             Image(systemName: capsule.icon)
                 .font(.system(size: 17, weight: .semibold))
@@ -612,8 +624,76 @@ private struct ActiveAgentCapsuleView: View {
         .foregroundStyle(Color.blue)
         .padding(.horizontal, 13)
         .padding(.vertical, 9)
-        .background(Capsule().fill(Color.black.opacity(0.92)))
+        .background {
+            if #available(iOS 26.0, *) {
+                shape
+                    .fill(.clear)
+                    .glassEffect(.regular.tint(glassTint), in: shape)
+            } else {
+                shape
+                    .fill(.ultraThinMaterial)
+                    .overlay(shape.fill(glassTint))
+                    .overlay(
+                        shape
+                            .stroke(glassHighlight, lineWidth: 1)
+                            .blendMode(.screen)
+                    )
+            }
+        }
         .accessibilityLabel(capsule.kind == .skill ? "已启用 Skill：\(capsule.title)" : "已启用 MCP：\(capsule.title)")
+    }
+}
+
+private struct ToolSearchResult: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let url: URL
+}
+
+private struct ToolSearchResultCandidate: Equatable {
+    let title: String
+    let url: URL
+}
+
+private struct MovingHighlightTitle: View {
+    let text: String
+    let isActive: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if isActive && !reduceMotion {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                let cycle = 1.35
+                let progress = timeline.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: cycle) / cycle
+                let startX = progress * 2.2 - 1.1
+
+                Text(text)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [
+                                baseColor,
+                                highlightColor,
+                                baseColor
+                            ],
+                            startPoint: UnitPoint(x: startX, y: 0.5),
+                            endPoint: UnitPoint(x: startX + 0.72, y: 0.5)
+                        )
+                    )
+            }
+        } else {
+            Text(text)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var baseColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.52) : Color.secondary
+    }
+
+    private var highlightColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.96) : Color.primary.opacity(0.90)
     }
 }
 
@@ -1412,7 +1492,7 @@ struct ContentView: View {
                     .frame(
                         maxWidth: .infinity,
                         minHeight: scrollGeometry.size.height,
-                        alignment: .bottom
+                        alignment: .top
                     )
                     .contentShape(Rectangle())
                 }
@@ -2258,6 +2338,11 @@ struct ContentView: View {
         let agentTools = usesAgentTools ? activeAgentToolDefinitions() : []
         let effectiveSystemPrompt = configuration.systemPrompt + AgentTooling.promptAppendix(for: activeSkills)
         let generatesImageContextDescriptions = configuration.generatesImageContextDescriptions
+        let preservesReasoningContext = AIService.usesDeepSeekReasoningContext(
+            apiFormat: apiFormat,
+            baseURL: trimmedBaseURL,
+            model: model
+        )
 
         guard !userText.isEmpty || !imageAttachments.isEmpty || !fileAttachments.isEmpty else { return }
 
@@ -2301,7 +2386,8 @@ struct ContentView: View {
         aiService.resetConversation(
             with: contextMessages,
             systemPrompt: effectiveSystemPrompt,
-            usesImageAttachments: usesImageAttachments
+            usesImageAttachments: usesImageAttachments,
+            preservesReasoningContext: preservesReasoningContext
         )
         clearInputState()
         isGenerating = true
@@ -4258,12 +4344,12 @@ struct MessageBubble: View {
 
     private var assistantMessageStack: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if hasReasoningContent {
-                reasoningBlock
-            }
-
             if !message.toolExchanges.isEmpty {
                 toolActivityBlock
+            }
+
+            if hasReasoningContent {
+                reasoningBlock
             }
 
             if shouldShowMessageContentBubble {
@@ -4288,6 +4374,20 @@ struct MessageBubble: View {
         .animation(.easeOut(duration: 0.16), value: showsActions)
     }
 
+    private var toolActivityTitleIsActive: Bool {
+        guard isStreaming else { return false }
+
+        return message.toolExchanges.contains { exchange in
+            exchange.toolCalls.contains { call in
+                !exchange.toolResults.contains { $0.toolCallID == call.id }
+            }
+        }
+    }
+
+    private var reasoningTitleIsActive: Bool {
+        isStreaming && hasStreamingReasoning && !hasStreamingContent
+    }
+
     private var toolActivityBlock: some View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 8) {
@@ -4304,19 +4404,7 @@ struct MessageBubble: View {
                                 Text(result.isError ? "调用失败" : "调用完成")
                                     .foregroundStyle(result.isError ? Color.red : Color.secondary)
 
-                                let content = toolResultPreview(result.content)
-                                if !content.isEmpty {
-                                    Text(content)
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(result.isError ? Color.red : Color.primary)
-                                        .textSelection(.enabled)
-                                        .padding(8)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                                .fill(Color.black.opacity(colorScheme == .dark ? 0.18 : 0.05))
-                                        )
-                                }
+                                toolResultContent(result)
                             } else {
                                 Text("正在调用...")
                                     .foregroundStyle(.secondary)
@@ -4334,9 +4422,15 @@ struct MessageBubble: View {
             }
             .padding(.top, 6)
         } label: {
-            Label("工具调用", systemImage: "wrench.and.screwdriver")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "wrench.and.screwdriver")
+                    .foregroundStyle(.secondary)
+
+                MovingHighlightTitle(text: "工具调用", isActive: toolActivityTitleIsActive)
+
+                Spacer(minLength: 0)
+            }
+            .font(.caption.weight(.semibold))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -4346,6 +4440,52 @@ struct MessageBubble: View {
         )
     }
 
+    @ViewBuilder
+    private func toolResultContent(_ result: ChatToolResult) -> some View {
+        let searchResults = result.isError ? [] : toolSearchResults(from: result.content)
+
+        if !searchResults.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(searchResults) { item in
+                    Link(destination: item.url) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "link")
+                                .font(.caption2.weight(.semibold))
+
+                            Text(item.title)
+                                .font(.caption2.weight(.medium))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.blue)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(toolResultBackground)
+        } else {
+            let content = toolResultPreview(result.content)
+            if !content.isEmpty {
+                Text(content)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(result.isError ? Color.red : Color.primary)
+                    .textSelection(.enabled)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(toolResultBackground)
+            }
+        }
+    }
+
+    private var toolResultBackground: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color.black.opacity(colorScheme == .dark ? 0.18 : 0.05))
+    }
+
     private func toolResultPreview(_ content: String) -> String {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedContent.isEmpty else { return "" }
@@ -4353,6 +4493,211 @@ struct MessageBubble: View {
         let limit = 4_000
         guard trimmedContent.count > limit else { return trimmedContent }
         return "\(String(trimmedContent.prefix(limit)))\n\n...（结果过长，已截断显示）"
+    }
+
+    private func toolSearchResults(from content: String) -> [ToolSearchResult] {
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedContent.isEmpty else {
+            return []
+        }
+
+        var visitedStrings = Set<String>()
+        var candidates = toolSearchResultCandidates(fromJSONString: trimmedContent, depth: 0, visitedStrings: &visitedStrings)
+        if candidates.isEmpty {
+            candidates = scannedToolSearchResultCandidates(from: trimmedContent)
+        }
+        var seenURLs = Set<String>()
+
+        return candidates.enumerated().compactMap { index, candidate in
+            let key = candidate.url.absoluteString
+            guard seenURLs.insert(key).inserted else { return nil }
+
+            return ToolSearchResult(
+                id: "\(index)-\(key)",
+                title: candidate.title,
+                url: candidate.url
+            )
+        }
+    }
+
+    private func toolSearchResultCandidates(
+        fromJSONString jsonString: String,
+        depth: Int,
+        visitedStrings: inout Set<String>
+    ) -> [ToolSearchResultCandidate] {
+        guard depth < 6 else { return [] }
+
+        let trimmedString = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedString.isEmpty,
+              visitedStrings.insert(trimmedString).inserted,
+              let data = trimmedString.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+            return []
+        }
+
+        return toolSearchResultCandidates(fromJSONObject: object, depth: depth, visitedStrings: &visitedStrings)
+    }
+
+    private func toolSearchResultCandidates(
+        fromJSONObject object: Any,
+        depth: Int,
+        visitedStrings: inout Set<String>
+    ) -> [ToolSearchResultCandidate] {
+        guard depth < 6 else { return [] }
+
+        if let string = object as? String {
+            return toolSearchResultCandidates(fromJSONString: string, depth: depth + 1, visitedStrings: &visitedStrings)
+        }
+
+        if let array = object as? [Any] {
+            let directCandidates = array.compactMap(toolSearchResultCandidate)
+            if !directCandidates.isEmpty {
+                return directCandidates
+            }
+
+            return array.flatMap {
+                toolSearchResultCandidates(fromJSONObject: $0, depth: depth + 1, visitedStrings: &visitedStrings)
+            }
+        }
+
+        guard let dictionary = object as? [String: Any] else {
+            return []
+        }
+
+        var candidates = [ToolSearchResultCandidate]()
+
+        if let results = dictionary["results"] {
+            candidates.append(contentsOf: toolSearchResultCandidates(fromJSONObject: results, depth: depth + 1, visitedStrings: &visitedStrings))
+        }
+
+        for key in ["structuredContent", "structured_content", "data", "result"] {
+            if let nestedObject = dictionary[key] {
+                candidates.append(contentsOf: toolSearchResultCandidates(fromJSONObject: nestedObject, depth: depth + 1, visitedStrings: &visitedStrings))
+            }
+        }
+
+        if let content = dictionary["content"] {
+            candidates.append(contentsOf: toolSearchResultCandidates(fromJSONObject: content, depth: depth + 1, visitedStrings: &visitedStrings))
+        }
+
+        for key in ["text", "json", "output"] {
+            if let nestedString = dictionary[key] as? String,
+               looksLikeJSON(nestedString) {
+                candidates.append(contentsOf: toolSearchResultCandidates(fromJSONString: nestedString, depth: depth + 1, visitedStrings: &visitedStrings))
+            }
+        }
+
+        if candidates.isEmpty,
+           let directCandidate = toolSearchResultCandidate(from: dictionary) {
+            candidates.append(directCandidate)
+        }
+
+        return candidates
+    }
+
+    private func toolSearchResultCandidate(from object: Any) -> ToolSearchResultCandidate? {
+        guard let dictionary = object as? [String: Any] else { return nil }
+
+        return toolSearchResultCandidate(from: dictionary)
+    }
+
+    private func toolSearchResultCandidate(from dictionary: [String: Any]) -> ToolSearchResultCandidate? {
+        guard let rawURL = firstStringValue(in: dictionary, forKeys: ["url", "link"]),
+              let url = searchResultURL(from: rawURL) else {
+            return nil
+        }
+
+        let rawTitle = firstStringValue(in: dictionary, forKeys: ["title", "name"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let fallbackTitle = url.host?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = rawTitle.isEmpty
+            ? (fallbackTitle.flatMap { $0.isEmpty ? nil : $0 } ?? url.absoluteString)
+            : rawTitle
+
+        return ToolSearchResultCandidate(title: title, url: url)
+    }
+
+    private func searchResultURL(from rawURL: String) -> URL? {
+        let trimmedURL = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmedURL),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host,
+              !host.isEmpty,
+              components.user == nil,
+              components.password == nil else {
+            return nil
+        }
+
+        return url
+    }
+
+    private func firstStringValue(in dictionary: [String: Any], forKeys keys: [String]) -> String? {
+        for key in keys {
+            if let string = dictionary[key] as? String {
+                return string
+            }
+        }
+
+        return nil
+    }
+
+    private func looksLikeJSON(_ string: String) -> Bool {
+        guard let firstCharacter = string.trimmingCharacters(in: .whitespacesAndNewlines).first else {
+            return false
+        }
+
+        return firstCharacter == "{" || firstCharacter == "["
+    }
+
+    private func scannedToolSearchResultCandidates(from content: String) -> [ToolSearchResultCandidate] {
+        let urlMatches = jsonStringMatches(forKey: "url", in: content)
+        let titleMatches = jsonStringMatches(forKey: "title", in: content)
+        guard !urlMatches.isEmpty else { return [] }
+
+        return urlMatches.compactMap { urlMatch in
+            guard let url = searchResultURL(from: urlMatch.value) else { return nil }
+
+            let title = titleMatches
+                .filter { $0.range.location > urlMatch.range.location }
+                .min { $0.range.location < $1.range.location }?
+                .value
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallbackTitle = url.host?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedTitle = title.flatMap { $0.isEmpty ? nil : $0 }
+                ?? fallbackTitle.flatMap { $0.isEmpty ? nil : $0 }
+                ?? url.absoluteString
+
+            return ToolSearchResultCandidate(title: resolvedTitle, url: url)
+        }
+    }
+
+    private func jsonStringMatches(forKey key: String, in content: String) -> [(value: String, range: NSRange)] {
+        let pattern = #""# + NSRegularExpression.escapedPattern(for: key) + #""\s*:\s*"((?:\\.|[^"\\])*)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+
+        let nsContent = content as NSString
+        let fullRange = NSRange(location: 0, length: nsContent.length)
+        return regex.matches(in: content, range: fullRange).compactMap { match in
+            guard match.numberOfRanges > 1 else { return nil }
+
+            let rawValue = nsContent.substring(with: match.range(at: 1))
+            return (unescapedJSONStringValue(rawValue), match.range)
+        }
+    }
+
+    private func unescapedJSONStringValue(_ value: String) -> String {
+        let jsonString = "\"\(value)\""
+        guard let data = jsonString.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(String.self, from: data) else {
+            return value
+                .replacingOccurrences(of: "\\/", with: "/")
+                .replacingOccurrences(of: "\\\"", with: "\"")
+                .replacingOccurrences(of: "\\n", with: "\n")
+        }
+
+        return decoded
     }
 
     private var messageImages: some View {
@@ -4404,14 +4749,13 @@ struct MessageBubble: View {
                 HStack(spacing: 6) {
                     Image(systemName: message.isReasoningExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption)
+                        .foregroundStyle(.secondary)
 
-                    Text("思考过程")
-                        .font(.caption)
-                        .fontWeight(.semibold)
+                    MovingHighlightTitle(text: "思考过程", isActive: reasoningTitleIsActive)
+                        .font(.caption.weight(.semibold))
 
                     Spacer()
                 }
-                .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
 

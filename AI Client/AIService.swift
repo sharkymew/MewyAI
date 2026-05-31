@@ -985,6 +985,23 @@ class AIService {
         self.session = session
     }
 
+    static func usesDeepSeekReasoningContext(
+        apiFormat: AIAPIFormat,
+        baseURL: String,
+        model: String
+    ) -> Bool {
+        guard apiFormat == .openAIChatCompletions else { return false }
+
+        let lowercasedModel = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lowercasedModel.contains("deepseek") {
+            return true
+        }
+
+        return baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .contains("deepseek")
+    }
+
     func cancelStreaming() {
         streamingTask?.cancel()
         streamingTask = nil
@@ -993,7 +1010,8 @@ class AIService {
     func resetConversation(
         with messages: [ChatMessage],
         systemPrompt: String = AIConfiguration.defaultSystemPrompt,
-        usesImageAttachments: Bool = true
+        usesImageAttachments: Bool = true,
+        preservesReasoningContext: Bool = false
     ) {
         conversationHistory = Self.initialConversationHistory(systemPrompt: systemPrompt)
 
@@ -1014,7 +1032,7 @@ class AIService {
                         requestMessages.append(ChatRequestMessage(
                             role: "assistant",
                             text: exchange.assistantContent,
-                            reasoningContent: exchange.reasoningContent,
+                            reasoningContent: preservesReasoningContext ? exchange.reasoningContent : "",
                             toolCalls: exchange.toolCalls
                         ))
                         requestMessages.append(contentsOf: exchange.toolResults.map { result in
@@ -1027,17 +1045,69 @@ class AIService {
                     }
                 }
 
-                requestMessages.append(ChatRequestMessage(
-                    role: message.role,
-                    text: content,
-                    imageAttachments: message.role == "user" ? message.imageAttachments : [],
-                    imageContextDescription: message.role == "user" ? message.imageContextDescription : "",
-                    fileAttachments: message.role == "user" ? message.fileAttachments : [],
-                    usesImageAttachments: usesImageAttachments
-                ))
+                if message.role == "assistant" {
+                    requestMessages.append(ChatRequestMessage(
+                        role: "assistant",
+                        text: content,
+                        reasoningContent: preservesReasoningContext ? Self.reasoningContent(from: message) : "",
+                        toolCalls: []
+                    ))
+                } else {
+                    requestMessages.append(ChatRequestMessage(
+                        role: message.role,
+                        text: Self.textByAppendingRequestMetadata(content),
+                        imageAttachments: message.imageAttachments,
+                        imageContextDescription: message.imageContextDescription,
+                        fileAttachments: message.fileAttachments,
+                        usesImageAttachments: usesImageAttachments
+                    ))
+                }
                 return requestMessages
             }
         )
+    }
+
+    private static func reasoningContent(from message: ChatMessage) -> String {
+        var chunks = [String]()
+        if !message.reasoningContent.isEmpty {
+            chunks.append(message.reasoningContent)
+        }
+        chunks.append(contentsOf: message.reasoningChunks)
+        return chunks.joined()
+    }
+
+    private static func textByAppendingRequestMetadata(_ text: String, date: Date = Date()) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.calendar = Calendar(identifier: .gregorian)
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.timeZone = .current
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.calendar = Calendar(identifier: .gregorian)
+        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
+        timeFormatter.timeZone = .current
+        timeFormatter.dateFormat = "HH:mm:ss"
+
+        let offsetSeconds = TimeZone.current.secondsFromGMT(for: date)
+        let offsetSign = offsetSeconds >= 0 ? "+" : "-"
+        let absoluteOffset = abs(offsetSeconds)
+        let offsetHours = absoluteOffset / 3_600
+        let offsetMinutes = (absoluteOffset % 3_600) / 60
+        let offsetText = String(format: "UTC%@%02d:%02d", offsetSign, offsetHours, offsetMinutes)
+
+        let metadata = """
+        <message_metadata>
+        current_date: \(dateFormatter.string(from: date))
+        current_time: \(timeFormatter.string(from: date))
+        timezone: \(TimeZone.current.identifier) (\(offsetText))
+        note: Treat latest/current/today/recent requests relative to current_date. Prefer searches using the current year unless the user asks for a specific past year.
+        </message_metadata>
+        """
+
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return metadata }
+        return "\(metadata)\n\n\(text)"
     }
 
     private static func initialConversationHistory(systemPrompt: String) -> [ChatRequestMessage] {
@@ -1697,7 +1767,7 @@ class AIService {
         conversationHistory.append(
             ChatRequestMessage(
                 role: "user",
-                text: message,
+                text: Self.textByAppendingRequestMetadata(message),
                 imageAttachments: imageAttachments,
                 imageContextDescription: imageContextDescription,
                 fileAttachments: fileAttachments,
@@ -1813,6 +1883,7 @@ class AIService {
                 agentTools: agentTools,
                 toolExecutor: toolExecutor,
                 onToolExchangesUpdated: onToolExchangesUpdated,
+                isReasoningDisplayActive: isReasoningDisplayActive,
                 onReasoningToken: onReasoningToken,
                 onContentToken: onContentToken,
                 onComplete: onComplete,
@@ -1841,7 +1912,7 @@ class AIService {
         conversationHistory.append(
             ChatRequestMessage(
                 role: "user",
-                text: message,
+                text: Self.textByAppendingRequestMetadata(message),
                 imageAttachments: imageAttachments,
                 imageContextDescription: imageContextDescription,
                 fileAttachments: fileAttachments,
@@ -1872,197 +1943,228 @@ class AIService {
         )
         request.httpBody = jsonData
         let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
+        let preservesReasoningContext = Self.usesDeepSeekReasoningContext(
+            apiFormat: apiFormat,
+            baseURL: baseURL,
+            model: model
+        )
 
         streamingTask = Task {
-            do {
-                let (bytes, response) = try await session.bytes(for: request)
-
-                if let httpResponse = response as? HTTPURLResponse,
-                   !(200...299).contains(httpResponse.statusCode) {
-                    let errorBody = await Self.collectErrorBody(from: bytes, redacting: redactionValues)
-                    await MainActor.run {
-                        onError(Self.errorMessage(
-                            statusCode: httpResponse.statusCode,
-                            body: errorBody,
-                            request: request,
-                            redacting: redactionValues
-                        ))
-                    }
-                    return
-                }
-
-                var fullContentChunks: [String] = []
-                var pendingReasoningCallbackChunks: [String] = []
-                var pendingContentCallbackChunks: [String] = []
-                var fullContentCharacterCount = 0
-                var reasoningCharacterCount = 0
-                var lastReasoningCallbackFlushDate = Date.distantPast
-                var lastContentCallbackFlushDate = Date.distantPast
-                var lastReasoningVisibilityCheckDate = Date.distantPast
-                var cachedIsReasoningDisplayActive = false
-                let visibleReasoningCallbackFlushInterval: TimeInterval = 0.016
-                let hiddenReasoningCallbackFlushInterval: TimeInterval = 0.50
-                let contentCallbackFlushInterval: TimeInterval = 0.016
-                let reasoningVisibilityCheckInterval: TimeInterval = 0.05
-                let streamDecoder = JSONDecoder()
-
-                func refreshReasoningVisibilityIfNeeded(force: Bool = false, now: Date) async {
-                    guard force
-                            || now.timeIntervalSince(lastReasoningVisibilityCheckDate) >= reasoningVisibilityCheckInterval else {
-                        return
-                    }
-
-                    cachedIsReasoningDisplayActive = await MainActor.run {
-                        isReasoningDisplayActive()
-                    }
-                    lastReasoningVisibilityCheckDate = now
-                }
-
-                func flushTokenCallbacks(force: Bool = false) async {
-                    guard !pendingReasoningCallbackChunks.isEmpty || !pendingContentCallbackChunks.isEmpty else {
-                        return
-                    }
-
-                    let now = Date()
-
-                    if !pendingReasoningCallbackChunks.isEmpty {
-                        await refreshReasoningVisibilityIfNeeded(force: force, now: now)
-                    }
-
-                    var reasoningText = ""
-                    var contentText = ""
-
-                    if !pendingReasoningCallbackChunks.isEmpty {
-                        let reasoningFlushInterval = cachedIsReasoningDisplayActive
-                            ? visibleReasoningCallbackFlushInterval
-                            : hiddenReasoningCallbackFlushInterval
-
-                        if force || now.timeIntervalSince(lastReasoningCallbackFlushDate) >= reasoningFlushInterval {
-                            reasoningText = pendingReasoningCallbackChunks.joined()
-                            pendingReasoningCallbackChunks.removeAll(keepingCapacity: true)
-                            lastReasoningCallbackFlushDate = now
-                        }
-                    }
-
-                    if !pendingContentCallbackChunks.isEmpty,
-                       force || now.timeIntervalSince(lastContentCallbackFlushDate) >= contentCallbackFlushInterval {
-                        contentText = pendingContentCallbackChunks.joined()
-                        pendingContentCallbackChunks.removeAll(keepingCapacity: true)
-                        lastContentCallbackFlushDate = now
-                    }
-
-                    guard !reasoningText.isEmpty || !contentText.isEmpty else { return }
-
-                    let reasoningTextToDeliver = reasoningText
-                    let contentTextToDeliver = contentText
-                    await MainActor.run {
-                        if !reasoningTextToDeliver.isEmpty {
-                            onReasoningToken(reasoningTextToDeliver)
-                        }
-
-                        if !contentTextToDeliver.isEmpty {
-                            onContentToken(contentTextToDeliver)
-                        }
-                    }
-                }
-
-                for try await line in bytes.lines {
-                    if Task.isCancelled {
-                        return
-                    }
-
-                    guard line.hasPrefix("data: ") else { continue }
-                    let jsonString = String(line.dropFirst(6))
-
-                    guard let streamResult = Self.streamParseResult(
-                        from: jsonString,
-                        apiFormat: apiFormat,
-                        decoder: streamDecoder
-                    ) else {
-                        continue
-                    }
-
-                    if let errorMessage = streamResult.errorMessage {
-                        let sanitizedMessage = Self.sanitizedErrorBody(
-                            errorMessage,
-                            redacting: redactionValues
-                        )
-                        await MainActor.run {
-                            onError(sanitizedMessage)
-                        }
-                        streamingTask = nil
-                        return
-                    }
-
-                    if streamResult.isDone {
-                        let fullContentText = fullContentChunks.joined()
-                        conversationHistory.append(ChatRequestMessage(role: "assistant", text: fullContentText))
-
-                        await flushTokenCallbacks(force: true)
-                        await MainActor.run {
-                            onComplete(fullContentText)
-                        }
-
-                        streamingTask = nil
-                        return
-                    }
-                    let reasoningToken = streamResult.reasoningToken
-                    let contentToken = streamResult.contentToken
-
-                    if let reasoningToken, !reasoningToken.isEmpty {
-                        reasoningCharacterCount += reasoningToken.count
-                        guard reasoningCharacterCount <= Self.maxStreamingReasoningCharacters else {
-                            await MainActor.run {
-                                onError("推理内容过长，已停止接收。")
-                            }
-                            streamingTask = nil
-                            return
-                        }
-                        pendingReasoningCallbackChunks.append(reasoningToken)
-                    }
-
-                    if let contentToken, !contentToken.isEmpty {
-                        fullContentCharacterCount += contentToken.count
-                        guard fullContentCharacterCount <= Self.maxStreamingContentCharacters else {
-                            await MainActor.run {
-                                onError("响应内容过长，已停止接收。")
-                            }
-                            streamingTask = nil
-                            return
-                        }
-                        fullContentChunks.append(contentToken)
-                        pendingContentCallbackChunks.append(contentToken)
-                    }
-
-                    if reasoningToken?.isEmpty == false || contentToken?.isEmpty == false {
-                        await flushTokenCallbacks()
-                    }
-                }
-
-                let fullContentText = fullContentChunks.joined()
-                conversationHistory.append(ChatRequestMessage(role: "assistant", text: fullContentText))
-
-                await flushTokenCallbacks(force: true)
-                await MainActor.run {
-                    onComplete(fullContentText)
-                }
-
+            guard let streamedResponse = await streamResponse(
+                request: request,
+                apiFormat: apiFormat,
+                redactionValues: redactionValues,
+                isReasoningDisplayActive: isReasoningDisplayActive,
+                onReasoningToken: onReasoningToken,
+                onContentToken: onContentToken,
+                onError: onError
+            ) else {
                 streamingTask = nil
-            } catch {
-                if Task.isCancelled {
+                return
+            }
+
+            conversationHistory.append(ChatRequestMessage(
+                role: "assistant",
+                text: streamedResponse.content,
+                reasoningContent: preservesReasoningContext ? streamedResponse.reasoningContent : "",
+                toolCalls: []
+            ))
+
+            await MainActor.run {
+                onComplete(streamedResponse.content)
+            }
+
+            streamingTask = nil
+        }
+    }
+
+    private func streamResponse(
+        request: URLRequest,
+        apiFormat: AIAPIFormat,
+        redactionValues: [String],
+        isReasoningDisplayActive: @escaping @MainActor () -> Bool,
+        onReasoningToken: @escaping (String) -> Void,
+        onContentToken: @escaping (String) -> Void,
+        onError: @escaping (String) -> Void
+    ) async -> StreamedResponse? {
+        do {
+            let (bytes, response) = try await session.bytes(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse,
+               !(200...299).contains(httpResponse.statusCode) {
+                let errorBody = await Self.collectErrorBody(from: bytes, redacting: redactionValues)
+                await MainActor.run {
+                    onError(Self.errorMessage(
+                        statusCode: httpResponse.statusCode,
+                        body: errorBody,
+                        request: request,
+                        redacting: redactionValues
+                    ))
+                }
+                return nil
+            }
+
+            var fullReasoningChunks: [String] = []
+            var fullContentChunks: [String] = []
+            var pendingReasoningCallbackChunks: [String] = []
+            var pendingContentCallbackChunks: [String] = []
+            var fullContentCharacterCount = 0
+            var reasoningCharacterCount = 0
+            var lastReasoningCallbackFlushDate = Date.distantPast
+            var lastContentCallbackFlushDate = Date.distantPast
+            var lastReasoningVisibilityCheckDate = Date.distantPast
+            var cachedIsReasoningDisplayActive = false
+            let visibleReasoningCallbackFlushInterval: TimeInterval = 0.016
+            let hiddenReasoningCallbackFlushInterval: TimeInterval = 0.50
+            let contentCallbackFlushInterval: TimeInterval = 0.016
+            let reasoningVisibilityCheckInterval: TimeInterval = 0.05
+            let streamDecoder = JSONDecoder()
+
+            func refreshReasoningVisibilityIfNeeded(force: Bool = false, now: Date) async {
+                guard force
+                        || now.timeIntervalSince(lastReasoningVisibilityCheckDate) >= reasoningVisibilityCheckInterval else {
                     return
                 }
 
+                cachedIsReasoningDisplayActive = await MainActor.run {
+                    isReasoningDisplayActive()
+                }
+                lastReasoningVisibilityCheckDate = now
+            }
+
+            func flushTokenCallbacks(force: Bool = false) async {
+                guard !pendingReasoningCallbackChunks.isEmpty || !pendingContentCallbackChunks.isEmpty else {
+                    return
+                }
+
+                let now = Date()
+
+                if !pendingReasoningCallbackChunks.isEmpty {
+                    await refreshReasoningVisibilityIfNeeded(force: force, now: now)
+                }
+
+                var reasoningText = ""
+                var contentText = ""
+
+                if !pendingReasoningCallbackChunks.isEmpty {
+                    let reasoningFlushInterval = cachedIsReasoningDisplayActive
+                        ? visibleReasoningCallbackFlushInterval
+                        : hiddenReasoningCallbackFlushInterval
+
+                    if force || now.timeIntervalSince(lastReasoningCallbackFlushDate) >= reasoningFlushInterval {
+                        reasoningText = pendingReasoningCallbackChunks.joined()
+                        pendingReasoningCallbackChunks.removeAll(keepingCapacity: true)
+                        lastReasoningCallbackFlushDate = now
+                    }
+                }
+
+                if !pendingContentCallbackChunks.isEmpty,
+                   force || now.timeIntervalSince(lastContentCallbackFlushDate) >= contentCallbackFlushInterval {
+                    contentText = pendingContentCallbackChunks.joined()
+                    pendingContentCallbackChunks.removeAll(keepingCapacity: true)
+                    lastContentCallbackFlushDate = now
+                }
+
+                guard !reasoningText.isEmpty || !contentText.isEmpty else { return }
+
+                let reasoningTextToDeliver = reasoningText
+                let contentTextToDeliver = contentText
                 await MainActor.run {
+                    if !reasoningTextToDeliver.isEmpty {
+                        onReasoningToken(reasoningTextToDeliver)
+                    }
+
+                    if !contentTextToDeliver.isEmpty {
+                        onContentToken(contentTextToDeliver)
+                    }
+                }
+            }
+
+            for try await line in bytes.lines {
+                if Task.isCancelled {
+                    return nil
+                }
+
+                guard line.hasPrefix("data: ") else { continue }
+                let jsonString = String(line.dropFirst(6))
+
+                guard let streamResult = Self.streamParseResult(
+                    from: jsonString,
+                    apiFormat: apiFormat,
+                    decoder: streamDecoder
+                ) else {
+                    continue
+                }
+
+                if let errorMessage = streamResult.errorMessage {
                     let sanitizedMessage = Self.sanitizedErrorBody(
-                        error.localizedDescription,
+                        errorMessage,
                         redacting: redactionValues
                     )
-                    onError("流式请求失败：\(sanitizedMessage)")
+                    await MainActor.run {
+                        onError(sanitizedMessage)
+                    }
+                    return nil
                 }
 
-                streamingTask = nil
+                if streamResult.isDone {
+                    await flushTokenCallbacks(force: true)
+                    return StreamedResponse(
+                        content: fullContentChunks.joined(),
+                        reasoningContent: fullReasoningChunks.joined()
+                    )
+                }
+
+                let reasoningToken = streamResult.reasoningToken
+                let contentToken = streamResult.contentToken
+
+                if let reasoningToken, !reasoningToken.isEmpty {
+                    reasoningCharacterCount += reasoningToken.count
+                    guard reasoningCharacterCount <= Self.maxStreamingReasoningCharacters else {
+                        await MainActor.run {
+                            onError("推理内容过长，已停止接收。")
+                        }
+                        return nil
+                    }
+                    fullReasoningChunks.append(reasoningToken)
+                    pendingReasoningCallbackChunks.append(reasoningToken)
+                }
+
+                if let contentToken, !contentToken.isEmpty {
+                    fullContentCharacterCount += contentToken.count
+                    guard fullContentCharacterCount <= Self.maxStreamingContentCharacters else {
+                        await MainActor.run {
+                            onError("响应内容过长，已停止接收。")
+                        }
+                        return nil
+                    }
+                    fullContentChunks.append(contentToken)
+                    pendingContentCallbackChunks.append(contentToken)
+                }
+
+                if reasoningToken?.isEmpty == false || contentToken?.isEmpty == false {
+                    await flushTokenCallbacks()
+                }
             }
+
+            await flushTokenCallbacks(force: true)
+            return StreamedResponse(
+                content: fullContentChunks.joined(),
+                reasoningContent: fullReasoningChunks.joined()
+            )
+        } catch {
+            if Task.isCancelled {
+                return nil
+            }
+
+            await MainActor.run {
+                let sanitizedMessage = Self.sanitizedErrorBody(
+                    error.localizedDescription,
+                    redacting: redactionValues
+                )
+                onError("流式请求失败：\(sanitizedMessage)")
+            }
+            return nil
         }
     }
 
@@ -2084,6 +2186,7 @@ class AIService {
         agentTools: [AgentToolDefinition],
         toolExecutor: @escaping (AgentToolCallRequest) async -> AgentToolCallResult,
         onToolExchangesUpdated: @escaping ([ChatToolExchange]) -> Void,
+        isReasoningDisplayActive: @escaping @MainActor () -> Bool,
         onReasoningToken: @escaping (String) -> Void,
         onContentToken: @escaping (String) -> Void,
         onComplete: @escaping (_ contentText: String) -> Void,
@@ -2094,14 +2197,22 @@ class AIService {
             return
         }
 
-        let url: URL
+        let toolURL: URL
+        let streamURL: URL
         do {
-            url = try requestURL(
+            toolURL = try requestURL(
                 from: baseURL,
                 apiFormat: apiFormat,
                 model: model,
                 apiKey: apiKey,
                 isStreaming: false
+            )
+            streamURL = try requestURL(
+                from: baseURL,
+                apiFormat: apiFormat,
+                model: model,
+                apiKey: apiKey,
+                isStreaming: true
             )
         } catch let error as AIServiceError {
             onError(error.localizedDescription)
@@ -2114,7 +2225,7 @@ class AIService {
         conversationHistory.append(
             ChatRequestMessage(
                 role: "user",
-                text: message,
+                text: Self.textByAppendingRequestMetadata(message),
                 imageAttachments: imageAttachments,
                 imageContextDescription: imageContextDescription,
                 fileAttachments: fileAttachments,
@@ -2127,14 +2238,76 @@ class AIService {
             uniquingKeysWith: { first, _ in first }
         )
         let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
+        let preservesReasoningContext = Self.usesDeepSeekReasoningContext(
+            apiFormat: apiFormat,
+            baseURL: baseURL,
+            model: model
+        )
 
         streamingTask = Task {
             var workingMessages = conversationHistory
             var exchanges = [ChatToolExchange]()
             var executedToolCallCount = 0
-            var accumulatedFinalReasoning = ""
 
-            for _ in 0...AgentTooling.maxToolRounds {
+            @MainActor
+            func completeWithStreamingFinalAnswer() async {
+                let finalJSONData: Data
+                do {
+                    finalJSONData = try requestBodyData(
+                        apiFormat: apiFormat,
+                        model: model,
+                        messages: workingMessages,
+                        stream: true,
+                        reasoningEnabled: reasoningEnabled,
+                        reasoningEffort: reasoningEffort,
+                        modelParameters: modelParameters,
+                        anthropicMaxTokens: anthropicMaxTokens
+                    )
+                } catch {
+                    await MainActor.run { onError("请求体编码失败") }
+                    streamingTask = nil
+                    return
+                }
+
+                var finalRequest = makeRequest(
+                    url: streamURL,
+                    apiFormat: apiFormat,
+                    apiKey: apiKey,
+                    customHeaders: customHeaders,
+                    acceptsEventStream: true
+                )
+                finalRequest.httpBody = finalJSONData
+
+                await MainActor.run {
+                    onToolExchangesUpdated(exchanges)
+                }
+
+                guard let streamedResponse = await streamResponse(
+                    request: finalRequest,
+                    apiFormat: apiFormat,
+                    redactionValues: redactionValues,
+                    isReasoningDisplayActive: isReasoningDisplayActive,
+                    onReasoningToken: onReasoningToken,
+                    onContentToken: onContentToken,
+                    onError: onError
+                ) else {
+                    streamingTask = nil
+                    return
+                }
+
+                conversationHistory = workingMessages + [ChatRequestMessage(
+                    role: "assistant",
+                    text: streamedResponse.content,
+                    reasoningContent: preservesReasoningContext ? streamedResponse.reasoningContent : "",
+                    toolCalls: []
+                )]
+                await MainActor.run {
+                    onComplete(streamedResponse.content)
+                }
+                streamingTask = nil
+            }
+
+            for _ in 0..<AgentTooling.maxToolRounds {
                 guard !Task.isCancelled else { return }
 
                 let jsonData: Data
@@ -2157,7 +2330,7 @@ class AIService {
                 }
 
                 var request = makeRequest(
-                    url: url,
+                    url: toolURL,
                     apiFormat: apiFormat,
                     apiKey: apiKey,
                     customHeaders: customHeaders,
@@ -2192,30 +2365,35 @@ class AIService {
                     }
 
                     if modelResponse.toolCalls.isEmpty {
-                        let content = modelResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? "无回复"
-                            : modelResponse.content
-                        conversationHistory = workingMessages + [ChatRequestMessage(role: "assistant", text: content)]
-                        await MainActor.run {
-                            if !modelResponse.reasoningContent.isEmpty {
-                                onReasoningToken(modelResponse.reasoningContent)
-                            } else if !accumulatedFinalReasoning.isEmpty {
-                                onReasoningToken(accumulatedFinalReasoning)
+                        if exchanges.isEmpty {
+                            let content = modelResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                ? "无回复"
+                                : modelResponse.content
+                            conversationHistory = workingMessages + [ChatRequestMessage(
+                                role: "assistant",
+                                text: content,
+                                reasoningContent: preservesReasoningContext ? modelResponse.reasoningContent : "",
+                                toolCalls: []
+                            )]
+                            await MainActor.run {
+                                if !modelResponse.reasoningContent.isEmpty {
+                                    onReasoningToken(modelResponse.reasoningContent)
+                                }
+                                onToolExchangesUpdated(exchanges)
+                                onContentToken(content)
+                                onComplete(content)
                             }
-                            onToolExchangesUpdated(exchanges)
-                            onContentToken(content)
-                            onComplete(content)
+                            streamingTask = nil
+                            return
                         }
-                        streamingTask = nil
+
+                        await completeWithStreamingFinalAnswer()
                         return
                     }
 
                     executedToolCallCount += modelResponse.toolCalls.count
-                    guard executedToolCallCount <= AgentTooling.maxToolCalls else {
-                        await MainActor.run {
-                            onError("工具调用次数过多，已停止。")
-                        }
-                        streamingTask = nil
+                    if executedToolCallCount > AgentTooling.maxToolCalls {
+                        await completeWithStreamingFinalAnswer()
                         return
                     }
 
@@ -2235,10 +2413,9 @@ class AIService {
                     workingMessages.append(ChatRequestMessage(
                         role: "assistant",
                         text: modelResponse.content,
-                        reasoningContent: modelResponse.reasoningContent,
+                        reasoningContent: preservesReasoningContext ? modelResponse.reasoningContent : "",
                         toolCalls: chatToolCalls
                     ))
-                    accumulatedFinalReasoning += modelResponse.reasoningContent
 
                     var exchange = ChatToolExchange(
                         assistantContent: modelResponse.content,
@@ -2308,10 +2485,7 @@ class AIService {
                 }
             }
 
-            await MainActor.run {
-                onError("工具调用轮数过多，已停止。")
-            }
-            streamingTask = nil
+            await completeWithStreamingFinalAnswer()
         }
     }
 
@@ -2422,6 +2596,11 @@ class AIService {
         let content: String
         let reasoningContent: String
         let toolCalls: [ModelToolCall]
+    }
+
+    private struct StreamedResponse {
+        let content: String
+        let reasoningContent: String
     }
 
     private static func toolModelResponse(from data: Data, apiFormat: AIAPIFormat) -> ToolModelResponse? {

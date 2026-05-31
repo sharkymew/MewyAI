@@ -304,7 +304,6 @@ enum AgentCapabilityStore {
         repairedServer.name = defaultServer.name
         repairedServer.serverURL = defaultServer.serverURL
         repairedServer.kind = .tavily
-        repairedServer.requiresApproval = true
         repairedServer.cachedTools = repairedServer.cachedTools.map { tool in
             var normalizedTool = tool
             normalizedTool.name = normalizedTavilyToolName(tool.name)
