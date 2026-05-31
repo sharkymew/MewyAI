@@ -476,6 +476,63 @@ private final class AssistantLiveDisplay {
     let contentChannel = StreamingTextUpdateChannel()
 }
 
+@MainActor
+private final class ActiveConversationGeneration {
+    let conversationID: UUID
+    let assistantMessageID: UUID
+    let service: AIService
+    let tokenBuffer = StreamingTokenBuffer()
+    var hasReasoning = false
+    var hasContent = false
+    var reasoningIsExpanded = false
+    var didCollapseReasoningAfterThinking = false
+    var isFlushScheduled = false
+    var flushTask: Task<Void, Never>?
+
+    init(conversationID: UUID, assistantMessageID: UUID, service: AIService) {
+        self.conversationID = conversationID
+        self.assistantMessageID = assistantMessageID
+        self.service = service
+    }
+
+    func cancelScheduledFlush() {
+        flushTask?.cancel()
+        flushTask = nil
+        isFlushScheduled = false
+    }
+}
+
+@MainActor
+private final class BackgroundRequestKeeper {
+    private var taskIdentifier: UIBackgroundTaskIdentifier = .invalid
+
+    func update(
+        activeRequestCount: Int,
+        isSceneBackgrounded: Bool,
+        expirationHandler: @escaping @MainActor () -> Void
+    ) {
+        guard activeRequestCount > 0, isSceneBackgrounded else {
+            end()
+            return
+        }
+
+        guard taskIdentifier == .invalid else { return }
+
+        taskIdentifier = UIApplication.shared.beginBackgroundTask(withName: "AIClient.ActiveRequests") { [weak self] in
+            Task { @MainActor in
+                expirationHandler()
+                self?.end()
+            }
+        }
+    }
+
+    func end() {
+        guard taskIdentifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(taskIdentifier)
+        taskIdentifier = .invalid
+    }
+}
+
 private final class StreamingOutputHaptics: ObservableObject {
     private let refreshGenerator = UIImpactFeedbackGenerator(style: .medium)
     private let completionGenerator = UIImpactFeedbackGenerator(style: .heavy)
@@ -738,6 +795,8 @@ struct ContentView: View {
     @State private var liveAssistantDisplays: [UUID: AssistantLiveDisplay] = [:]
     @State private var isFlushScheduled = false
     @State private var flushTask: Task<Void, Never>?
+    @State private var activeConversationGenerations: [UUID: ActiveConversationGeneration] = [:]
+    @State private var backgroundRequestKeeper = BackgroundRequestKeeper()
     @State private var activeAssistantMessageID: UUID?
     @State private var markdownRenderCache: [UUID: MarkdownRenderCacheEntry] = [:]
     @State private var markdownRenderTasks: [UUID: Task<Void, Never>] = [:]
@@ -762,6 +821,7 @@ struct ContentView: View {
     @State private var conversationScrollRestoreTask: Task<Void, Never>?
 
     let aiService = AIService()
+    private let maxActiveConversationGenerations = 4
     private let maxImageAttachmentCount = 4
     private let maxFileAttachmentCount = 5
     private let maxImageInputByteCount = 12 * 1024 * 1024
@@ -1332,7 +1392,10 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .inactive || newPhase == .background else { return }
+            guard newPhase == .inactive || newPhase == .background else {
+                updateBackgroundRequestKeeper()
+                return
+            }
             speechInputController.stopRecording()
             persistApplicationStateForLifecycle()
         }
@@ -1439,7 +1502,7 @@ struct ContentView: View {
                                 isStreaming: isStreamingMessage,
                                 hasStreamingReasoning: isStreamingMessage && activeAssistantHasReasoning,
                                 hasStreamingContent: isStreamingMessage && activeAssistantHasContent,
-                                streamingContentChannel: liveAssistantDisplay?.contentChannel,
+                                streamingContentChannel: isStreamingMessage ? liveAssistantDisplay?.contentChannel : nil,
                                 streamingReasoningChannel: liveReasoningChannel,
                                 markdownRenderCache: markdownRenderCache[message.id],
                                 showsActions: activeMessageActionID == message.id,
@@ -1635,7 +1698,7 @@ struct ContentView: View {
                         topIconLabel(systemName: "square.and.pencil")
                     }
                 }
-                .disabled(isGenerating || !canCreateConversation)
+                .disabled(!canCreateConversation)
                 .accessibilityLabel("新建对话")
             }
 
@@ -2003,7 +2066,7 @@ struct ContentView: View {
     }
 
     private var canCreateConversation: Bool {
-        !isGenerating
+        true
     }
 
     private var currentConversationIsBlank: Bool {
@@ -2383,7 +2446,19 @@ struct ContentView: View {
             return
         }
 
-        aiService.resetConversation(
+        guard let selectedConversationID else { return }
+
+        guard activeConversationGenerations[selectedConversationID] == nil else {
+            return
+        }
+
+        guard activeConversationGenerations.count < maxActiveConversationGenerations else {
+            appendAssistantError("已有 \(maxActiveConversationGenerations) 个对话正在请求中，请等待其中一个完成后再发送。")
+            return
+        }
+
+        let requestService = AIService()
+        requestService.resetConversation(
             with: contextMessages,
             systemPrompt: effectiveSystemPrompt,
             usesImageAttachments: usesImageAttachments,
@@ -2420,10 +2495,18 @@ struct ContentView: View {
         persistCurrentConversation()
 
         let assistantMessageID = assistantMessage.id
+        let generation = ActiveConversationGeneration(
+            conversationID: selectedConversationID,
+            assistantMessageID: assistantMessageID,
+            service: requestService
+        )
+        activeConversationGenerations[selectedConversationID] = generation
+        streamingTokenBuffer = generation.tokenBuffer
         activeAssistantMessageID = assistantMessageID
         liveAssistantDisplays[assistantMessageID] = AssistantLiveDisplay()
+        updateBackgroundRequestKeeper()
 
-        aiService.sendStreamingMessage(
+        requestService.sendStreamingMessage(
             message: userText,
             imageAttachments: imageAttachments,
             imageContextDescription: imageContextDescription,
@@ -2443,75 +2526,46 @@ struct ContentView: View {
                 await executeAgentTool(request)
             },
             onToolExchangesUpdated: { exchanges in
-                guard activeAssistantMessageID == assistantMessageID else { return }
-                guard let index = messages.firstIndex(where: { $0.id == assistantMessageID }) else { return }
-                messages[index].toolExchanges = exchanges
-                persistCurrentConversation(refreshesUpdatedAt: false)
+                updateToolExchanges(
+                    exchanges,
+                    for: assistantMessageID,
+                    in: selectedConversationID
+                )
             },
             isReasoningDisplayActive: {
-                activeAssistantMessageID == assistantMessageID && activeAssistantReasoningIsExpanded
+                isReasoningDisplayActive(
+                    for: assistantMessageID,
+                    in: selectedConversationID
+                )
             },
             onReasoningToken: { token in
-                guard activeAssistantMessageID == assistantMessageID else { return }
-                guard isGenerating else { return }
-
-                streamingTokenBuffer.appendReasoning(token)
-                if !activeAssistantHasReasoning {
-                    activeAssistantHasReasoning = true
-                }
-                updateLiveReasoningDisplayIfNeeded(for: assistantMessageID, token: token)
+                handleReasoningToken(
+                    token,
+                    for: assistantMessageID,
+                    in: selectedConversationID
+                )
             },
             onContentToken: { token in
-                guard activeAssistantMessageID == assistantMessageID else { return }
-                guard isGenerating else { return }
-
-                collapseReasoningAfterThinkingIfNeeded(for: assistantMessageID)
-                appendLiveContentToken(token, for: assistantMessageID)
-                if !activeAssistantHasContent {
-                    activeAssistantHasContent = true
-                }
-                streamingTokenBuffer.appendContent(token)
-                scheduleTokenFlush(for: assistantMessageID)
-                scheduleStreamingAutoScroll()
+                handleContentToken(
+                    token,
+                    for: assistantMessageID,
+                    in: selectedConversationID
+                )
             },
-            onComplete: { _ in
-                guard activeAssistantMessageID == assistantMessageID else { return }
-
-                cancelScheduledFlush()
-                flushPendingTokens(for: assistantMessageID, invalidatesMarkdownCache: true, requestsAutoScroll: true)
-                isGenerating = false
-                triggerOutputCompletionHapticIfNeeded()
-                streamingOutputHaptics.reset()
-                activeAssistantMessageID = nil
-                activeAssistantHasReasoning = false
-                activeAssistantHasContent = false
-                activeAssistantReasoningIsExpanded = false
-                activeAssistantDidCollapseReasoningAfterThinking = false
-                prepareMarkdownCache(for: assistantMessageID)
-                persistCurrentConversation()
-                generateTitleIfNeeded()
+            onComplete: { contentText in
+                completeStreamingResponse(
+                    for: assistantMessageID,
+                    in: selectedConversationID,
+                    contentText: contentText,
+                    configuration: configuration
+                )
             },
             onError: { error in
-                guard activeAssistantMessageID == assistantMessageID else { return }
-
-                cancelScheduledFlush()
-                flushPendingTokens(for: assistantMessageID, invalidatesMarkdownCache: true, requestsAutoScroll: false)
-
-                let persistentError = persistentAssistantErrorMessage(from: error)
-                if let index = messages.firstIndex(where: { $0.id == assistantMessageID }) {
-                    messages[index].content = persistentError
-                    publishLiveContentUpdate(for: assistantMessageID, chunks: [persistentError], resetsText: true)
-                }
-
-                isGenerating = false
-                streamingOutputHaptics.reset()
-                activeAssistantMessageID = nil
-                activeAssistantHasReasoning = false
-                activeAssistantHasContent = false
-                activeAssistantReasoningIsExpanded = false
-                activeAssistantDidCollapseReasoningAfterThinking = false
-                prepareMarkdownCache(for: assistantMessageID)
-                persistCurrentConversation()
+                failStreamingResponse(
+                    error,
+                    for: assistantMessageID,
+                    in: selectedConversationID
+                )
             }
         )
 
@@ -2519,7 +2573,6 @@ struct ContentView: View {
            generatesImageContextDescriptions,
            !imageAttachments.isEmpty,
            imageContextDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let selectedConversationID,
            let userMessageIDForImageContext {
             generateImageContextDescriptionIfNeeded(
                 for: userMessageIDForImageContext,
@@ -2536,6 +2589,270 @@ struct ContentView: View {
                 reasoningEffort: reasoningEffort
             )
         }
+    }
+
+    private func activeGeneration(
+        for assistantMessageID: UUID,
+        in conversationID: UUID
+    ) -> ActiveConversationGeneration? {
+        guard let generation = activeConversationGenerations[conversationID],
+              generation.assistantMessageID == assistantMessageID else {
+            return nil
+        }
+        return generation
+    }
+
+    private func isReasoningDisplayActive(
+        for assistantMessageID: UUID,
+        in conversationID: UUID
+    ) -> Bool {
+        guard let generation = activeGeneration(for: assistantMessageID, in: conversationID) else {
+            return false
+        }
+        return selectedConversationID == conversationID && generation.reasoningIsExpanded
+    }
+
+    private func updateToolExchanges(
+        _ exchanges: [ChatToolExchange],
+        for assistantMessageID: UUID,
+        in conversationID: UUID
+    ) {
+        guard activeGeneration(for: assistantMessageID, in: conversationID) != nil else { return }
+
+        if selectedConversationID == conversationID {
+            guard let index = messages.firstIndex(where: { $0.id == assistantMessageID }) else { return }
+            messages[index].toolExchanges = exchanges
+            persistCurrentConversation(refreshesUpdatedAt: false)
+            return
+        }
+
+        guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }),
+              let messageIndex = conversations[conversationIndex].messages.firstIndex(where: { $0.id == assistantMessageID }) else {
+            return
+        }
+
+        conversations[conversationIndex].messages[messageIndex].toolExchanges = exchanges
+        updateActiveMessageRevisionSnapshots(
+            in: conversationIndex,
+            with: conversations[conversationIndex].messages
+        )
+        saveConversationsPreservingSelectedConversation()
+    }
+
+    private func handleReasoningToken(
+        _ token: String,
+        for assistantMessageID: UUID,
+        in conversationID: UUID
+    ) {
+        guard let generation = activeGeneration(for: assistantMessageID, in: conversationID) else { return }
+
+        generation.hasReasoning = true
+        generation.tokenBuffer.appendReasoning(token)
+
+        guard selectedConversationID == conversationID,
+              activeAssistantMessageID == assistantMessageID else {
+            return
+        }
+
+        if streamingTokenBuffer !== generation.tokenBuffer {
+            streamingTokenBuffer = generation.tokenBuffer
+        }
+        activeAssistantHasReasoning = true
+        updateLiveReasoningDisplayIfNeeded(for: assistantMessageID, token: token)
+    }
+
+    private func handleContentToken(
+        _ token: String,
+        for assistantMessageID: UUID,
+        in conversationID: UUID
+    ) {
+        guard let generation = activeGeneration(for: assistantMessageID, in: conversationID) else { return }
+
+        generation.hasContent = true
+        generation.tokenBuffer.appendContent(token)
+
+        if selectedConversationID == conversationID,
+           activeAssistantMessageID == assistantMessageID {
+            if streamingTokenBuffer !== generation.tokenBuffer {
+                streamingTokenBuffer = generation.tokenBuffer
+            }
+            collapseReasoningAfterThinkingIfNeeded(for: assistantMessageID)
+            appendLiveContentToken(token, for: assistantMessageID)
+            activeAssistantHasContent = true
+            scheduleStreamingAutoScroll()
+        }
+
+        scheduleTokenFlush(for: assistantMessageID, in: conversationID)
+    }
+
+    private func completeStreamingResponse(
+        for assistantMessageID: UUID,
+        in conversationID: UUID,
+        contentText: String,
+        configuration: AIConfiguration
+    ) {
+        guard activeGeneration(for: assistantMessageID, in: conversationID) != nil else { return }
+
+        cancelScheduledFlush(for: conversationID)
+        flushPendingTokens(
+            for: assistantMessageID,
+            in: conversationID,
+            invalidatesMarkdownCache: true,
+            requestsAutoScroll: selectedConversationID == conversationID
+        )
+        synchronizeCompletedAssistantContent(
+            contentText,
+            for: assistantMessageID,
+            in: conversationID
+        )
+
+        if selectedConversationID == conversationID {
+            triggerOutputCompletionHapticIfNeeded()
+            prepareMarkdownCache(for: assistantMessageID)
+        }
+
+        finishActiveGeneration(
+            for: assistantMessageID,
+            in: conversationID,
+            marksStopped: false,
+            triggersCompletionHaptic: false
+        )
+        persistConversation(conversationID, refreshesUpdatedAt: true)
+        generateTitleIfNeeded(for: conversationID, configuration: configuration)
+    }
+
+    private func synchronizeCompletedAssistantContent(
+        _ contentText: String,
+        for assistantMessageID: UUID,
+        in conversationID: UUID
+    ) {
+        guard !contentText.isEmpty else { return }
+
+        if selectedConversationID == conversationID {
+            guard let index = messages.firstIndex(where: { $0.id == assistantMessageID }),
+                  messages[index].content != contentText else {
+                return
+            }
+            messages[index].content = contentText
+            invalidateMarkdownCache(for: assistantMessageID)
+            return
+        }
+
+        guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }),
+              let messageIndex = conversations[conversationIndex]
+                .messages
+                .firstIndex(where: { $0.id == assistantMessageID }),
+              conversations[conversationIndex].messages[messageIndex].content != contentText else {
+            return
+        }
+
+        conversations[conversationIndex].messages[messageIndex].content = contentText
+        updateActiveMessageRevisionSnapshots(
+            in: conversationIndex,
+            with: conversations[conversationIndex].messages
+        )
+    }
+
+    private func failStreamingResponse(
+        _ error: String,
+        for assistantMessageID: UUID,
+        in conversationID: UUID
+    ) {
+        guard activeGeneration(for: assistantMessageID, in: conversationID) != nil else { return }
+
+        cancelScheduledFlush(for: conversationID)
+        flushPendingTokens(
+            for: assistantMessageID,
+            in: conversationID,
+            invalidatesMarkdownCache: true,
+            requestsAutoScroll: false
+        )
+
+        let persistentError = persistentAssistantErrorMessage(from: error)
+        updateAssistantMessage(
+            assistantMessageID,
+            in: conversationID,
+            refreshesUpdatedAt: false
+        ) { message in
+            message.content = persistentError
+        }
+
+        if selectedConversationID == conversationID {
+            publishLiveContentUpdate(for: assistantMessageID, chunks: [persistentError], resetsText: true)
+            prepareMarkdownCache(for: assistantMessageID)
+        }
+
+        finishActiveGeneration(
+            for: assistantMessageID,
+            in: conversationID,
+            marksStopped: false,
+            triggersCompletionHaptic: false
+        )
+        persistConversation(conversationID, refreshesUpdatedAt: true)
+    }
+
+    private func finishActiveGeneration(
+        for assistantMessageID: UUID,
+        in conversationID: UUID,
+        marksStopped: Bool,
+        triggersCompletionHaptic: Bool
+    ) {
+        guard let generation = activeGeneration(for: assistantMessageID, in: conversationID) else { return }
+
+        generation.cancelScheduledFlush()
+        activeConversationGenerations[conversationID] = nil
+
+        if marksStopped {
+            updateAssistantMessage(
+                assistantMessageID,
+                in: conversationID,
+                refreshesUpdatedAt: false
+            ) { message in
+                message.isStopped = true
+            }
+        }
+
+        if selectedConversationID == conversationID {
+            if triggersCompletionHaptic {
+                triggerOutputCompletionHapticIfNeeded()
+            }
+            isGenerating = false
+            activeAssistantMessageID = nil
+            activeAssistantHasReasoning = false
+            activeAssistantHasContent = false
+            activeAssistantReasoningIsExpanded = false
+            activeAssistantDidCollapseReasoningAfterThinking = false
+            isFlushScheduled = false
+            flushTask = nil
+            liveAssistantDisplays[assistantMessageID] = nil
+            streamingOutputHaptics.reset()
+            streamingTokenBuffer = StreamingTokenBuffer()
+        }
+
+        updateBackgroundRequestKeeper()
+    }
+
+    private func cancelActiveGeneration(
+        in conversationID: UUID,
+        marksStopped: Bool,
+        triggersCompletionHaptic: Bool = false
+    ) {
+        guard let generation = activeConversationGenerations[conversationID] else { return }
+
+        generation.service.cancelStreaming()
+        cancelScheduledFlush(for: conversationID)
+        flushPendingTokens(
+            for: generation.assistantMessageID,
+            in: conversationID,
+            invalidatesMarkdownCache: true,
+            requestsAutoScroll: selectedConversationID == conversationID
+        )
+        finishActiveGeneration(
+            for: generation.assistantMessageID,
+            in: conversationID,
+            marksStopped: marksStopped,
+            triggersCompletionHaptic: triggersCompletionHaptic
+        )
     }
 
     private func appendAssistantError(_ content: String) {
@@ -2624,7 +2941,7 @@ struct ContentView: View {
                 in: conversationID,
                 matching: imageAttachments
             ) {
-                ConversationStore.saveConversations(conversations)
+                saveConversationsPreservingSelectedConversation()
             }
             return
         }
@@ -2636,7 +2953,7 @@ struct ContentView: View {
             in: conversationID,
             matching: imageAttachments
         )
-        ConversationStore.saveConversations(conversations)
+        saveConversationsPreservingSelectedConversation()
     }
 
     private func saveImageContextDescriptionInMessageRevisions(
@@ -2971,6 +3288,19 @@ struct ContentView: View {
     }
 
     func scheduleTokenFlush(for messageID: UUID) {
+        guard let selectedConversationID else { return }
+        scheduleTokenFlush(for: messageID, in: selectedConversationID)
+    }
+
+    func scheduleTokenFlush(for messageID: UUID, in conversationID: UUID) {
+        if selectedConversationID == conversationID {
+            scheduleVisibleTokenFlush(for: messageID, in: conversationID)
+        } else {
+            scheduleBackgroundTokenFlush(for: messageID, in: conversationID)
+        }
+    }
+
+    private func scheduleVisibleTokenFlush(for messageID: UUID, in conversationID: UUID) {
         guard !isFlushScheduled else { return }
         isFlushScheduled = true
         flushTask?.cancel()
@@ -2980,11 +3310,62 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             flushPendingTokens(
                 for: messageID,
+                in: conversationID,
                 flushesReasoning: false,
                 invalidatesMarkdownCache: false,
                 requestsAutoScroll: false
             )
         }
+    }
+
+    private func scheduleBackgroundTokenFlush(for messageID: UUID, in conversationID: UUID) {
+        guard let generation = activeGeneration(for: messageID, in: conversationID),
+              !generation.isFlushScheduled else {
+            return
+        }
+
+        generation.isFlushScheduled = true
+        generation.flushTask?.cancel()
+        generation.flushTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard !Task.isCancelled else { return }
+            flushPendingTokens(
+                for: messageID,
+                in: conversationID,
+                flushesReasoning: false,
+                invalidatesMarkdownCache: false,
+                requestsAutoScroll: false
+            )
+        }
+    }
+
+    func flushPendingTokens(
+        for messageID: UUID,
+        in conversationID: UUID,
+        flushesReasoning: Bool = true,
+        invalidatesMarkdownCache: Bool = true,
+        requestsAutoScroll: Bool = true
+    ) {
+        guard let generation = activeGeneration(for: messageID, in: conversationID) else { return }
+
+        if selectedConversationID == conversationID {
+            generation.cancelScheduledFlush()
+            if streamingTokenBuffer !== generation.tokenBuffer {
+                streamingTokenBuffer = generation.tokenBuffer
+            }
+            flushPendingTokens(
+                for: messageID,
+                flushesReasoning: flushesReasoning,
+                invalidatesMarkdownCache: invalidatesMarkdownCache,
+                requestsAutoScroll: requestsAutoScroll
+            )
+            return
+        }
+
+        flushPendingTokensFromBackgroundGeneration(
+            generation,
+            flushesReasoning: flushesReasoning
+        )
     }
 
     func flushPendingTokens(
@@ -3033,6 +3414,47 @@ struct ContentView: View {
         isFlushScheduled = false
     }
 
+    private func cancelScheduledFlush(for conversationID: UUID) {
+        if selectedConversationID == conversationID {
+            cancelScheduledFlush()
+        }
+        activeConversationGenerations[conversationID]?.cancelScheduledFlush()
+    }
+
+    private func flushPendingTokensFromBackgroundGeneration(
+        _ generation: ActiveConversationGeneration,
+        flushesReasoning: Bool
+    ) {
+        guard let conversationIndex = conversations.firstIndex(where: { $0.id == generation.conversationID }),
+              let messageIndex = conversations[conversationIndex]
+                .messages
+                .firstIndex(where: { $0.id == generation.assistantMessageID }) else {
+            generation.tokenBuffer.clearPendingTokens()
+            generation.cancelScheduledFlush()
+            return
+        }
+
+        if flushesReasoning, generation.tokenBuffer.hasPendingReasoningText {
+            conversations[conversationIndex]
+                .messages[messageIndex]
+                .reasoningChunks
+                .append(contentsOf: generation.tokenBuffer.consumePendingReasoningChunks())
+        }
+
+        if generation.tokenBuffer.hasPendingContentText {
+            conversations[conversationIndex]
+                .messages[messageIndex]
+                .content += generation.tokenBuffer.consumePendingContentText()
+        }
+
+        updateActiveMessageRevisionSnapshots(
+            in: conversationIndex,
+            with: conversations[conversationIndex].messages
+        )
+        generation.cancelScheduledFlush()
+        saveConversationsPreservingSelectedConversation()
+    }
+
     private func appendLiveContentToken(_ token: String, for messageID: UUID) {
         publishLiveContentUpdate(for: messageID, chunks: [token], resetsText: false)
     }
@@ -3057,6 +3479,11 @@ struct ContentView: View {
         activeAssistantDidCollapseReasoningAfterThinking = true
         let wasReasoningExpanded = activeAssistantReasoningIsExpanded
         activeAssistantReasoningIsExpanded = false
+        if let selectedConversationID,
+           let generation = activeGeneration(for: messageID, in: selectedConversationID) {
+            generation.didCollapseReasoningAfterThinking = true
+            generation.reasoningIsExpanded = false
+        }
 
         if let index = messages.firstIndex(where: { $0.id == messageID }),
            messages[index].isReasoningExpanded {
@@ -3071,6 +3498,10 @@ struct ContentView: View {
         guard activeAssistantMessageID == messageID else { return }
 
         activeAssistantReasoningIsExpanded = isExpanded
+        if let selectedConversationID,
+           let generation = activeGeneration(for: messageID, in: selectedConversationID) {
+            generation.reasoningIsExpanded = isExpanded
+        }
         if isExpanded {
             publishLiveReasoningReset(for: messageID, appendsProgressively: true)
         } else {
@@ -3117,6 +3548,16 @@ struct ContentView: View {
 
     private func clearLiveReasoningDisplay(for messageID: UUID) {
         publishLiveReasoningUpdate(for: messageID, chunks: [], resetsText: true)
+    }
+
+    private func resetLiveContentDisplay(for messageID: UUID) {
+        guard let message = messages.first(where: { $0.id == messageID }) else { return }
+
+        publishLiveContentUpdate(
+            for: messageID,
+            chunks: message.content.isEmpty ? [] : [message.content],
+            resetsText: true
+        )
     }
 
     private func publishLiveContentUpdate(for messageID: UUID, chunks: [String], resetsText: Bool) {
@@ -3239,33 +3680,28 @@ struct ContentView: View {
     }
 
     func stopGenerating(triggersCompletionHaptic: Bool = true) {
-        let stoppedMessageID = activeAssistantMessageID
-
-        aiService.cancelStreaming()
-        cancelScheduledFlush()
-
-        if let stoppedMessageID {
-            flushPendingTokens(for: stoppedMessageID, invalidatesMarkdownCache: true, requestsAutoScroll: true)
-
-            if let index = messages.firstIndex(where: { $0.id == stoppedMessageID }) {
-                messages[index].isStopped = true
-                prepareMarkdownCache(for: stoppedMessageID)
-            }
+        guard let selectedConversationID,
+              let generation = activeConversationGenerations[selectedConversationID] else {
+            detachVisibleGenerationState()
+            return
         }
 
-        activeAssistantMessageID = nil
-        activeAssistantHasReasoning = false
-        activeAssistantHasContent = false
-        activeAssistantReasoningIsExpanded = false
-        activeAssistantDidCollapseReasoningAfterThinking = false
-        isGenerating = false
-        if triggersCompletionHaptic, stoppedMessageID != nil {
-            triggerOutputCompletionHapticIfNeeded()
-        }
-        streamingOutputHaptics.reset()
-        streamingTokenBuffer.reset()
-        isFlushScheduled = false
-        persistCurrentConversation()
+        generation.service.cancelStreaming()
+        cancelScheduledFlush(for: selectedConversationID)
+        flushPendingTokens(
+            for: generation.assistantMessageID,
+            in: selectedConversationID,
+            invalidatesMarkdownCache: true,
+            requestsAutoScroll: true
+        )
+        prepareMarkdownCache(for: generation.assistantMessageID)
+        finishActiveGeneration(
+            for: generation.assistantMessageID,
+            in: selectedConversationID,
+            marksStopped: true,
+            triggersCompletionHaptic: triggersCompletionHaptic
+        )
+        persistConversation(selectedConversationID, refreshesUpdatedAt: true)
     }
 
     func hideKeyboard() {
@@ -3770,14 +4206,70 @@ struct ContentView: View {
     }
 
     private func selectConversation(_ id: UUID, closesSidebar: Bool) {
-        if isGenerating {
-            stopGenerating(triggersCompletionHaptic: false)
-        } else {
-            persistCurrentConversation()
-        }
+        prepareCurrentConversationForNavigation()
 
         guard let conversation = conversations.first(where: { $0.id == id }) else { return }
         restoreConversation(conversation, closesSidebar: closesSidebar)
+    }
+
+    private func prepareCurrentConversationForNavigation() {
+        if let selectedConversationID,
+           let generation = activeConversationGenerations[selectedConversationID] {
+            cancelScheduledFlush(for: selectedConversationID)
+            flushPendingTokens(
+                for: generation.assistantMessageID,
+                in: selectedConversationID,
+                invalidatesMarkdownCache: false,
+                requestsAutoScroll: false
+            )
+            persistConversation(selectedConversationID, refreshesUpdatedAt: false)
+        } else {
+            persistCurrentConversation(refreshesUpdatedAt: false)
+        }
+
+        detachVisibleGenerationState()
+    }
+
+    private func detachVisibleGenerationState() {
+        activeAssistantMessageID = nil
+        liveAssistantDisplays = [:]
+        activeAssistantHasReasoning = false
+        activeAssistantHasContent = false
+        activeAssistantReasoningIsExpanded = false
+        activeAssistantDidCollapseReasoningAfterThinking = false
+        isGenerating = false
+        streamingOutputHaptics.reset()
+        streamingTokenBuffer = StreamingTokenBuffer()
+        isFlushScheduled = false
+        flushTask = nil
+    }
+
+    private func attachVisibleGenerationStateIfNeeded(for conversationID: UUID) {
+        guard let generation = activeConversationGenerations[conversationID] else {
+            isGenerating = false
+            activeAssistantMessageID = nil
+            return
+        }
+
+        isGenerating = true
+        activeAssistantMessageID = generation.assistantMessageID
+        streamingTokenBuffer = generation.tokenBuffer
+        activeAssistantHasReasoning = generation.hasReasoning
+        activeAssistantHasContent = generation.hasContent
+        activeAssistantReasoningIsExpanded = generation.reasoningIsExpanded
+        activeAssistantDidCollapseReasoningAfterThinking = generation.didCollapseReasoningAfterThinking
+        liveAssistantDisplays[generation.assistantMessageID] = AssistantLiveDisplay()
+        flushPendingTokens(
+            for: generation.assistantMessageID,
+            in: conversationID,
+            invalidatesMarkdownCache: false,
+            requestsAutoScroll: false
+        )
+        resetLiveContentDisplay(for: generation.assistantMessageID)
+        if generation.reasoningIsExpanded {
+            publishLiveReasoningReset(for: generation.assistantMessageID, appendsProgressively: true)
+        }
+        prepareStreamingOutputHapticsIfNeeded()
     }
 
     private func restoreConversation(_ conversation: AIConversation, closesSidebar: Bool) {
@@ -3809,6 +4301,7 @@ struct ContentView: View {
             systemPrompt: currentConfiguration.systemPrompt,
             usesImageAttachments: currentConfiguration.selectedModelSupportsImages
         )
+        attachVisibleGenerationStateIfNeeded(for: conversation.id)
         ConversationStore.saveSelectedConversationID(conversation.id)
 
         if closesSidebar {
@@ -3838,11 +4331,7 @@ struct ContentView: View {
 
         let defaultPromptConfiguration = selectBuiltInDefaultPromptForCurrentConfiguration()
 
-        if isGenerating {
-            stopGenerating(triggersCompletionHaptic: false)
-        } else {
-            persistCurrentConversation()
-        }
+        prepareCurrentConversationForNavigation()
 
         if currentConversationIsBlank {
             aiService.resetConversation(
@@ -3887,6 +4376,7 @@ struct ContentView: View {
         editingMessageID = nil
         streamingTokenBuffer.reset()
         isFlushScheduled = false
+        isGenerating = false
         restoreChatScrollAfterConversationChange()
         aiService.resetConversation(
             with: [],
@@ -3949,17 +4439,17 @@ struct ContentView: View {
     private func beginExportingConversation(_ id: UUID) {
         hideKeyboard()
 
-        if selectedConversationID == id,
-           let activeAssistantMessageID {
-            cancelScheduledFlush()
+        if let generation = activeConversationGenerations[id] {
+            cancelScheduledFlush(for: id)
             flushPendingTokens(
-                for: activeAssistantMessageID,
+                for: generation.assistantMessageID,
+                in: id,
                 invalidatesMarkdownCache: false,
                 requestsAutoScroll: false
             )
         }
 
-        persistCurrentConversation(refreshesUpdatedAt: false)
+        persistConversation(id, refreshesUpdatedAt: false)
 
         guard let conversation = conversations.first(where: { $0.id == id }) else { return }
         conversationExportDocument = ConversationMarkdownDocument(
@@ -3982,10 +4472,7 @@ struct ContentView: View {
 
     private func deleteConversation(_ id: UUID) {
         if conversations.count <= 1 {
-            if selectedConversationID == id && isGenerating {
-                aiService.cancelStreaming()
-                isGenerating = false
-            }
+            cancelActiveGeneration(in: id, marksStopped: false)
 
             let conversation = AIConversation()
             conversations = [conversation]
@@ -4011,6 +4498,7 @@ struct ContentView: View {
             editingMessageID = nil
             streamingTokenBuffer.reset()
             isFlushScheduled = false
+            isGenerating = false
             restoreChatScrollAfterConversationChange()
             setConversationSidebarVisibility(false)
             aiService.resetConversation(
@@ -4024,9 +4512,7 @@ struct ContentView: View {
             return
         }
 
-        if selectedConversationID == id && isGenerating {
-            stopGenerating(triggersCompletionHaptic: false)
-        }
+        cancelActiveGeneration(in: id, marksStopped: false)
 
         conversations.removeAll { $0.id == id }
 
@@ -4057,6 +4543,7 @@ struct ContentView: View {
                 systemPrompt: currentConfiguration.systemPrompt,
                 usesImageAttachments: currentConfiguration.selectedModelSupportsImages
             )
+            attachVisibleGenerationStateIfNeeded(for: nextConversation.id)
             ConversationStore.saveSelectedConversationID(nextConversation.id)
         }
 
@@ -4065,23 +4552,126 @@ struct ContentView: View {
     }
 
     private func persistApplicationStateForLifecycle() {
-        let shouldRefreshUpdatedAt = activeAssistantMessageID != nil
-
-        if let activeAssistantMessageID {
-            cancelScheduledFlush()
-            flushPendingTokens(for: activeAssistantMessageID, invalidatesMarkdownCache: false, requestsAutoScroll: false)
+        let activeConversationIDs = Array(activeConversationGenerations.keys)
+        for conversationID in activeConversationIDs {
+            guard let generation = activeConversationGenerations[conversationID] else { continue }
+            cancelScheduledFlush(for: conversationID)
+            flushPendingTokens(
+                for: generation.assistantMessageID,
+                in: conversationID,
+                invalidatesMarkdownCache: false,
+                requestsAutoScroll: false
+            )
+            persistConversation(
+                conversationID,
+                refreshesUpdatedAt: true
+            )
         }
 
-        persistCurrentConversation(synchronize: true, refreshesUpdatedAt: shouldRefreshUpdatedAt)
+        if let selectedConversationID,
+           !activeConversationIDs.contains(selectedConversationID) {
+            persistCurrentConversation(synchronize: true, refreshesUpdatedAt: false)
+        } else {
+            ConversationStore.saveConversations(conversations, synchronize: true)
+        }
+
+        updateBackgroundRequestKeeper()
     }
 
-    private func persistCurrentConversation(
+    private func updateAssistantMessage(
+        _ messageID: UUID,
+        in conversationID: UUID,
+        refreshesUpdatedAt: Bool,
+        update: (inout ChatMessage) -> Void
+    ) {
+        if selectedConversationID == conversationID {
+            guard let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
+            update(&messages[index])
+            persistCurrentConversation(refreshesUpdatedAt: refreshesUpdatedAt)
+            return
+        }
+
+        guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }),
+              let messageIndex = conversations[conversationIndex]
+                .messages
+                .firstIndex(where: { $0.id == messageID }) else {
+            return
+        }
+
+        update(&conversations[conversationIndex].messages[messageIndex])
+        updateActiveMessageRevisionSnapshots(
+            in: conversationIndex,
+            with: conversations[conversationIndex].messages
+        )
+        if refreshesUpdatedAt {
+            conversations[conversationIndex].updatedAt = Date()
+        }
+        saveConversationsPreservingSelectedConversation()
+    }
+
+    private func persistConversation(
+        _ conversationID: UUID,
         synchronize: Bool = false,
         refreshesUpdatedAt: Bool = true
     ) {
+        if selectedConversationID == conversationID {
+            persistCurrentConversation(
+                synchronize: synchronize,
+                refreshesUpdatedAt: refreshesUpdatedAt
+            )
+            return
+        }
+
+        guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }) else {
+            return
+        }
+
+        updateActiveMessageRevisionSnapshots(
+            in: conversationIndex,
+            with: conversations[conversationIndex].messages
+        )
+        if refreshesUpdatedAt {
+            conversations[conversationIndex].updatedAt = Date()
+        }
+        saveConversationsPreservingSelectedConversation(synchronize: synchronize)
+    }
+
+    private func updateBackgroundRequestKeeper() {
+        backgroundRequestKeeper.update(
+            activeRequestCount: activeConversationGenerations.count,
+            isSceneBackgrounded: scenePhase == .inactive || scenePhase == .background
+        ) {
+            persistApplicationStateForLifecycle()
+        }
+    }
+
+    @discardableResult
+    private func saveConversationsPreservingSelectedConversation(synchronize: Bool = false) -> Bool {
+        flushSelectedGenerationForStorage()
+        synchronizeSelectedConversationSnapshot(refreshesUpdatedAt: false)
+        return ConversationStore.saveConversations(conversations, synchronize: synchronize)
+    }
+
+    private func flushSelectedGenerationForStorage() {
+        guard let selectedConversationID,
+              let generation = activeConversationGenerations[selectedConversationID] else {
+            return
+        }
+
+        cancelScheduledFlush(for: selectedConversationID)
+        flushPendingTokens(
+            for: generation.assistantMessageID,
+            in: selectedConversationID,
+            invalidatesMarkdownCache: false,
+            requestsAutoScroll: false
+        )
+    }
+
+    @discardableResult
+    private func synchronizeSelectedConversationSnapshot(refreshesUpdatedAt: Bool) -> Bool {
         guard let selectedConversationID,
               let index = conversations.firstIndex(where: { $0.id == selectedConversationID }) else {
-            return
+            return false
         }
 
         conversations[index].messages = messages
@@ -4090,6 +4680,16 @@ struct ContentView: View {
         updateActiveMessageRevisionSnapshots(in: index, with: messages)
         if refreshesUpdatedAt {
             conversations[index].updatedAt = Date()
+        }
+        return true
+    }
+
+    private func persistCurrentConversation(
+        synchronize: Bool = false,
+        refreshesUpdatedAt: Bool = true
+    ) {
+        guard synchronizeSelectedConversationSnapshot(refreshesUpdatedAt: refreshesUpdatedAt) else {
+            return
         }
         ConversationStore.saveConversations(conversations, synchronize: synchronize)
     }
@@ -4107,8 +4707,16 @@ struct ContentView: View {
     }
 
     private func generateTitleIfNeeded() {
-        guard let selectedConversationID,
-              let index = conversations.firstIndex(where: { $0.id == selectedConversationID }),
+        guard let selectedConversationID else { return }
+        generateTitleIfNeeded(for: selectedConversationID, configuration: currentConfiguration)
+    }
+
+    private func generateTitleIfNeeded(for conversationID: UUID, configuration: AIConfiguration) {
+        if selectedConversationID == conversationID {
+            persistCurrentConversation(refreshesUpdatedAt: false)
+        }
+
+        guard let index = conversations.firstIndex(where: { $0.id == conversationID }),
               !conversations[index].hasGeneratedTitle,
               conversations[index].messages.contains(where: { $0.role == "assistant" && !$0.content.isEmpty }) else {
             return
@@ -4128,7 +4736,7 @@ struct ContentView: View {
 
         guard !model.isEmpty else { return }
 
-        aiService.generateConversationTitle(
+        AIService().generateConversationTitle(
             messages: titleMessages,
             baseURL: trimmedBaseURL,
             apiFormat: apiFormat,
@@ -4140,12 +4748,12 @@ struct ContentView: View {
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { title in
-            if self.selectedConversationID == selectedConversationID {
-                persistCurrentConversation()
+            if self.selectedConversationID == conversationID {
+                persistCurrentConversation(refreshesUpdatedAt: false)
             }
 
             guard let title,
-                  let currentIndex = conversations.firstIndex(where: { $0.id == selectedConversationID }),
+                  let currentIndex = conversations.firstIndex(where: { $0.id == conversationID }),
                   !conversations[currentIndex].hasGeneratedTitle,
                   !title.isEmpty else {
                 return
@@ -4153,8 +4761,7 @@ struct ContentView: View {
 
             conversations[currentIndex].title = title
             conversations[currentIndex].hasGeneratedTitle = true
-            conversations[currentIndex].updatedAt = Date()
-            ConversationStore.saveConversations(conversations)
+            saveConversationsPreservingSelectedConversation()
         }
     }
 
