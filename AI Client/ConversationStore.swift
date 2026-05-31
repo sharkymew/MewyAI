@@ -260,10 +260,74 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     }
 }
 
+struct ChatMessageRevision: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var messages: [ChatMessage]
+
+    init(id: UUID = UUID(), messages: [ChatMessage]) {
+        self.id = id
+        self.messages = messages
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        messages = try container.decodeIfPresent([ChatMessage].self, forKey: .messages) ?? []
+    }
+
+    var normalized: ChatMessageRevision {
+        var revision = self
+        revision.messages = messages.map(\.normalized)
+        return revision
+    }
+}
+
+struct ChatMessageRevisionGroup: Identifiable, Codable, Equatable {
+    var id: UUID
+    var selectedRevisionID: UUID
+    var revisions: [ChatMessageRevision]
+
+    init(
+        id: UUID,
+        selectedRevisionID: UUID,
+        revisions: [ChatMessageRevision]
+    ) {
+        self.id = id
+        self.selectedRevisionID = selectedRevisionID
+        self.revisions = revisions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        revisions = try container.decodeIfPresent([ChatMessageRevision].self, forKey: .revisions) ?? []
+        selectedRevisionID = try container.decodeIfPresent(UUID.self, forKey: .selectedRevisionID)
+            ?? revisions.first?.id
+            ?? UUID()
+    }
+
+    var normalized: ChatMessageRevisionGroup {
+        var group = self
+        group.revisions = revisions
+            .map(\.normalized)
+            .filter { revision in
+                revision.messages.contains { $0.id == id && $0.role == "user" }
+            }
+
+        if !group.revisions.contains(where: { $0.id == group.selectedRevisionID }),
+           let firstRevisionID = group.revisions.first?.id {
+            group.selectedRevisionID = firstRevisionID
+        }
+
+        return group
+    }
+}
+
 struct AIConversation: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var title: String = "新对话"
     var messages: [ChatMessage] = []
+    var messageRevisionGroups: [ChatMessageRevisionGroup] = []
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
     var hasGeneratedTitle: Bool = false
@@ -275,6 +339,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         id: UUID = UUID(),
         title: String = "新对话",
         messages: [ChatMessage] = [],
+        messageRevisionGroups: [ChatMessageRevisionGroup] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         hasGeneratedTitle: Bool = false,
@@ -285,6 +350,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         self.id = id
         self.title = title
         self.messages = messages
+        self.messageRevisionGroups = messageRevisionGroups
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.hasGeneratedTitle = hasGeneratedTitle
@@ -298,6 +364,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? "新对话"
         messages = try container.decodeIfPresent([ChatMessage].self, forKey: .messages) ?? []
+        messageRevisionGroups = try container.decodeIfPresent([ChatMessageRevisionGroup].self, forKey: .messageRevisionGroups) ?? []
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
         hasGeneratedTitle = try container.decodeIfPresent(Bool.self, forKey: .hasGeneratedTitle) ?? false
@@ -309,6 +376,9 @@ struct AIConversation: Identifiable, Codable, Equatable {
     var normalized: AIConversation {
         var conversation = self
         conversation.messages = messages.map(\.normalized)
+        conversation.messageRevisionGroups = messageRevisionGroups
+            .map(\.normalized)
+            .filter { !$0.revisions.isEmpty }
         return conversation
     }
 
@@ -316,10 +386,17 @@ struct AIConversation: Identifiable, Codable, Equatable {
         !messages.isEmpty
     }
 
+    nonisolated var allStoredMessages: [ChatMessage] {
+        messages + messageRevisionGroups.flatMap { group in
+            group.revisions.flatMap(\.messages)
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id
         case title
         case messages
+        case messageRevisionGroups
         case createdAt
         case updatedAt
         case hasGeneratedTitle

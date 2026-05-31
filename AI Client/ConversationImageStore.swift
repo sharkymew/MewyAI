@@ -32,7 +32,7 @@ enum ConversationImageStore {
 
         let retainedFileNames = Set(
             conversations
-                .flatMap(\.messages)
+                .flatMap(\.allStoredMessages)
                 .flatMap(\.imageAttachments)
                 .compactMap(\.fileName)
                 + additionalAttachments.compactMap(\.fileName)
@@ -75,6 +75,19 @@ enum ConversationImageStore {
             var message = message
             message.imageAttachments = message.imageAttachments.map(migratedLegacyImage)
             return message
+        }
+        conversation.messageRevisionGroups = conversation.messageRevisionGroups.map { group in
+            var group = group
+            group.revisions = group.revisions.map { revision in
+                var revision = revision
+                revision.messages = revision.messages.map { message in
+                    var message = message
+                    message.imageAttachments = message.imageAttachments.map(migratedLegacyImage)
+                    return message
+                }
+                return revision
+            }
+            return group
         }
         return conversation
     }

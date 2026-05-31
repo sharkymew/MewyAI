@@ -75,6 +75,23 @@ private struct SidebarLayout {
     }
 }
 
+struct MessageRevisionNavigationState: Equatable {
+    let currentIndex: Int
+    let count: Int
+
+    var displayText: String {
+        "\(currentIndex + 1) / \(count)"
+    }
+
+    var canMovePrevious: Bool {
+        currentIndex > 0
+    }
+
+    var canMoveNext: Bool {
+        currentIndex + 1 < count
+    }
+}
+
 struct FixedTopGlassButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
@@ -1333,6 +1350,7 @@ struct ContentView: View {
                         ForEach($messages) { $message in
                             let liveAssistantDisplay = liveAssistantDisplays[message.id]
                             let isStreamingMessage = activeAssistantMessageID == message.id
+                            let revisionNavigationState = isGenerating ? nil : messageRevisionNavigationState(for: message.id)
                             let liveReasoningChannel = isStreamingMessage && activeAssistantReasoningIsExpanded
                                 ? liveAssistantDisplay?.reasoningChannel
                                 : nil
@@ -1345,6 +1363,7 @@ struct ContentView: View {
                                 streamingReasoningChannel: liveReasoningChannel,
                                 markdownRenderCache: markdownRenderCache[message.id],
                                 showsActions: activeMessageActionID == message.id,
+                                revisionNavigationState: revisionNavigationState,
                                 onSelect: {
                                     selectMessageAction(for: message.id)
                                 },
@@ -1356,6 +1375,12 @@ struct ContentView: View {
                                 },
                                 onEdit: {
                                     startEditingUserMessage(message.id)
+                                },
+                                onSelectPreviousRevision: {
+                                    selectMessageRevision(message.id, offset: -1)
+                                },
+                                onSelectNextRevision: {
+                                    selectMessageRevision(message.id, offset: 1)
                                 }
                             )
                                 .id(message.id)
@@ -2507,11 +2532,186 @@ struct ContentView: View {
         guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }),
               let messageIndex = conversations[conversationIndex].messages.firstIndex(where: { $0.id == messageID }),
               conversations[conversationIndex].messages[messageIndex].imageAttachments == imageAttachments else {
+            if saveImageContextDescriptionInMessageRevisions(
+                trimmedDescription,
+                for: messageID,
+                in: conversationID,
+                matching: imageAttachments
+            ) {
+                ConversationStore.saveConversations(conversations)
+            }
             return
         }
 
         conversations[conversationIndex].messages[messageIndex].imageContextDescription = trimmedDescription
+        _ = saveImageContextDescriptionInMessageRevisions(
+            trimmedDescription,
+            for: messageID,
+            in: conversationID,
+            matching: imageAttachments
+        )
         ConversationStore.saveConversations(conversations)
+    }
+
+    private func saveImageContextDescriptionInMessageRevisions(
+        _ description: String,
+        for messageID: UUID,
+        in conversationID: UUID,
+        matching imageAttachments: [ChatImageAttachment]
+    ) -> Bool {
+        guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }) else {
+            return false
+        }
+
+        var didUpdate = false
+        for groupIndex in conversations[conversationIndex].messageRevisionGroups.indices {
+            for revisionIndex in conversations[conversationIndex].messageRevisionGroups[groupIndex].revisions.indices {
+                guard let messageIndex = conversations[conversationIndex]
+                    .messageRevisionGroups[groupIndex]
+                    .revisions[revisionIndex]
+                    .messages
+                    .firstIndex(where: { $0.id == messageID && $0.imageAttachments == imageAttachments }) else {
+                    continue
+                }
+
+                conversations[conversationIndex]
+                    .messageRevisionGroups[groupIndex]
+                    .revisions[revisionIndex]
+                    .messages[messageIndex]
+                    .imageContextDescription = description
+                didUpdate = true
+            }
+        }
+
+        return didUpdate
+    }
+
+    private func messageRevisionNavigationState(for messageID: UUID) -> MessageRevisionNavigationState? {
+        guard let selectedConversationID,
+              let conversation = conversations.first(where: { $0.id == selectedConversationID }),
+              let group = conversation.messageRevisionGroups.first(where: { $0.id == messageID }),
+              group.revisions.count > 1,
+              let currentIndex = group.revisions.firstIndex(where: { $0.id == group.selectedRevisionID }) else {
+            return nil
+        }
+
+        return MessageRevisionNavigationState(
+            currentIndex: currentIndex,
+            count: group.revisions.count
+        )
+    }
+
+    private func createMessageRevision(
+        for messageID: UUID,
+        previousMessages: [ChatMessage],
+        newMessages: [ChatMessage]
+    ) {
+        guard previousMessages != newMessages,
+              previousMessages.contains(where: { $0.id == messageID && $0.role == "user" }),
+              newMessages.contains(where: { $0.id == messageID && $0.role == "user" }),
+              let selectedConversationID,
+              let conversationIndex = conversations.firstIndex(where: { $0.id == selectedConversationID }) else {
+            return
+        }
+
+        updateActiveMessageRevisionSnapshots(in: conversationIndex, with: previousMessages)
+
+        let newRevision = ChatMessageRevision(messages: newMessages)
+        if let groupIndex = conversations[conversationIndex]
+            .messageRevisionGroups
+            .firstIndex(where: { $0.id == messageID }) {
+            conversations[conversationIndex]
+                .messageRevisionGroups[groupIndex]
+                .revisions
+                .append(newRevision)
+            conversations[conversationIndex]
+                .messageRevisionGroups[groupIndex]
+                .selectedRevisionID = newRevision.id
+        } else {
+            let previousRevision = ChatMessageRevision(messages: previousMessages)
+            let group = ChatMessageRevisionGroup(
+                id: messageID,
+                selectedRevisionID: newRevision.id,
+                revisions: [previousRevision, newRevision]
+            )
+            conversations[conversationIndex].messageRevisionGroups.append(group)
+        }
+    }
+
+    private func updateActiveMessageRevisionSnapshots(
+        in conversationIndex: Int,
+        with snapshotMessages: [ChatMessage]
+    ) {
+        guard conversations.indices.contains(conversationIndex) else { return }
+
+        for groupIndex in conversations[conversationIndex].messageRevisionGroups.indices {
+            let group = conversations[conversationIndex].messageRevisionGroups[groupIndex]
+            guard snapshotMessages.contains(where: { $0.id == group.id && $0.role == "user" }),
+                  let revisionIndex = group.revisions.firstIndex(where: { $0.id == group.selectedRevisionID }) else {
+                continue
+            }
+
+            conversations[conversationIndex]
+                .messageRevisionGroups[groupIndex]
+                .revisions[revisionIndex]
+                .messages = snapshotMessages
+        }
+    }
+
+    private func selectMessageRevision(_ messageID: UUID, offset: Int) {
+        didTapMessageBubble = true
+        guard !isGenerating,
+              offset != 0,
+              let selectedConversationID,
+              let conversationIndex = conversations.firstIndex(where: { $0.id == selectedConversationID }),
+              let groupIndex = conversations[conversationIndex]
+                .messageRevisionGroups
+                .firstIndex(where: { $0.id == messageID }) else {
+            return
+        }
+
+        updateActiveMessageRevisionSnapshots(in: conversationIndex, with: messages)
+
+        let group = conversations[conversationIndex].messageRevisionGroups[groupIndex]
+        guard let currentIndex = group.revisions.firstIndex(where: { $0.id == group.selectedRevisionID }) else {
+            return
+        }
+
+        let nextIndex = currentIndex + offset
+        guard group.revisions.indices.contains(nextIndex) else { return }
+
+        let revision = group.revisions[nextIndex]
+        conversations[conversationIndex].messageRevisionGroups[groupIndex].selectedRevisionID = revision.id
+        restoreSelectedMessageRevision(revision.messages)
+        persistCurrentConversation()
+    }
+
+    private func restoreSelectedMessageRevision(_ revisionMessages: [ChatMessage]) {
+        speechInputController.cancelRecording()
+        messages = revisionMessages
+        resetMarkdownCache(for: messages)
+        inputDraft.clearText()
+        resetSpeechInputMergeState()
+        pendingImageAttachments = []
+        pendingFileAttachments = []
+        selectedPhotoItems = []
+        imageSelectionError = nil
+        activeAssistantMessageID = nil
+        liveAssistantDisplays = [:]
+        activeAssistantHasReasoning = false
+        activeAssistantHasContent = false
+        activeAssistantReasoningIsExpanded = false
+        activeAssistantDidCollapseReasoningAfterThinking = false
+        activeMessageActionID = nil
+        editingMessageID = nil
+        streamingTokenBuffer.reset()
+        isFlushScheduled = false
+        restoreChatScrollAfterConversationChange()
+        aiService.resetConversation(
+            with: messages,
+            systemPrompt: currentConfiguration.systemPrompt,
+            usesImageAttachments: currentConfiguration.selectedModelSupportsImages
+        )
     }
 
     private func clearInputState() {
@@ -2596,6 +2796,7 @@ struct ContentView: View {
             return
         }
 
+        let previousMessages = messages
         let keepsImageContextDescription = messages[index].imageAttachments == pendingImageAttachments
         messages[index].content = inputDraft.trimmedText
         messages[index].imageAttachments = pendingImageAttachments
@@ -2603,6 +2804,11 @@ struct ContentView: View {
             messages[index].imageContextDescription = ""
         }
         messages[index].fileAttachments = pendingFileAttachments
+        createMessageRevision(
+            for: editingMessageID,
+            previousMessages: previousMessages,
+            newMessages: messages
+        )
         invalidateMarkdownCache(for: editingMessageID)
         persistCurrentConversation()
         removeUnreferencedConversationImages()
@@ -2624,11 +2830,17 @@ struct ContentView: View {
         let editedImageContextDescription = messages[index].imageAttachments == editedImages
             ? messages[index].imageContextDescription
             : ""
+        let previousMessages = messages
         messages[index].content = editedText
         messages[index].imageAttachments = editedImages
         messages[index].imageContextDescription = editedImageContextDescription
         messages[index].fileAttachments = editedFiles
         messages.removeSubrange((index + 1)..<messages.count)
+        createMessageRevision(
+            for: editingMessageID,
+            previousMessages: previousMessages,
+            newMessages: messages
+        )
         pruneMarkdownCache()
         let context = Array(messages.prefix(index))
         persistCurrentConversation()
@@ -3789,6 +4001,7 @@ struct ContentView: View {
         conversations[index].messages = messages
         conversations[index].activeSkillIDs = Array(activeSkillIDs)
         conversations[index].activeMCPServerIDs = Array(activeMCPServerIDs)
+        updateActiveMessageRevisionSnapshots(in: index, with: messages)
         if refreshesUpdatedAt {
             conversations[index].updatedAt = Date()
         }
@@ -3870,10 +4083,13 @@ struct MessageBubble: View {
     let streamingReasoningChannel: StreamingTextUpdateChannel?
     let markdownRenderCache: MarkdownRenderCacheEntry?
     let showsActions: Bool
+    let revisionNavigationState: MessageRevisionNavigationState?
     let onSelect: () -> Void
     let onReasoningExpansionChanged: (Bool) -> Void
     let onRegenerate: () -> Void
     let onEdit: () -> Void
+    let onSelectPreviousRevision: () -> Void
+    let onSelectNextRevision: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     private var isUser: Bool {
@@ -3984,6 +4200,10 @@ struct MessageBubble: View {
                     .frame(maxWidth: 300, alignment: .trailing)
             }
 
+            if let revisionNavigationState {
+                revisionNavigationControl(revisionNavigationState)
+            }
+
             if showsActions {
                 Button {
                     onEdit()
@@ -4000,6 +4220,40 @@ struct MessageBubble: View {
         }
         .frame(maxWidth: 300, alignment: .trailing)
         .animation(.easeOut(duration: 0.16), value: showsActions)
+    }
+
+    private func revisionNavigationControl(_ state: MessageRevisionNavigationState) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                onSelectPreviousRevision()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .disabled(!state.canMovePrevious)
+            .opacity(state.canMovePrevious ? 1 : 0.32)
+
+            Text(state.displayText)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 54)
+
+            Button {
+                onSelectNextRevision()
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .disabled(!state.canMoveNext)
+            .opacity(state.canMoveNext ? 1 : 0.32)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("消息版本 \(state.displayText)")
     }
 
     private var assistantMessageStack: some View {
