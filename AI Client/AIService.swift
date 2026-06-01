@@ -132,15 +132,137 @@ enum OpenAIResponsesPart: Encodable {
     }
 }
 
+struct AnthropicCacheControl: Encodable {
+    static let ephemeral = AnthropicCacheControl(type: "ephemeral")
+
+    let type: String
+}
+
+enum AnthropicSystemContent: Encodable {
+    case text(String)
+    case parts([AnthropicSystemPart])
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .text(let text):
+            var container = encoder.singleValueContainer()
+            try container.encode(text)
+        case .parts(let parts):
+            var container = encoder.singleValueContainer()
+            try container.encode(parts)
+        }
+    }
+}
+
+struct AnthropicSystemPart: Encodable {
+    let type = "text"
+    let text: String
+    let cacheControl: AnthropicCacheControl?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case text
+        case cacheControl = "cache_control"
+    }
+}
+
+struct AnthropicClaudeCodeMetadata: Encodable {
+    let sessionID: String
+    let userID: String
+
+    init() {
+        sessionID = Self.persistedSessionID()
+        let accountUUID = Self.persistedAccountUUID()
+        let deviceID = Self.persistedDeviceID()
+        userID = "{\"session_id\":\"\(sessionID)\",\"account_uuid\":\"\(accountUUID)\",\"device_id\":\"\(deviceID)\"}"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
+    }
+
+    private static func uuidString() -> String {
+        UUID().uuidString.lowercased()
+    }
+
+    private static func uuidHex() -> String {
+        UUID().uuidString
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+    }
+
+    private static func persistedSessionID() -> String {
+        let storedSessionID = KeychainService.readAnthropicClaudeCodeSessionID()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if isValidUUIDString(storedSessionID) {
+            return storedSessionID
+        }
+
+        let sessionID = uuidString()
+        KeychainService.saveAnthropicClaudeCodeSessionID(sessionID)
+        return sessionID
+    }
+
+    private static func persistedAccountUUID() -> String {
+        let storedAccountUUID = KeychainService.readAnthropicClaudeCodeAccountUUID()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if isValidUUIDString(storedAccountUUID) {
+            return storedAccountUUID
+        }
+
+        let accountUUID = uuidString()
+        KeychainService.saveAnthropicClaudeCodeAccountUUID(accountUUID)
+        return accountUUID
+    }
+
+    private static func persistedDeviceID() -> String {
+        let storedDeviceID = KeychainService.readAnthropicClaudeCodeDeviceID()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if isValidDeviceID(storedDeviceID) {
+            return storedDeviceID
+        }
+
+        // FC relay 的可工作样例使用两个 UUID hex 拼成 64 位 device_id。
+        let deviceID = uuidHex() + uuidHex()
+        KeychainService.saveAnthropicClaudeCodeDeviceID(deviceID)
+        return deviceID
+    }
+
+    private static func isValidUUIDString(_ value: String) -> Bool {
+        UUID(uuidString: value) != nil
+    }
+
+    private static func isValidDeviceID(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy(\.isHexDigit)
+    }
+}
+
+struct AnthropicContextManagement: Encodable {
+    static let claudeCodeDefault = AnthropicContextManagement(edits: [
+        Edit(type: "clear_tool_uses_20250919")
+    ])
+
+    let edits: [Edit]
+
+    struct Edit: Encodable {
+        let type: String
+    }
+}
+
 struct AnthropicMessagesRequest: Encodable {
     let model: String
     let maxTokens: Int
     let messages: [AnthropicMessage]
-    let system: String?
+    let system: AnthropicSystemContent?
     let stream: Bool
     let tools: [AnthropicToolDefinition]?
     let temperature: Double?
     let topP: Double?
+    let metadata: AnthropicClaudeCodeMetadata?
+    let contextManagement: AnthropicContextManagement?
 
     enum CodingKeys: String, CodingKey {
         case model
@@ -151,6 +273,8 @@ struct AnthropicMessagesRequest: Encodable {
         case tools
         case temperature
         case topP = "top_p"
+        case metadata
+        case contextManagement = "context_management"
     }
 }
 
@@ -187,6 +311,13 @@ struct AnthropicToolDefinition: Encodable {
 struct AnthropicMessage: Encodable {
     let role: String
     let content: AnthropicMessageContent
+
+    func applyingEphemeralCacheControlToLastContentPart() -> AnthropicMessage {
+        AnthropicMessage(
+            role: role,
+            content: content.applyingEphemeralCacheControlToLastPart()
+        )
+    }
 }
 
 enum AnthropicMessageContent: Encodable {
@@ -203,13 +334,42 @@ enum AnthropicMessageContent: Encodable {
             try container.encode(parts)
         }
     }
+
+    func applyingEphemeralCacheControlToLastPart() -> AnthropicMessageContent {
+        switch self {
+        case .text(let text):
+            return .parts([.cached(.text(text))])
+        case .parts(let parts):
+            guard !parts.isEmpty else {
+                return .parts([.cached(.text(""))])
+            }
+
+            if let lastTextIndex = parts.lastIndex(where: { part in
+                if case .text = part {
+                    return true
+                }
+                return false
+            }) {
+                var cachedParts = parts
+                let textPart = cachedParts.remove(at: lastTextIndex)
+                cachedParts.append(.cached(textPart))
+                return .parts(cachedParts)
+            }
+
+            var cachedParts = parts
+            let lastPart = cachedParts.removeLast()
+            cachedParts.append(.cached(lastPart))
+            return .parts(cachedParts)
+        }
+    }
 }
 
-enum AnthropicContentPart: Encodable {
+indirect enum AnthropicContentPart: Encodable {
     case text(String)
     case image(mediaType: String, data: String)
     case toolUse(id: String, name: String, input: JSONValue)
     case toolResult(toolUseID: String, content: String, isError: Bool)
+    case cached(AnthropicContentPart)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -221,6 +381,7 @@ enum AnthropicContentPart: Encodable {
         case toolUseID = "tool_use_id"
         case content
         case isError = "is_error"
+        case cacheControl = "cache_control"
     }
 
     private enum SourceCodingKeys: String, CodingKey {
@@ -230,22 +391,29 @@ enum AnthropicContentPart: Encodable {
     }
 
     func encode(to encoder: Encoder) throws {
+        try encode(to: encoder, cacheControl: nil)
+    }
+
+    private func encode(to encoder: Encoder, cacheControl: AnthropicCacheControl?) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .text(let text):
             try container.encode("text", forKey: .type)
             try container.encode(text, forKey: .text)
+            try encodeCacheControl(cacheControl, to: &container)
         case .image(let mediaType, let data):
             try container.encode("image", forKey: .type)
             var sourceContainer = container.nestedContainer(keyedBy: SourceCodingKeys.self, forKey: .source)
             try sourceContainer.encode("base64", forKey: .type)
             try sourceContainer.encode(mediaType, forKey: .mediaType)
             try sourceContainer.encode(data, forKey: .data)
+            try encodeCacheControl(cacheControl, to: &container)
         case .toolUse(let id, let name, let input):
             try container.encode("tool_use", forKey: .type)
             try container.encode(id, forKey: .id)
             try container.encode(name, forKey: .name)
             try container.encode(input, forKey: .input)
+            try encodeCacheControl(cacheControl, to: &container)
         case .toolResult(let toolUseID, let content, let isError):
             try container.encode("tool_result", forKey: .type)
             try container.encode(toolUseID, forKey: .toolUseID)
@@ -253,6 +421,18 @@ enum AnthropicContentPart: Encodable {
             if isError {
                 try container.encode(true, forKey: .isError)
             }
+            try encodeCacheControl(cacheControl, to: &container)
+        case .cached(let part):
+            try part.encode(to: encoder, cacheControl: cacheControl ?? .ephemeral)
+        }
+    }
+
+    private func encodeCacheControl(
+        _ cacheControl: AnthropicCacheControl?,
+        to container: inout KeyedEncodingContainer<CodingKeys>
+    ) throws {
+        if let cacheControl {
+            try container.encode(cacheControl, forKey: .cacheControl)
         }
     }
 }
@@ -970,11 +1150,33 @@ class AIService {
     private static let maxErrorBodyCharacters = 4_000
     private static let maxStreamingContentCharacters = 200_000
     private static let maxStreamingReasoningCharacters = 120_000
+    private static let anthropicClaudeCodeSystemPrompt = "You are Claude Code, Anthropic's official CLI for Claude."
+    private static let anthropicClaudeCodeBetaHeader = "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24"
+    private static let anthropicOneMillionContextBetaHeader = "context-1m-2025-08-07,context-management-2025-06-27"
+    private static let anthropicClaudeCodeManagedHeaders: Set<String> = [
+        "accept",
+        "authorization",
+        "content-type",
+        "x-api-key",
+        "anthropic-version",
+        "anthropic-beta",
+        "anthropic-dangerous-direct-browser-access",
+        "user-agent",
+        "x-app",
+        "x-claude-code-session-id"
+    ]
+
+    private struct AnthropicModelSelection {
+        let requestModel: String
+        let usesOneMillionContext: Bool
+    }
+
     private enum BoundedResponseDataError: Error {
         case responseTooLarge
     }
 
     private let session: URLSession
+    private let anthropicClaudeCodeMetadata = AnthropicClaudeCodeMetadata()
     private var conversationHistory = AIService.initialConversationHistory(
         systemPrompt: AIConfiguration.defaultSystemPrompt
     )
@@ -1125,6 +1327,7 @@ class AIService {
         reasoningEffort: ReasoningEffort?,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
+        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         tools: [AgentToolDefinition] = []
     ) throws -> Data {
         let encoder = JSONEncoder()
@@ -1155,16 +1358,24 @@ class AIService {
                 maxOutputTokens: modelParameters?.maxOutputTokens
             ))
         case .anthropicMessages:
-            let anthropicMessages = Self.anthropicMessages(from: messages)
+            let anthropicModel = Self.anthropicModelSelection(from: model)
+            let usesOneMillionContext = anthropicClaudeCodeImpersonationEnabled
+                || anthropicModel.usesOneMillionContext
+            let anthropicMessages = Self.anthropicMessages(
+                from: messages,
+                usesClaudeCodeImpersonation: anthropicClaudeCodeImpersonationEnabled
+            )
             return try encoder.encode(AnthropicMessagesRequest(
-                model: model,
-                maxTokens: max(1, anthropicMaxTokens),
+                model: anthropicModel.requestModel,
+                maxTokens: usesOneMillionContext ? 64_000 : max(1, anthropicMaxTokens),
                 messages: anthropicMessages.messages,
                 system: anthropicMessages.system,
                 stream: stream,
                 tools: anthropicTools(from: tools),
                 temperature: modelParameters?.temperature,
-                topP: modelParameters?.topP
+                topP: modelParameters?.topP,
+                metadata: anthropicClaudeCodeImpersonationEnabled ? anthropicClaudeCodeMetadata : nil,
+                contextManagement: usesOneMillionContext ? .claudeCodeDefault : nil
             ))
         case .vertexAIExpress:
             let vertexRequest = Self.vertexRequest(
@@ -1223,8 +1434,9 @@ class AIService {
     }
 
     private static func anthropicMessages(
-        from messages: [ChatRequestMessage]
-    ) -> (system: String?, messages: [AnthropicMessage]) {
+        from messages: [ChatRequestMessage],
+        usesClaudeCodeImpersonation: Bool
+    ) -> (system: AnthropicSystemContent?, messages: [AnthropicMessage]) {
         var systemMessages = [String]()
         var requestMessages = [AnthropicMessage]()
 
@@ -1275,10 +1487,52 @@ class AIService {
             ))
         }
 
+        if usesClaudeCodeImpersonation,
+           let lastMessage = requestMessages.popLast() {
+            requestMessages.append(lastMessage.applyingEphemeralCacheControlToLastContentPart())
+        }
+
         return (
-            systemMessages.isEmpty ? nil : systemMessages.joined(separator: "\n\n"),
+            anthropicSystemContent(
+                from: systemMessages,
+                usesClaudeCodeImpersonation: usesClaudeCodeImpersonation
+            ),
             requestMessages
         )
+    }
+
+    private static func anthropicSystemContent(
+        from systemMessages: [String],
+        usesClaudeCodeImpersonation: Bool
+    ) -> AnthropicSystemContent? {
+        if usesClaudeCodeImpersonation {
+            return .parts([
+                AnthropicSystemPart(
+                    text: anthropicClaudeCodeSystemPrompt,
+                    cacheControl: .ephemeral
+                )
+            ])
+        }
+
+        guard !systemMessages.isEmpty else { return nil }
+        return .text(systemMessages.joined(separator: "\n\n"))
+    }
+
+    private static func anthropicModelSelection(from model: String) -> AnthropicModelSelection {
+        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = "[1m]"
+        guard trimmedModel.lowercased().hasSuffix(suffix) else {
+            return AnthropicModelSelection(requestModel: trimmedModel, usesOneMillionContext: false)
+        }
+
+        let suffixStartIndex = trimmedModel.index(trimmedModel.endIndex, offsetBy: -suffix.count)
+        let baseModel = trimmedModel[..<suffixStartIndex]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !baseModel.isEmpty else {
+            return AnthropicModelSelection(requestModel: trimmedModel, usesOneMillionContext: false)
+        }
+
+        return AnthropicModelSelection(requestModel: baseModel, usesOneMillionContext: true)
     }
 
     private static func vertexRequest(
@@ -1374,6 +1628,7 @@ class AIService {
         apiFormat: AIAPIFormat,
         apiKey: String,
         customHeaders: String,
+        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         completion: @escaping (Result<[AIModelConfiguration], AIServiceError>) -> Void
     ) {
         guard apiFormat != .vertexAIExpress else {
@@ -1397,7 +1652,8 @@ class AIService {
             apiFormat: apiFormat,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            acceptsEventStream: false
+            acceptsEventStream: false,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
         )
         request.httpMethod = "GET"
         request.httpBody = nil
@@ -1462,6 +1718,7 @@ class AIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
+        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
@@ -1471,7 +1728,8 @@ class AIService {
             apiFormat: apiFormat,
             model: model,
             apiKey: apiKey,
-            isStreaming: false
+            isStreaming: false,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
         ) else {
             completion(nil)
             return
@@ -1504,7 +1762,8 @@ class AIService {
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             modelParameters: modelParameters,
-            anthropicMaxTokens: anthropicMaxTokens
+            anthropicMaxTokens: anthropicMaxTokens,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
         ) else {
             completion(nil)
             return
@@ -1513,9 +1772,11 @@ class AIService {
         var request = makeRequest(
             url: url,
             apiFormat: apiFormat,
+            model: model,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            acceptsEventStream: false
+            acceptsEventStream: false,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
         )
         request.httpBody = jsonData
 
@@ -1553,6 +1814,7 @@ class AIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
+        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
@@ -1563,7 +1825,8 @@ class AIService {
                 apiFormat: apiFormat,
                 model: model,
                 apiKey: apiKey,
-                isStreaming: false
+                isStreaming: false,
+                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
               ) else {
             completion(nil)
             return
@@ -1589,7 +1852,8 @@ class AIService {
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             modelParameters: modelParameters,
-            anthropicMaxTokens: anthropicMaxTokens
+            anthropicMaxTokens: anthropicMaxTokens,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
         ) else {
             completion(nil)
             return
@@ -1598,9 +1862,11 @@ class AIService {
         var request = makeRequest(
             url: url,
             apiFormat: apiFormat,
+            model: model,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            acceptsEventStream: false
+            acceptsEventStream: false,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
         )
         request.httpBody = jsonData
 
@@ -1742,6 +2008,7 @@ class AIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
+        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         usesImageAttachments: Bool = true,
@@ -1754,7 +2021,8 @@ class AIService {
                 apiFormat: apiFormat,
                 model: model,
                 apiKey: apiKey,
-                isStreaming: false
+                isStreaming: false,
+                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
             )
         } catch let error as AIServiceError {
             completion(error.localizedDescription)
@@ -1783,7 +2051,8 @@ class AIService {
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             modelParameters: modelParameters,
-            anthropicMaxTokens: anthropicMaxTokens
+            anthropicMaxTokens: anthropicMaxTokens,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
         ) else {
             completion("请求体编码失败")
             return
@@ -1792,9 +2061,11 @@ class AIService {
         var request = makeRequest(
             url: url,
             apiFormat: apiFormat,
+            model: model,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            acceptsEventStream: false
+            acceptsEventStream: false,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
         )
         request.httpBody = jsonData
         let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
@@ -1850,6 +2121,7 @@ class AIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
+        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         usesImageAttachments: Bool,
@@ -1877,6 +2149,7 @@ class AIService {
                 model: model,
                 modelParameters: modelParameters,
                 anthropicMaxTokens: anthropicMaxTokens,
+                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
                 reasoningEnabled: reasoningEnabled,
                 reasoningEffort: reasoningEffort,
                 usesImageAttachments: usesImageAttachments,
@@ -1899,7 +2172,8 @@ class AIService {
                 apiFormat: apiFormat,
                 model: model,
                 apiKey: apiKey,
-                isStreaming: true
+                isStreaming: true,
+                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
             )
         } catch let error as AIServiceError {
             onError(error.localizedDescription)
@@ -1928,7 +2202,8 @@ class AIService {
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             modelParameters: modelParameters,
-            anthropicMaxTokens: anthropicMaxTokens
+            anthropicMaxTokens: anthropicMaxTokens,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
         ) else {
             onError("请求体编码失败")
             return
@@ -1937,9 +2212,11 @@ class AIService {
         var request = makeRequest(
             url: url,
             apiFormat: apiFormat,
+            model: model,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            acceptsEventStream: true
+            acceptsEventStream: true,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
         )
         request.httpBody = jsonData
         let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
@@ -1988,7 +2265,13 @@ class AIService {
         onError: @escaping (String) -> Void
     ) async -> StreamedResponse? {
         do {
+            #if DEBUG
+            debugLogCookieState(for: request, phase: "before stream request")
+            #endif
             let (bytes, response) = try await session.bytes(for: request)
+            #if DEBUG
+            debugLogCookieResponse(response, for: request, phase: "stream response headers")
+            #endif
 
             if let httpResponse = response as? HTTPURLResponse,
                !(200...299).contains(httpResponse.statusCode) {
@@ -2180,6 +2463,7 @@ class AIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
+        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         usesImageAttachments: Bool,
@@ -2205,14 +2489,16 @@ class AIService {
                 apiFormat: apiFormat,
                 model: model,
                 apiKey: apiKey,
-                isStreaming: false
+                isStreaming: false,
+                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
             )
             streamURL = try requestURL(
                 from: baseURL,
                 apiFormat: apiFormat,
                 model: model,
                 apiKey: apiKey,
-                isStreaming: true
+                isStreaming: true,
+                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
             )
         } catch let error as AIServiceError {
             onError(error.localizedDescription)
@@ -2261,7 +2547,8 @@ class AIService {
                         reasoningEnabled: reasoningEnabled,
                         reasoningEffort: reasoningEffort,
                         modelParameters: modelParameters,
-                        anthropicMaxTokens: anthropicMaxTokens
+                        anthropicMaxTokens: anthropicMaxTokens,
+                        anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
                     )
                 } catch {
                     await MainActor.run { onError("请求体编码失败") }
@@ -2272,9 +2559,11 @@ class AIService {
                 var finalRequest = makeRequest(
                     url: streamURL,
                     apiFormat: apiFormat,
+                    model: model,
                     apiKey: apiKey,
                     customHeaders: customHeaders,
-                    acceptsEventStream: true
+                    acceptsEventStream: true,
+                    anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
                 )
                 finalRequest.httpBody = finalJSONData
 
@@ -2321,6 +2610,7 @@ class AIService {
                         reasoningEffort: reasoningEffort,
                         modelParameters: modelParameters,
                         anthropicMaxTokens: anthropicMaxTokens,
+                        anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
                         tools: agentTools
                     )
                 } catch {
@@ -2332,9 +2622,11 @@ class AIService {
                 var request = makeRequest(
                     url: toolURL,
                     apiFormat: apiFormat,
+                    model: model,
                     apiKey: apiKey,
                     customHeaders: customHeaders,
-                    acceptsEventStream: false
+                    acceptsEventStream: false,
+                    anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
                 )
                 request.httpBody = jsonData
 
@@ -2492,25 +2784,40 @@ class AIService {
     private func makeRequest(
         url: URL,
         apiFormat: AIAPIFormat,
+        model: String = "",
         apiKey: String,
         customHeaders: String,
-        acceptsEventStream: Bool
+        acceptsEventStream: Bool,
+        anthropicClaudeCodeImpersonationEnabled: Bool = false
     ) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
 
         if acceptsEventStream {
             request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         }
 
         let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let usesAnthropicClaudeCodeImpersonation = apiFormat == .anthropicMessages
+            && anthropicClaudeCodeImpersonationEnabled
+        let usesAnthropicOneMillionContext = apiFormat == .anthropicMessages
+            && (anthropicClaudeCodeImpersonationEnabled || Self.anthropicModelSelection(from: model).usesOneMillionContext)
+
+        if usesAnthropicClaudeCodeImpersonation {
+            request.setValue("application/json", forHTTPHeaderField: "accept")
+        }
+
         if !trimmedAPIKey.isEmpty {
             switch apiFormat {
             case .openAIChatCompletions, .openAIResponses:
                 request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
             case .anthropicMessages:
-                request.setValue(trimmedAPIKey, forHTTPHeaderField: "x-api-key")
+                if usesAnthropicClaudeCodeImpersonation {
+                    request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "authorization")
+                } else {
+                    request.setValue(trimmedAPIKey, forHTTPHeaderField: "x-api-key")
+                }
             case .vertexAIExpress:
                 break
             }
@@ -2520,11 +2827,40 @@ class AIService {
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         }
 
+        if usesAnthropicClaudeCodeImpersonation {
+            request.setValue(Self.anthropicClaudeCodeBetaHeader, forHTTPHeaderField: "anthropic-beta")
+            request.setValue("true", forHTTPHeaderField: "anthropic-dangerous-direct-browser-access")
+            request.setValue("claude-cli/2.1.156 (external, sdk-cli)", forHTTPHeaderField: "user-agent")
+            request.setValue("cli", forHTTPHeaderField: "x-app")
+            request.setValue(anthropicClaudeCodeMetadata.sessionID, forHTTPHeaderField: "x-claude-code-session-id")
+            request.setValue("arm64", forHTTPHeaderField: "x-stainless-arch")
+            request.setValue("js", forHTTPHeaderField: "x-stainless-lang")
+            request.setValue("MacOS", forHTTPHeaderField: "x-stainless-os")
+            request.setValue("0.94.0", forHTTPHeaderField: "x-stainless-package-version")
+            request.setValue("0", forHTTPHeaderField: "x-stainless-retry-count")
+            request.setValue("node", forHTTPHeaderField: "x-stainless-runtime")
+            request.setValue("v24.3.0", forHTTPHeaderField: "x-stainless-runtime-version")
+            request.setValue("600", forHTTPHeaderField: "x-stainless-timeout")
+        } else if usesAnthropicOneMillionContext {
+            request.setValue(Self.anthropicOneMillionContextBetaHeader, forHTTPHeaderField: "anthropic-beta")
+        }
+
         for header in CustomHeaderSecurity.requestHeaders(from: customHeaders) {
+            let headerName = header.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if (usesAnthropicClaudeCodeImpersonation && Self.isAnthropicClaudeCodeManagedHeader(headerName))
+                || (usesAnthropicOneMillionContext && headerName == "anthropic-beta") {
+                continue
+            }
             request.setValue(header.value, forHTTPHeaderField: header.name)
         }
 
         return request
+    }
+
+    private static func isAnthropicClaudeCodeManagedHeader(_ name: String) -> Bool {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return anthropicClaudeCodeManagedHeaders.contains(normalizedName)
+            || normalizedName.hasPrefix("x-stainless-")
     }
 
     private func thinkingConfig(from reasoningEnabled: Bool?) -> ThinkingConfig? {
@@ -2537,7 +2873,8 @@ class AIService {
         apiFormat: AIAPIFormat,
         model: String,
         apiKey: String,
-        isStreaming: Bool
+        isStreaming: Bool,
+        anthropicClaudeCodeImpersonationEnabled: Bool = false
     ) throws -> URL {
         var resolvedURLString = urlString
         if apiFormat == .vertexAIExpress {
@@ -2566,6 +2903,15 @@ class AIService {
                 queryItems.append(URLQueryItem(name: "alt", value: "sse"))
             }
             components.queryItems = queryItems.isEmpty ? nil : queryItems
+        }
+
+        let usesAnthropicOneMillionContext = anthropicClaudeCodeImpersonationEnabled
+            || Self.anthropicModelSelection(from: model).usesOneMillionContext
+        if apiFormat == .anthropicMessages, usesAnthropicOneMillionContext {
+            var queryItems = components.queryItems ?? []
+            queryItems.removeAll { $0.name == "beta" }
+            queryItems.append(URLQueryItem(name: "beta", value: "true"))
+            components.queryItems = queryItems
         }
 
         guard let requestURL = components.url else {
@@ -2854,18 +3200,27 @@ class AIService {
 
     private static func makeSecureSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpCookieStorage = nil
-        configuration.httpShouldSetCookies = false
+        configuration.httpShouldSetCookies = true
+        configuration.httpCookieAcceptPolicy = .always
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 300
         configuration.waitsForConnectivity = true
+        #if DEBUG
+        debugLogCookieConfiguration(configuration)
+        #endif
         return URLSession(configuration: configuration)
     }
 
     private func boundedResponseData(for request: URLRequest) async throws -> (Data, URLResponse) {
+        #if DEBUG
+        debugLogCookieState(for: request, phase: "before request")
+        #endif
         let (bytes, response) = try await session.bytes(for: request)
+        #if DEBUG
+        debugLogCookieResponse(response, for: request, phase: "response headers")
+        #endif
         let expectedLength = response.expectedContentLength
         if expectedLength > Int64(Self.maxResponseByteCount) {
             throw BoundedResponseDataError.responseTooLarge
@@ -2882,8 +3237,67 @@ class AIService {
             }
             data.append(byte)
         }
+        #if DEBUG
+        debugLogCookieState(for: request, phase: "after response body")
+        #endif
         return (data, response)
     }
+
+    #if DEBUG
+    private static func debugLogCookieConfiguration(_ configuration: URLSessionConfiguration) {
+        print(
+            "[AIService Cookie] configuration",
+            "storage=\(configuration.httpCookieStorage != nil)",
+            "shouldSet=\(configuration.httpShouldSetCookies)",
+            "acceptPolicy=\(String(describing: configuration.httpCookieAcceptPolicy))"
+        )
+    }
+
+    private func debugLogCookieState(for request: URLRequest, phase: String) {
+        guard let url = request.url else {
+            print("[AIService Cookie] \(phase) url=nil")
+            return
+        }
+
+        let storage = session.configuration.httpCookieStorage
+        let cookieNames = (storage?.cookies(for: url) ?? []).map(\.name).sorted()
+        let hasManualCookieHeader = request.value(forHTTPHeaderField: "Cookie") != nil
+        print(
+            "[AIService Cookie] \(phase)",
+            "host=\(url.host ?? "-")",
+            "storage=\(storage != nil)",
+            "shouldSet=\(session.configuration.httpShouldSetCookies)",
+            "storedCookieNames=\(cookieNames)",
+            "manualCookieHeader=\(hasManualCookieHeader)"
+        )
+    }
+
+    private func debugLogCookieResponse(_ response: URLResponse, for request: URLRequest, phase: String) {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            print("[AIService Cookie] \(phase) response=non-http")
+            return
+        }
+
+        let setCookieNames = Self.responseCookieNames(from: httpResponse, requestURL: request.url)
+        print(
+            "[AIService Cookie] \(phase)",
+            "status=\(httpResponse.statusCode)",
+            "setCookieNames=\(setCookieNames)"
+        )
+        debugLogCookieState(for: request, phase: "\(phase) storage")
+    }
+
+    private static func responseCookieNames(from response: HTTPURLResponse, requestURL: URL?) -> [String] {
+        guard let requestURL else { return [] }
+        let headerFields = response.allHeaderFields.reduce(into: [String: String]()) { result, entry in
+            guard let key = entry.key as? String else { return }
+            result[key] = String(describing: entry.value)
+        }
+        return HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: requestURL)
+            .map(\.name)
+            .sorted()
+    }
+    #endif
 
     private static func validatedRequestURL(from urlString: String) throws -> URL {
         guard let url = URL(string: urlString),

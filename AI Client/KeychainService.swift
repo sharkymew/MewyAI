@@ -5,6 +5,10 @@ nonisolated enum KeychainService {
     private static let apiKeyService = "AIClient.APIKey"
     private static let agentSecretService = "AIClient.AgentSecret"
     private static let headerSecretServicePrefix = "AIClient.HeaderSecret."
+    private static let anthropicClaudeCodeIdentityService = "AIClient.AnthropicClaudeCodeIdentity"
+    private static let anthropicClaudeCodeSessionIDAccount = "com.sharkymew.MewyAI.claude_session_id"
+    private static let anthropicClaudeCodeAccountUUIDAccount = "com.sharkymew.MewyAI.claude_account_uuid"
+    private static let anthropicClaudeCodeDeviceIDAccount = "com.sharkymew.MewyAI.claude_device_id"
     private static let accessible = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
 
     static func readAPIKey(for configurationID: UUID) -> String {
@@ -33,6 +37,54 @@ nonisolated enum KeychainService {
     @discardableResult
     static func deleteAgentSecret(for id: UUID) -> Bool {
         deleteSecret(service: agentSecretService, account: id.uuidString)
+    }
+
+    static func readAnthropicClaudeCodeSessionID() -> String {
+        readSecret(
+            service: anthropicClaudeCodeIdentityService,
+            account: anthropicClaudeCodeSessionIDAccount
+        )
+    }
+
+    @discardableResult
+    static func saveAnthropicClaudeCodeSessionID(_ value: String) -> Bool {
+        saveSecret(
+            value,
+            service: anthropicClaudeCodeIdentityService,
+            account: anthropicClaudeCodeSessionIDAccount
+        )
+    }
+
+    static func readAnthropicClaudeCodeAccountUUID() -> String {
+        readSecret(
+            service: anthropicClaudeCodeIdentityService,
+            account: anthropicClaudeCodeAccountUUIDAccount
+        )
+    }
+
+    @discardableResult
+    static func saveAnthropicClaudeCodeAccountUUID(_ value: String) -> Bool {
+        saveSecret(
+            value,
+            service: anthropicClaudeCodeIdentityService,
+            account: anthropicClaudeCodeAccountUUIDAccount
+        )
+    }
+
+    static func readAnthropicClaudeCodeDeviceID() -> String {
+        readSecret(
+            service: anthropicClaudeCodeIdentityService,
+            account: anthropicClaudeCodeDeviceIDAccount
+        )
+    }
+
+    @discardableResult
+    static func saveAnthropicClaudeCodeDeviceID(_ value: String) -> Bool {
+        saveSecret(
+            value,
+            service: anthropicClaudeCodeIdentityService,
+            account: anthropicClaudeCodeDeviceIDAccount
+        )
     }
 
     static func readHeaderSecret(for configurationID: UUID, headerName: String) -> String {

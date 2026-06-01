@@ -2394,6 +2394,7 @@ struct ContentView: View {
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelParameters = configuration.selectedModelConfiguration
         let anthropicMaxTokens = configuration.anthropicMaxTokens
+        let anthropicClaudeCodeImpersonationEnabled = configuration.anthropicClaudeCodeImpersonationEnabled
         let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
         let usesImageAttachments = configuration.selectedModelSupportsImages
@@ -2518,6 +2519,7 @@ struct ContentView: View {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             usesImageAttachments: usesImageAttachments,
@@ -2585,6 +2587,7 @@ struct ContentView: View {
                 model: model,
                 modelParameters: modelParameters,
                 anthropicMaxTokens: anthropicMaxTokens,
+                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
                 reasoningEnabled: reasoningEnabled,
                 reasoningEffort: reasoningEffort
             )
@@ -2886,6 +2889,7 @@ struct ContentView: View {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
+        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?
     ) {
@@ -2898,6 +2902,7 @@ struct ContentView: View {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { description in
@@ -4731,6 +4736,7 @@ struct ContentView: View {
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelParameters = configuration.selectedModelConfiguration
         let anthropicMaxTokens = configuration.anthropicMaxTokens
+        let anthropicClaudeCodeImpersonationEnabled = configuration.anthropicClaudeCodeImpersonationEnabled
         let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
 
@@ -4745,6 +4751,7 @@ struct ContentView: View {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { title in

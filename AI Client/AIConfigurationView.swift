@@ -241,6 +241,7 @@ struct AIConfigurationView: View {
                     .keyboardType(.numberPad)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                Toggle("伪装为 Claude Code", isOn: anthropicClaudeCodeImpersonationBinding)
             }
         } header: {
             Text("请求地址")
@@ -647,6 +648,17 @@ struct AIConfigurationView: View {
             }
         )
     }
+
+    private var anthropicClaudeCodeImpersonationBinding: Binding<Bool> {
+        Binding(
+            get: { selectedConfiguration?.anthropicClaudeCodeImpersonationEnabled == true },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    configuration.anthropicClaudeCodeImpersonationEnabled = newValue
+                }
+            }
+        )
+    }
     
     private var selectedAPIKeyBinding: Binding<String> {
         Binding(
@@ -668,6 +680,9 @@ struct AIConfigurationView: View {
         case .openAIChatCompletions, .openAIResponses:
             return "填写 API Key 时会自动发送 Authorization: Bearer <API Key>。API Key 会存入钥匙串。"
         case .anthropicMessages:
+            if selectedConfiguration?.anthropicClaudeCodeImpersonationEnabled == true {
+                return "Claude Code 伪装开启时会把 API Key 作为 Authorization: Bearer <API Key> 发送，并接管 Anthropic 关键请求头。API Key 会存入钥匙串。"
+            }
             return "Anthropic Messages 会把 API Key 作为 x-api-key 发送，并自动附加 anthropic-version。API Key 会存入钥匙串。"
         case .vertexAIExpress:
             return "Vertex Express 会把 API Key 加到请求 query 中；错误诊断会隐藏 query，API Key 会存入钥匙串。"
@@ -1000,7 +1015,8 @@ struct AIConfigurationView: View {
             baseURL: configuration.requestURLString,
             apiFormat: configuration.apiFormat,
             apiKey: configuration.apiKey,
-            customHeaders: configuration.customHeaders
+            customHeaders: configuration.customHeaders,
+            anthropicClaudeCodeImpersonationEnabled: configuration.anthropicClaudeCodeImpersonationEnabled
         ) { result in
             isFetchingModels = false
             

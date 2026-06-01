@@ -525,6 +525,7 @@ private struct SkillCreatorSheet: View {
             model: model,
             modelParameters: configuration.selectedModelConfiguration,
             anthropicMaxTokens: configuration.anthropicMaxTokens,
+            anthropicClaudeCodeImpersonationEnabled: configuration.anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: nil,
             reasoningEffort: nil,
             usesImageAttachments: false

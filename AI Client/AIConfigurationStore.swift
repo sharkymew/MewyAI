@@ -76,7 +76,7 @@ enum AIAPIFormat: String, CaseIterable, Codable, Identifiable {
         case .openAIResponses:
             return "Responses API 默认 endpoint 是 responses，模型参数会按 Responses 字段名发送。"
         case .anthropicMessages:
-            return "Anthropic Messages 默认 endpoint 是 v1/messages，认证使用 x-api-key。Max Tokens 仅对当前配置生效。"
+            return "Anthropic Messages 默认 endpoint 是 v1/messages，默认认证使用 x-api-key；模型名以 [1m] 结尾时会按 1M 上下文发送但实际 model 会去掉该后缀。开启 Claude Code 伪装后会改用 Bearer，并自动附加 beta=true、Claude Code headers 和请求体字段。Max Tokens 仅对当前配置生效。"
         case .vertexAIExpress:
             return "Vertex Express 默认 endpoint 使用 {model} 占位符，发送时会替换为当前模型 ID。"
         }
@@ -478,6 +478,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     var endpoint: String
     var apiFormat: AIAPIFormat
     var anthropicMaxTokens: Int
+    var anthropicClaudeCodeImpersonationEnabled: Bool
     var apiKey: String
     var customHeaders: String
     var systemPrompt: String
@@ -530,6 +531,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         endpoint: String = "chat/completions",
         apiFormat: AIAPIFormat = .openAIChatCompletions,
         anthropicMaxTokens: Int = AIConfiguration.defaultAnthropicMaxTokens,
+        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         apiKey: String = "",
         customHeaders: String = "",
         systemPrompt: String = AIConfiguration.defaultSystemPrompt,
@@ -548,6 +550,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         self.endpoint = endpoint
         self.apiFormat = apiFormat
         self.anthropicMaxTokens = max(1, anthropicMaxTokens)
+        self.anthropicClaudeCodeImpersonationEnabled = anthropicClaudeCodeImpersonationEnabled
         self.apiKey = apiKey
         if !apiKey.isEmpty {
             KeychainService.saveAPIKey(apiKey, for: id)
@@ -576,6 +579,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         case endpoint
         case apiFormat
         case anthropicMaxTokens
+        case anthropicClaudeCodeImpersonationEnabled
         case customHeaders
         case systemPrompt
         case promptPresets
@@ -613,6 +617,10 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         let decodedAnthropicMaxTokens = try container.decodeIfPresent(Int.self, forKey: .anthropicMaxTokens)
             ?? Self.defaultAnthropicMaxTokens
         anthropicMaxTokens = max(1, decodedAnthropicMaxTokens)
+        anthropicClaudeCodeImpersonationEnabled = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .anthropicClaudeCodeImpersonationEnabled
+        ) ?? false
         reasoningEnabled = try container.decodeIfPresent(Bool.self, forKey: .reasoningEnabled) ?? true
         reasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort) ?? .medium
         generatesImageContextDescriptions = try container.decodeIfPresent(
@@ -669,6 +677,10 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         try container.encode(endpoint, forKey: .endpoint)
         try container.encode(apiFormat, forKey: .apiFormat)
         try container.encode(anthropicMaxTokens, forKey: .anthropicMaxTokens)
+        try container.encode(
+            anthropicClaudeCodeImpersonationEnabled,
+            forKey: .anthropicClaudeCodeImpersonationEnabled
+        )
         try container.encode(
             CustomHeaderSecurity.encodedHeaders(customHeaders),
             forKey: .customHeaders
