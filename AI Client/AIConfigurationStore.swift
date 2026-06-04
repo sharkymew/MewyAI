@@ -76,7 +76,7 @@ enum AIAPIFormat: String, CaseIterable, Codable, Identifiable {
         case .openAIResponses:
             return "Responses API 默认 endpoint 是 responses，模型参数会按 Responses 字段名发送。"
         case .anthropicMessages:
-            return "Anthropic Messages 默认 endpoint 是 v1/messages，默认认证使用 x-api-key；模型名以 [1m] 结尾时会按 1M 上下文发送但实际 model 会去掉该后缀。开启 Claude Code 伪装后会改用 Bearer，并自动附加 beta=true、Claude Code headers 和请求体字段。Max Tokens 仅对当前配置生效。"
+            return "Anthropic Messages 默认 endpoint 是 v1/messages，默认认证使用 x-api-key；模型名以 [1m] 结尾时会按 1M 上下文发送但实际 model 会去掉该后缀。开启 Claude Code 伪装后，所有模型都会改用 Bearer，并自动附加 beta=true、1M context、Claude Code headers 和请求体字段。Max Tokens 仅对当前配置生效。"
         case .vertexAIExpress:
             return "Vertex Express 默认 endpoint 使用 {model} 占位符，发送时会替换为当前模型 ID。"
         }
@@ -739,6 +739,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
 
 enum AIConfigurationStore {
     private static let configurationsKey = "aiConfigurations"
+    private static let promptPresetsKey = "aiPromptPresets"
     private static let selectedConfigurationIDKey = "selectedAIConfigurationID"
     static let hapticFeedbackEnabledKey = "hapticFeedbackEnabled"
     static let defaultHapticFeedbackEnabled = true
@@ -760,6 +761,37 @@ enum AIConfigurationStore {
             removeLegacySecretDefaults()
         }
         return configurations
+    }
+
+    static func loadPromptPresets(configurations sourceConfigurations: [AIConfiguration]? = nil) -> [AIPromptPreset] {
+        if let data = UserDefaults.standard.data(forKey: promptPresetsKey),
+           let promptPresets = try? JSONDecoder().decode([AIPromptPreset].self, from: data),
+           !promptPresets.isEmpty {
+            let normalizedPresets = normalizedPromptPresets(promptPresets)
+            if normalizedPresets != promptPresets {
+                _ = savePromptPresets(normalizedPresets)
+            }
+            return normalizedPresets
+        }
+
+        let configurations = sourceConfigurations ?? loadConfigurations()
+        let migratedPromptPresets = normalizedPromptPresets(configurations.flatMap { $0.promptPresets })
+        _ = savePromptPresets(migratedPromptPresets)
+        return migratedPromptPresets
+    }
+
+    @discardableResult
+    static func savePromptPresets(_ promptPresets: [AIPromptPreset]) -> Bool {
+        guard let data = try? JSONEncoder().encode(normalizedPromptPresets(promptPresets)) else {
+            return false
+        }
+        UserDefaults.standard.set(data, forKey: promptPresetsKey)
+        return true
+    }
+
+    static func builtInDefaultPromptPreset(in promptPresets: inout [AIPromptPreset]) -> AIPromptPreset {
+        promptPresets = normalizedPromptPresets(promptPresets)
+        return promptPresets[0]
     }
 
     @discardableResult
@@ -823,6 +855,38 @@ enum AIConfigurationStore {
     private static func normalizedConfigurationName(_ name: String) -> String {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedName.isEmpty ? fallbackConfigurationName : trimmedName
+    }
+
+    private static func normalizedPromptPresets(_ promptPresets: [AIPromptPreset]) -> [AIPromptPreset] {
+        var normalizedPromptPresets: [AIPromptPreset] = []
+        var seenIDs = Set<UUID>()
+        var seenSignatures = Set<String>()
+
+        func appendIfNeeded(_ promptPreset: AIPromptPreset) {
+            guard !seenIDs.contains(promptPreset.id) else { return }
+            let signature = "\(promptPreset.name)\u{0}\(promptPreset.content)"
+            guard !seenSignatures.contains(signature) else { return }
+
+            normalizedPromptPresets.append(promptPreset)
+            seenIDs.insert(promptPreset.id)
+            seenSignatures.insert(signature)
+        }
+
+        if let defaultPromptPreset = promptPresets.first(where: { $0.content == AIConfiguration.defaultSystemPrompt }) {
+            var normalizedDefaultPreset = defaultPromptPreset
+            if normalizedDefaultPreset.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                normalizedDefaultPreset.name = "默认提示词"
+            }
+            appendIfNeeded(normalizedDefaultPreset)
+        } else {
+            appendIfNeeded(AIPromptPreset(name: "默认提示词", content: AIConfiguration.defaultSystemPrompt))
+        }
+
+        for promptPreset in promptPresets where promptPreset.content != AIConfiguration.defaultSystemPrompt {
+            appendIfNeeded(promptPreset)
+        }
+
+        return normalizedPromptPresets
     }
 
     private static func migratedDefaultConfiguration() -> AIConfiguration {

@@ -2,7 +2,8 @@ import SwiftUI
 
 struct AIPromptSettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var configurations = AIConfigurationStore.loadConfigurations()
+    @State private var configurations: [AIConfiguration]
+    @State private var promptPresets: [AIPromptPreset]
     @State private var selectedConfigurationID: UUID?
     @State private var saveErrorMessage: String?
     @FocusState private var focusedField: PromptField?
@@ -10,7 +11,10 @@ struct AIPromptSettingsView: View {
     private let configurationID: UUID?
 
     init(configurationID: UUID? = nil) {
+        let configurations = AIConfigurationStore.loadConfigurations()
         self.configurationID = configurationID
+        _configurations = State(initialValue: configurations)
+        _promptPresets = State(initialValue: AIConfigurationStore.loadPromptPresets(configurations: configurations))
         _selectedConfigurationID = State(initialValue: configurationID ?? AIConfigurationStore.loadSelectedConfigurationID())
     }
 
@@ -27,6 +31,22 @@ struct AIPromptSettingsView: View {
     private var selectedConfiguration: AIConfiguration? {
         guard let selectedIndex else { return nil }
         return configurations[selectedIndex]
+    }
+
+    private var selectedPromptPresetIndex: Int? {
+        guard let selectedConfiguration else { return promptPresets.indices.first }
+        let selectedPromptPreset = AIConfiguration.selectedPromptPreset(
+            for: selectedConfiguration,
+            in: promptPresets
+        )
+        return selectedPromptPreset.flatMap { selectedPreset in
+            promptPresets.firstIndex { $0.id == selectedPreset.id }
+        } ?? promptPresets.indices.first
+    }
+
+    private var selectedPromptPreset: AIPromptPreset? {
+        guard let selectedPromptPresetIndex else { return nil }
+        return promptPresets[selectedPromptPresetIndex]
     }
 
     var body: some View {
@@ -67,7 +87,7 @@ struct AIPromptSettingsView: View {
     private var promptSection: some View {
         Section {
             Picker("当前提示词", selection: selectedPromptPresetIDBinding) {
-                ForEach(selectedConfiguration?.promptPresets ?? []) { promptPreset in
+                ForEach(promptPresets) { promptPreset in
                     Text(promptPreset.displayName).tag(promptPreset.id)
                 }
             }
@@ -83,28 +103,24 @@ struct AIPromptSettingsView: View {
 
             Button("新增提示词") {
                 hideKeyboard()
-                updateSelectedConfiguration { configuration in
-                    configuration.addPromptPreset()
-                }
+                addPromptPreset()
             }
 
             Button("恢复默认内容") {
                 hideKeyboard()
-                updateSelectedConfiguration { configuration in
-                    configuration.restoreDefaultSelectedPrompt()
+                updateSelectedPromptPreset(updatesContent: true) { promptPreset in
+                    promptPreset.content = AIConfiguration.defaultSystemPrompt
                 }
             }
-            .disabled(selectedConfiguration?.systemPrompt == AIConfiguration.defaultSystemPrompt)
+            .disabled(selectedPromptPreset?.content == AIConfiguration.defaultSystemPrompt)
 
             Button(role: .destructive) {
                 hideKeyboard()
-                updateSelectedConfiguration { configuration in
-                    configuration.deleteSelectedPromptPreset()
-                }
+                deleteSelectedPromptPreset()
             } label: {
                 Label("删除当前提示词", systemImage: "trash")
             }
-            .disabled((selectedConfiguration?.promptPresets.count ?? 0) <= 1)
+            .disabled(promptPresets.count <= 1)
 
             if let saveErrorMessage {
                 Text(saveErrorMessage)
@@ -114,20 +130,18 @@ struct AIPromptSettingsView: View {
         } header: {
             Text("提示词")
         } footer: {
-            Text("当前选中的内容会作为每次对话的 system message 发送。留空则不发送提示词。")
+            Text("提示词预设会在所有配置中共享。当前选中的内容会作为每次对话的 system message 发送。留空则不发送提示词。")
         }
     }
 
     private var selectedPromptPresetIDBinding: Binding<UUID> {
         Binding(
             get: {
-                selectedConfiguration?.selectedPromptPreset?.id
-                    ?? selectedConfiguration?.promptPresets.first?.id
-                    ?? UUID()
+                selectedPromptPreset?.id ?? promptPresets.first?.id ?? UUID()
             },
             set: { newValue in
                 updateSelectedConfiguration { configuration in
-                    configuration.selectPromptPreset(newValue)
+                    configuration.selectPromptPreset(newValue, from: promptPresets)
                 }
             }
         )
@@ -135,10 +149,10 @@ struct AIPromptSettingsView: View {
 
     private var selectedPromptPresetNameBinding: Binding<String> {
         Binding(
-            get: { selectedConfiguration?.selectedPromptPreset?.name ?? "" },
+            get: { selectedPromptPreset?.name ?? "" },
             set: { newValue in
-                updateSelectedConfiguration(persists: false) { configuration in
-                    configuration.updateSelectedPromptName(newValue)
+                updateSelectedPromptPreset(persists: false) { promptPreset in
+                    promptPreset.name = newValue
                 }
             }
         )
@@ -146,10 +160,10 @@ struct AIPromptSettingsView: View {
 
     private var selectedPromptPresetContentBinding: Binding<String> {
         Binding(
-            get: { selectedConfiguration?.selectedPromptPreset?.content ?? "" },
+            get: { selectedPromptPreset?.content ?? "" },
             set: { newValue in
-                updateSelectedConfiguration(persists: false) { configuration in
-                    configuration.updateSelectedPromptContent(newValue)
+                updateSelectedPromptPreset(persists: false, updatesContent: true) { promptPreset in
+                    promptPreset.content = newValue
                 }
             }
         )
@@ -159,15 +173,20 @@ struct AIPromptSettingsView: View {
         if configurations.isEmpty {
             configurations = [AIConfiguration()]
         }
+        var normalizedPromptPresets = promptPresets
+        _ = AIConfigurationStore.builtInDefaultPromptPreset(in: &normalizedPromptPresets)
+        promptPresets = normalizedPromptPresets
 
         if let configurationID,
            configurations.contains(where: { $0.id == configurationID }) {
             selectedConfigurationID = configurationID
+            normalizeConfigurationPromptSelections()
             return
         }
 
         if let selectedConfigurationID,
            configurations.contains(where: { $0.id == selectedConfigurationID }) {
+            normalizeConfigurationPromptSelections()
             return
         }
 
@@ -177,6 +196,7 @@ struct AIPromptSettingsView: View {
         } else {
             selectedConfigurationID = configurations[0].id
         }
+        normalizeConfigurationPromptSelections()
     }
 
     private func updateSelectedConfiguration(
@@ -192,12 +212,95 @@ struct AIPromptSettingsView: View {
         }
     }
 
+    private func updateSelectedPromptPreset(
+        persists: Bool = true,
+        updatesContent: Bool = false,
+        _ update: (inout AIPromptPreset) -> Void
+    ) {
+        ensureSelection()
+        guard let selectedPromptPresetIndex else { return }
+        let promptPresetID = promptPresets[selectedPromptPresetIndex].id
+        update(&promptPresets[selectedPromptPresetIndex])
+        promptPresets[selectedPromptPresetIndex].updatedAt = Date()
+        if updatesContent {
+            applyPromptPresetContentToSelectedConfigurations(promptPresetID)
+        }
+        if persists {
+            saveCurrentState()
+        }
+    }
+
+    private func addPromptPreset() {
+        ensureSelection()
+        let promptPreset = AIPromptPreset(name: "提示词 \(promptPresets.count + 1)", content: "")
+        promptPresets.append(promptPreset)
+        updateSelectedConfiguration(persists: false) { configuration in
+            configuration.selectPromptPreset(promptPreset.id, from: promptPresets)
+        }
+        saveCurrentState()
+    }
+
+    private func deleteSelectedPromptPreset() {
+        ensureSelection()
+        guard promptPresets.count > 1,
+              let selectedPromptPresetIndex else { return }
+
+        let removedPromptPresetID = promptPresets[selectedPromptPresetIndex].id
+        promptPresets.remove(at: selectedPromptPresetIndex)
+        let nextIndex = min(selectedPromptPresetIndex, promptPresets.count - 1)
+        let nextPromptPreset = promptPresets[nextIndex]
+
+        for index in configurations.indices where configurations[index].selectedPromptPresetID == removedPromptPresetID {
+            configurations[index].selectPromptPreset(nextPromptPreset.id, from: promptPresets)
+            configurations[index].updatedAt = Date()
+        }
+
+        saveCurrentState()
+    }
+
     private func saveCurrentState() {
         ensureSelection()
-        let didSave = AIConfigurationStore.saveConfigurations(configurations)
+        syncPromptPresetsToConfigurations()
+        let didSaveConfigurations = AIConfigurationStore.saveConfigurations(configurations)
+        let didSavePromptPresets = AIConfigurationStore.savePromptPresets(promptPresets)
+        let didSave = didSaveConfigurations && didSavePromptPresets
         saveErrorMessage = didSave ? nil : "提示词保存失败，请检查钥匙串或本机存储权限。"
         if let selectedConfigurationID {
             AIConfigurationStore.saveSelectedConfigurationID(selectedConfigurationID)
+        }
+    }
+
+    @discardableResult
+    private func normalizeConfigurationPromptSelections() -> Bool {
+        var didChange = false
+
+        for index in configurations.indices {
+            let previousPromptPresetID = configurations[index].selectedPromptPresetID
+            let previousSystemPrompt = configurations[index].systemPrompt
+            configurations[index].normalizePromptSelection(from: promptPresets)
+
+            if configurations[index].selectedPromptPresetID != previousPromptPresetID
+                || configurations[index].systemPrompt != previousSystemPrompt {
+                configurations[index].updatedAt = Date()
+                didChange = true
+            }
+        }
+
+        return didChange
+    }
+
+    private func syncPromptPresetsToConfigurations() {
+        for index in configurations.indices {
+            configurations[index].promptPresets = promptPresets
+        }
+    }
+
+    private func applyPromptPresetContentToSelectedConfigurations(_ promptPresetID: UUID) {
+        guard let promptPreset = promptPresets.first(where: { $0.id == promptPresetID }) else { return }
+
+        for index in configurations.indices where configurations[index].selectedPromptPresetID == promptPresetID {
+            configurations[index].systemPrompt = promptPreset.content
+            configurations[index].updatedAt = Date()
         }
     }
 

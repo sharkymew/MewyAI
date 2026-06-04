@@ -1151,7 +1151,7 @@ class AIService {
     private static let maxStreamingContentCharacters = 200_000
     private static let maxStreamingReasoningCharacters = 120_000
     private static let anthropicClaudeCodeSystemPrompt = "You are Claude Code, Anthropic's official CLI for Claude."
-    private static let anthropicClaudeCodeBetaHeader = "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24"
+    private static let anthropicClaudeCodeBetaHeader = "context-1m-2025-08-07,claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24"
     private static let anthropicOneMillionContextBetaHeader = "context-1m-2025-08-07,context-management-2025-06-27"
     private static let anthropicClaudeCodeManagedHeaders: Set<String> = [
         "accept",

@@ -681,7 +681,7 @@ struct AIConfigurationView: View {
             return "填写 API Key 时会自动发送 Authorization: Bearer <API Key>。API Key 会存入钥匙串。"
         case .anthropicMessages:
             if selectedConfiguration?.anthropicClaudeCodeImpersonationEnabled == true {
-                return "Claude Code 伪装开启时会把 API Key 作为 Authorization: Bearer <API Key> 发送，并接管 Anthropic 关键请求头。API Key 会存入钥匙串。"
+                return "Claude Code 伪装开启时，所有模型都会把 API Key 作为 Authorization: Bearer <API Key> 发送，并注入 1M context 和 Claude Code 契约。API Key 会存入钥匙串。"
             }
             return "Anthropic Messages 会把 API Key 作为 x-api-key 发送，并自动附加 anthropic-version。API Key 会存入钥匙串。"
         case .vertexAIExpress:

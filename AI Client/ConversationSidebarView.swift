@@ -155,7 +155,7 @@ struct ConversationSidebarView: View {
         let now = Date()
 
         return ScrollView {
-            LazyVStack(spacing: 4) {
+            VStack(spacing: 4) {
                 conversationSection(
                     title: "置顶",
                     conversations: pinnedConversations,

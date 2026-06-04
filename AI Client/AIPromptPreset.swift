@@ -25,52 +25,39 @@ struct AIPromptPreset: Identifiable, Codable, Equatable {
 }
 
 extension AIConfiguration {
-    mutating func selectPromptPreset(_ id: UUID) {
+    mutating func selectPromptPreset(_ id: UUID, from promptPresets: [AIPromptPreset]) {
         guard let preset = promptPresets.first(where: { $0.id == id }) else { return }
         selectedPromptPresetID = preset.id
         systemPrompt = preset.content
     }
 
-    mutating func updateSelectedPromptName(_ name: String) {
-        guard let index = selectedPromptPresetIndex else { return }
-        promptPresets[index].name = name
-        promptPresets[index].updatedAt = Date()
+    mutating func normalizePromptSelection(from promptPresets: [AIPromptPreset]) {
+        guard let preset = Self.selectedPromptPreset(for: self, in: promptPresets) else { return }
+        selectedPromptPresetID = preset.id
+        systemPrompt = preset.content
     }
 
-    mutating func updateSelectedPromptContent(_ content: String) {
-        guard let index = selectedPromptPresetIndex else { return }
-        promptPresets[index].content = content
-        promptPresets[index].updatedAt = Date()
-        systemPrompt = content
+    static func selectedPromptPreset(
+        for configuration: AIConfiguration,
+        in promptPresets: [AIPromptPreset]
+    ) -> AIPromptPreset? {
+        selectedPromptPreset(
+            selectedPromptPresetID: configuration.selectedPromptPresetID,
+            systemPrompt: configuration.systemPrompt,
+            in: promptPresets
+        )
     }
 
-    mutating func addPromptPreset() {
-        let preset = AIPromptPreset(name: "提示词 \(promptPresets.count + 1)", content: "")
-        promptPresets.append(preset)
-        selectPromptPreset(preset.id)
-    }
-
-    mutating func deleteSelectedPromptPreset() {
-        guard promptPresets.count > 1,
-              let index = selectedPromptPresetIndex else { return }
-        promptPresets.remove(at: index)
-        let nextIndex = min(index, promptPresets.count - 1)
-        selectPromptPreset(promptPresets[nextIndex].id)
-    }
-
-    mutating func restoreDefaultSelectedPrompt() {
-        updateSelectedPromptContent(Self.defaultSystemPrompt)
-    }
-
-    mutating func selectBuiltInDefaultPrompt() {
-        if let preset = promptPresets.first(where: { $0.content == Self.defaultSystemPrompt }) {
-            selectPromptPreset(preset.id)
-            return
-        }
-
-        let preset = AIPromptPreset(name: "默认提示词", content: Self.defaultSystemPrompt)
-        promptPresets.insert(preset, at: 0)
-        selectPromptPreset(preset.id)
+    static func selectedPromptPreset(
+        selectedPromptPresetID: UUID?,
+        systemPrompt: String,
+        in promptPresets: [AIPromptPreset]
+    ) -> AIPromptPreset? {
+        selectedPromptPresetID.flatMap { selectedID in
+            promptPresets.first { $0.id == selectedID }
+        } ?? promptPresets.first { $0.content == systemPrompt }
+            ?? promptPresets.first { $0.content == Self.defaultSystemPrompt }
+            ?? promptPresets.first
     }
 
     static func normalizedPromptSelection(
@@ -78,21 +65,25 @@ extension AIConfiguration {
         selectedPromptPresetID: UUID?,
         fallbackSystemPrompt: String
     ) -> (presets: [AIPromptPreset], selectedID: UUID, systemPrompt: String) {
-        let presets: [AIPromptPreset]
+        var presets: [AIPromptPreset]
         if let promptPresets, !promptPresets.isEmpty {
             presets = promptPresets
         } else {
             presets = [AIPromptPreset(name: "默认提示词", content: fallbackSystemPrompt)]
         }
 
-        let selectedPreset = selectedPromptPresetID.flatMap { selectedID in
+        if let selectedPreset = selectedPromptPresetID.flatMap({ selectedID in
             presets.first { $0.id == selectedID }
-        } ?? presets.first { $0.content == fallbackSystemPrompt } ?? presets[0]
+        }) ?? presets.first(where: { $0.content == fallbackSystemPrompt }) {
+            return (presets, selectedPreset.id, selectedPreset.content)
+        }
 
-        return (presets, selectedPreset.id, selectedPreset.content)
-    }
-
-    private var selectedPromptPresetIndex: Int? {
-        promptPresets.firstIndex { $0.id == selectedPromptPresetID } ?? promptPresets.indices.first
+        let recoveredPreset = AIPromptPreset(
+            id: selectedPromptPresetID ?? UUID(),
+            name: "当前提示词",
+            content: fallbackSystemPrompt
+        )
+        presets.append(recoveredPreset)
+        return (presets, recoveredPreset.id, recoveredPreset.content)
     }
 }
