@@ -1736,10 +1736,6 @@ struct ContentView: View {
                 isTargeted: $isAttachmentDropTargeted,
                 perform: handleDroppedAttachments
             )
-            .transaction { transaction in
-                transaction.animation = nil
-                transaction.disablesAnimations = true
-            }
 
             inputDisclaimer
         }
