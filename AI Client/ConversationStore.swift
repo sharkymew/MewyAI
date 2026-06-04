@@ -462,6 +462,10 @@ enum ConversationStore {
         UserDefaults.standard.set(id.uuidString, forKey: selectedConversationIDKey)
     }
 
+    static func clearSelectedConversationID() {
+        UserDefaults.standard.removeObject(forKey: selectedConversationIDKey)
+    }
+
     private static var conversationsFileURL: URL? {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent(conversationsFileName, isDirectory: false)

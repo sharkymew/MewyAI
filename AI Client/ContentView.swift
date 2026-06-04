@@ -568,6 +568,19 @@ private final class StreamingOutputHaptics: ObservableObject {
     }
 }
 
+private final class ConversationActionHaptics: ObservableObject {
+    private let generator = UIImpactFeedbackGenerator(style: .light)
+
+    func prepare() {
+        generator.prepare()
+    }
+
+    func impact() {
+        generator.impactOccurred(intensity: 0.7)
+        generator.prepare()
+    }
+}
+
 @MainActor
 private final class ChatInputDraft: ObservableObject {
     private static let blankScalarSet = CharacterSet.whitespacesAndNewlines
@@ -768,12 +781,14 @@ struct ContentView: View {
     @State private var toolApprovalContinuation: CheckedContinuation<Bool, Never>?
     @StateObject private var speechInputController = SpeechInputController()
     @StateObject private var streamingOutputHaptics = StreamingOutputHaptics()
+    @StateObject private var conversationActionHaptics = ConversationActionHaptics()
     @AppStorage(AIConfigurationStore.hapticFeedbackEnabledKey)
     private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
     @StateObject private var inputDraft = ChatInputDraft()
     @State private var messages: [ChatMessage] = []
     @State private var conversations = ConversationStore.loadConversations()
     @State private var selectedConversationID: UUID? = ConversationStore.loadSelectedConversationID()
+    @State private var privateConversationID: UUID?
     @State private var renamingConversationID: UUID?
     @State private var renamingConversationTitle = ""
     @State private var isRenameConversationAlertPresented = false
@@ -1113,6 +1128,39 @@ struct ContentView: View {
             .contentShape(Circle())
     }
 
+    @ViewBuilder
+    private var topConversationActionLabel: some View {
+        if showsTemporaryChatNotice {
+            HStack(spacing: 6) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 15, weight: .semibold))
+
+                Text("临时")
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            .foregroundStyle(.primary)
+            .frame(height: topControlSize)
+            .padding(.horizontal, 13)
+            .contentShape(Capsule())
+        } else {
+            topIconLabel(systemName: topConversationActionSystemImage)
+        }
+    }
+
+    private var storedConversations: [AIConversation] {
+        guard let privateConversationID else { return conversations }
+        return conversations.filter { $0.id != privateConversationID }
+    }
+
+    private var isPrivateConversationSelected: Bool {
+        guard let privateConversationID else { return false }
+        return selectedConversationID == privateConversationID
+    }
+
+    private var showsTemporaryChatNotice: Bool {
+        isPrivateConversationSelected && messages.isEmpty
+    }
+
     private var canSendMessage: Bool {
         inputDraft.hasSubmittableText
             || !pendingImageAttachments.isEmpty
@@ -1252,7 +1300,7 @@ struct ContentView: View {
                 }
 
                 ConversationSidebarView(
-                    conversations: conversations,
+                    conversations: storedConversations,
                     selectedConversationID: selectedConversationID,
                     topSafeAreaInset: geometry.safeAreaInsets.top,
                     showsSidebarToggleFadeExclusion: showsSidebarToggleFadeExclusion && !layout.usesPersistentSidebar,
@@ -1287,6 +1335,9 @@ struct ContentView: View {
             guard !hasLoadedInitialConversation else { return }
             hasLoadedInitialConversation = true
             loadSelectedConversation()
+            if isHapticFeedbackEnabled {
+                conversationActionHaptics.prepare()
+            }
         }
         .sheet(isPresented: $showConfiguration) {
             AIConfigurationView()
@@ -1385,6 +1436,10 @@ struct ContentView: View {
             applySpeechTranscript(transcript)
         }
         .onChange(of: isHapticFeedbackEnabled) { _, isEnabled in
+            if isEnabled {
+                conversationActionHaptics.prepare()
+            }
+
             if isEnabled, isGenerating {
                 streamingOutputHaptics.prepareForStreaming()
             } else {
@@ -1460,6 +1515,16 @@ struct ContentView: View {
         ZStack(alignment: .top) {
             chatScrollView(topPadding: topScrollContentPadding)
                 .ignoresSafeArea(.container, edges: [.top, .bottom])
+
+            temporaryChatNotice
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .padding(.horizontal, 34)
+                .padding(.top, topScrollContentPadding)
+                .padding(.bottom, bottomScrollContentPadding)
+                .opacity(showsTemporaryChatNotice ? 1 : 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(!showsTemporaryChatNotice)
+                .animation(.easeInOut(duration: 0.22), value: showsTemporaryChatNotice)
 
             topChrome(
                 topSafeAreaInset: topSafeAreaInset,
@@ -1603,6 +1668,22 @@ struct ContentView: View {
         }
     }
 
+    private var temporaryChatNotice: some View {
+        VStack(spacing: 12) {
+            Text("临时聊天")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text("你现在在临时聊天中，此聊天不会出现在历史记录中，但是在此对话进行过程中，你的上下文记录会被发送到模型提供商。")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: 360)
+    }
+
     private func inputBar(includesLegacyFade: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if !activeAgentCapsules.isEmpty {
@@ -1692,14 +1773,16 @@ struct ContentView: View {
 
                 topGlassControl {
                     Button {
+                        triggerConversationActionHapticIfNeeded()
                         hideKeyboard()
-                        createConversation()
+                        handleTopConversationAction()
                     } label: {
-                        topIconLabel(systemName: "square.and.pencil")
+                        topConversationActionLabel
                     }
                 }
                 .disabled(!canCreateConversation)
-                .accessibilityLabel("新建对话")
+                .accessibilityLabel(topConversationActionAccessibilityLabel)
+                .accessibilityHint(topConversationActionAccessibilityHint)
             }
 
             topConversationTitleMenu
@@ -2067,6 +2150,26 @@ struct ContentView: View {
 
     private var canCreateConversation: Bool {
         true
+    }
+
+    private var showsPrivateConversationAction: Bool {
+        currentConversationIsBlank && !isPrivateConversationSelected
+    }
+
+    private var topConversationActionSystemImage: String {
+        showsPrivateConversationAction ? "lock" : "square.and.pencil"
+    }
+
+    private var topConversationActionAccessibilityLabel: String {
+        if showsTemporaryChatNotice {
+            return "退出临时聊天"
+        }
+
+        return showsPrivateConversationAction ? "开始隐私对话" : "新建对话"
+    }
+
+    private var topConversationActionAccessibilityHint: String {
+        showsTemporaryChatNotice ? "临时聊天不会保存在本地" : ""
     }
 
     private var currentConversationIsBlank: Bool {
@@ -3594,6 +3697,11 @@ struct ContentView: View {
         streamingOutputHaptics.impactForOutputCompletion()
     }
 
+    private func triggerConversationActionHapticIfNeeded() {
+        guard isHapticFeedbackEnabled else { return }
+        conversationActionHaptics.impact()
+    }
+
     private func pruneLiveAssistantDisplays() {
         let messageIDs = Set(messages.map(\.id))
         liveAssistantDisplays = liveAssistantDisplays.filter { messageIDs.contains($0.key) }
@@ -3725,12 +3833,13 @@ struct ContentView: View {
 
         imageSelectionError = nil
 
+        let storesImagesLocally = !isPrivateConversationSelected
         Task {
             var attachments = [ChatImageAttachment]()
 
             for item in items {
                 guard let data = try? await item.loadTransferable(type: Data.self),
-                      let attachment = storedImageAttachment(from: data) else {
+                      let attachment = imageAttachment(from: data, storesLocally: storesImagesLocally) else {
                     continue
                 }
 
@@ -3746,25 +3855,33 @@ struct ContentView: View {
         }
     }
 
-    private func storedImageAttachment(from data: Data) -> ChatImageAttachment? {
+    private func imageAttachment(from data: Data, storesLocally: Bool) -> ChatImageAttachment? {
         guard imageDataIsWithinLimits(data) else { return nil }
         guard let image = UIImage(data: data) else { return nil }
-        return storedImageAttachment(from: image)
+        return imageAttachment(from: image, storesLocally: storesLocally)
     }
 
-    private func storedImageAttachment(fromImageFileAt url: URL) -> ChatImageAttachment? {
+    private func imageAttachment(fromImageFileAt url: URL, storesLocally: Bool) -> ChatImageAttachment? {
         guard imageFileIsWithinLimits(url),
               let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else {
             return nil
         }
-        return storedImageAttachment(from: data)
+        return imageAttachment(from: data, storesLocally: storesLocally)
     }
 
-    private func storedImageAttachment(from image: UIImage) -> ChatImageAttachment? {
+    private func imageAttachment(from image: UIImage, storesLocally: Bool) -> ChatImageAttachment? {
         guard imagePixelCount(image) <= maxImagePixelCount else { return nil }
         let scaledImage = image.scaledDown(maxDimension: 1600)
         guard let jpegData = scaledImage.jpegData(compressionQuality: 0.78) else { return nil }
-        return ConversationImageStore.storeJPEGData(jpegData)
+        if storesLocally {
+            return ConversationImageStore.storeJPEGData(jpegData)
+        }
+
+        var attachment = ChatImageAttachment(
+            dataURL: "data:image/jpeg;base64,\(jpegData.base64EncodedString())"
+        )
+        attachment.byteCount = jpegData.count
+        return attachment
     }
 
     private func imageDataIsWithinLimits(_ data: Data) -> Bool {
@@ -3865,11 +3982,15 @@ struct ContentView: View {
 
         imageSelectionError = nil
 
+        let storesImagesLocally = !isPrivateConversationSelected
         Task {
             var attachments = [ChatImageAttachment]()
 
             for provider in imageProviders.prefix(maxImageAttachmentCount) {
-                guard let attachment = await imageAttachment(from: provider) else {
+                guard let attachment = await imageAttachment(
+                    from: provider,
+                    storesLocally: storesImagesLocally
+                ) else {
                     continue
                 }
 
@@ -4029,7 +4150,10 @@ struct ContentView: View {
         }
     }
 
-    private func imageAttachment(from provider: NSItemProvider) async -> ChatImageAttachment? {
+    private func imageAttachment(
+        from provider: NSItemProvider,
+        storesLocally: Bool
+    ) async -> ChatImageAttachment? {
         guard let identifier = provider.registeredTypeIdentifiers.first(where: { identifier in
             UTType(identifier)?.conforms(to: .image) == true
         }) else {
@@ -4039,7 +4163,10 @@ struct ContentView: View {
         return await withCheckedContinuation { continuation in
             provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, _ in
                 guard let url,
-                      let attachment = storedImageAttachment(fromImageFileAt: url) else {
+                      let attachment = imageAttachment(
+                        fromImageFileAt: url,
+                        storesLocally: storesLocally
+                      ) else {
                     continuation.resume(returning: nil)
                     return
                 }
@@ -4060,10 +4187,14 @@ struct ContentView: View {
             return
         }
 
+        let storesImagesLocally = !isPrivateConversationSelected
         Task {
             var attachments = [ChatImageAttachment]()
             for provider in imageProviders.prefix(maxImageAttachmentCount) {
-                guard let attachment = await imageAttachment(from: provider) else { continue }
+                guard let attachment = await imageAttachment(
+                    from: provider,
+                    storesLocally: storesImagesLocally
+                ) else { continue }
                 attachments.append(attachment)
             }
 
@@ -4192,8 +4323,8 @@ struct ContentView: View {
                 systemPrompt: currentConfiguration.systemPrompt,
                 usesImageAttachments: currentConfiguration.selectedModelSupportsImages
             )
-            ConversationStore.saveSelectedConversationID(conversation.id)
-            ConversationStore.saveConversations(conversations)
+            saveSelectedConversationIDIfStored(conversation.id)
+            saveStoredConversations()
         }
     }
 
@@ -4204,8 +4335,8 @@ struct ContentView: View {
             selectedConversationID = conversation.id
             activeSkillIDs = []
             activeMCPServerIDs = []
-            ConversationStore.saveSelectedConversationID(conversation.id)
-            ConversationStore.saveConversations(conversations)
+            saveSelectedConversationIDIfStored(conversation.id)
+            saveStoredConversations()
         }
     }
 
@@ -4214,9 +4345,17 @@ struct ContentView: View {
     }
 
     private func selectConversation(_ id: UUID, closesSidebar: Bool) {
-        prepareCurrentConversationForNavigation()
+        guard id != privateConversationID,
+              let conversation = conversations.first(where: { $0.id == id }) else {
+            return
+        }
 
-        guard let conversation = conversations.first(where: { $0.id == id }) else { return }
+        if isPrivateConversationSelected {
+            discardPrivateConversation()
+        } else {
+            prepareCurrentConversationForNavigation()
+        }
+
         restoreConversation(conversation, closesSidebar: closesSidebar)
     }
 
@@ -4236,6 +4375,56 @@ struct ContentView: View {
         }
 
         detachVisibleGenerationState()
+    }
+
+    private func discardPrivateConversation() {
+        guard let privateConversationID else { return }
+
+        if let generation = activeConversationGenerations[privateConversationID] {
+            generation.service.cancelStreaming()
+        }
+        cancelScheduledFlush(for: privateConversationID)
+        activeConversationGenerations[privateConversationID] = nil
+
+        let wasSelected = selectedConversationID == privateConversationID
+        conversations.removeAll { $0.id == privateConversationID }
+        self.privateConversationID = nil
+
+        if wasSelected {
+            speechInputController.cancelRecording()
+            selectedConversationID = nil
+            messages = []
+            activeSkillIDs = []
+            activeMCPServerIDs = []
+            resetMarkdownCache(for: messages)
+            inputDraft.clearText()
+            resetSpeechInputMergeState()
+            pendingImageAttachments = []
+            pendingFileAttachments = []
+            selectedPhotoItems = []
+            imageSelectionError = nil
+            activeAssistantMessageID = nil
+            liveAssistantDisplays = [:]
+            activeAssistantHasReasoning = false
+            activeAssistantHasContent = false
+            activeAssistantReasoningIsExpanded = false
+            activeAssistantDidCollapseReasoningAfterThinking = false
+            activeMessageActionID = nil
+            editingMessageID = nil
+            streamingTokenBuffer.reset()
+            isFlushScheduled = false
+            isGenerating = false
+            restoreChatScrollAfterConversationChange()
+            aiService.resetConversation(
+                with: [],
+                systemPrompt: currentConfiguration.systemPrompt,
+                usesImageAttachments: currentConfiguration.selectedModelSupportsImages
+            )
+            ConversationStore.clearSelectedConversationID()
+        }
+
+        updateBackgroundRequestKeeper()
+        removeUnreferencedConversationImages()
     }
 
     private func detachVisibleGenerationState() {
@@ -4310,15 +4499,11 @@ struct ContentView: View {
             usesImageAttachments: currentConfiguration.selectedModelSupportsImages
         )
         attachVisibleGenerationStateIfNeeded(for: conversation.id)
-        ConversationStore.saveSelectedConversationID(conversation.id)
+        saveSelectedConversationIDIfStored(conversation.id)
 
         if closesSidebar {
             setConversationSidebarVisibility(false)
         }
-    }
-
-    private func createConversation() {
-        createConversation(closesSidebar: true)
     }
 
     private func openConfigurationFromSidebar(closesSidebar: Bool) {
@@ -4327,6 +4512,87 @@ struct ContentView: View {
             setConversationSidebarVisibility(false)
         }
         showConfiguration = true
+    }
+
+    private func handleTopConversationAction() {
+        if showsTemporaryChatNotice {
+            exitTemporaryConversation()
+        } else if showsPrivateConversationAction {
+            startPrivateConversation(closesSidebar: true)
+        } else {
+            createConversation()
+        }
+    }
+
+    private func createConversation() {
+        createConversation(closesSidebar: true)
+    }
+
+    private func startPrivateConversation(closesSidebar: Bool) {
+        guard canCreateConversation,
+              currentConversationIsBlank,
+              !isPrivateConversationSelected else {
+            createConversation(closesSidebar: closesSidebar)
+            return
+        }
+
+        let defaultPromptConfiguration = selectBuiltInDefaultPromptForCurrentConfiguration()
+        discardPrivateConversation()
+        prepareCurrentConversationForNavigation()
+
+        let conversation = AIConversation()
+        privateConversationID = conversation.id
+        conversations.insert(conversation, at: 0)
+        selectedConversationID = conversation.id
+        messages = []
+        activeSkillIDs = []
+        activeMCPServerIDs = []
+        resetMarkdownCache(for: messages)
+        speechInputController.cancelRecording()
+        inputDraft.clearText()
+        resetSpeechInputMergeState()
+        pendingImageAttachments = []
+        pendingFileAttachments = []
+        selectedPhotoItems = []
+        imageSelectionError = nil
+        activeAssistantMessageID = nil
+        liveAssistantDisplays = [:]
+        activeAssistantHasReasoning = false
+        activeAssistantHasContent = false
+        activeAssistantReasoningIsExpanded = false
+        activeAssistantDidCollapseReasoningAfterThinking = false
+        activeMessageActionID = nil
+        editingMessageID = nil
+        streamingTokenBuffer.reset()
+        isFlushScheduled = false
+        isGenerating = false
+        restoreChatScrollAfterConversationChange()
+        aiService.resetConversation(
+            with: [],
+            systemPrompt: defaultPromptConfiguration.systemPrompt,
+            usesImageAttachments: defaultPromptConfiguration.selectedModelSupportsImages
+        )
+        ConversationStore.clearSelectedConversationID()
+
+        if closesSidebar {
+            setConversationSidebarVisibility(false)
+        }
+    }
+
+    private func exitTemporaryConversation() {
+        guard showsTemporaryChatNotice else { return }
+
+        discardPrivateConversation()
+
+        if let emptyConversation = storedConversations.first(where: { !$0.hasInformation }) {
+            restoreConversation(emptyConversation, closesSidebar: false)
+            return
+        }
+
+        let conversation = AIConversation()
+        conversations.insert(conversation, at: 0)
+        restoreConversation(conversation, closesSidebar: false)
+        saveStoredConversations()
     }
 
     private func createConversation(closesSidebar: Bool) {
@@ -4339,9 +4605,14 @@ struct ContentView: View {
 
         let defaultPromptConfiguration = selectBuiltInDefaultPromptForCurrentConfiguration()
 
-        prepareCurrentConversationForNavigation()
+        let wasPrivateConversationSelected = isPrivateConversationSelected
+        if wasPrivateConversationSelected {
+            discardPrivateConversation()
+        } else {
+            prepareCurrentConversationForNavigation()
+        }
 
-        if currentConversationIsBlank {
+        if !wasPrivateConversationSelected, currentConversationIsBlank {
             aiService.resetConversation(
                 with: [],
                 systemPrompt: defaultPromptConfiguration.systemPrompt,
@@ -4353,7 +4624,7 @@ struct ContentView: View {
             return
         }
 
-        if let emptyConversation = conversations.first(where: { conversation in
+        if let emptyConversation = storedConversations.first(where: { conversation in
             conversation.id != selectedConversationID && !conversation.hasInformation
         }) {
             selectConversation(emptyConversation.id, closesSidebar: closesSidebar)
@@ -4391,8 +4662,8 @@ struct ContentView: View {
             systemPrompt: defaultPromptConfiguration.systemPrompt,
             usesImageAttachments: defaultPromptConfiguration.selectedModelSupportsImages
         )
-        ConversationStore.saveSelectedConversationID(conversation.id)
-        ConversationStore.saveConversations(conversations)
+        saveSelectedConversationIDIfStored(conversation.id)
+        saveStoredConversations()
 
         if closesSidebar {
             setConversationSidebarVisibility(false)
@@ -4428,7 +4699,7 @@ struct ContentView: View {
 
         conversations[index].title = normalizedManualConversationTitle(title)
         conversations[index].hasGeneratedTitle = true
-        ConversationStore.saveConversations(conversations)
+        saveStoredConversations()
     }
 
     private func normalizedManualConversationTitle(_ title: String) -> String {
@@ -4441,7 +4712,7 @@ struct ContentView: View {
         guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
 
         conversations[index].isPinned.toggle()
-        ConversationStore.saveConversations(conversations)
+        saveStoredConversations()
     }
 
     private func beginExportingConversation(_ id: UUID) {
@@ -4514,8 +4785,8 @@ struct ContentView: View {
                 systemPrompt: currentConfiguration.systemPrompt,
                 usesImageAttachments: currentConfiguration.selectedModelSupportsImages
             )
-            ConversationStore.saveSelectedConversationID(conversation.id)
-            ConversationStore.saveConversations(conversations)
+            saveSelectedConversationIDIfStored(conversation.id)
+            saveStoredConversations()
             removeUnreferencedConversationImages()
             return
         }
@@ -4552,10 +4823,10 @@ struct ContentView: View {
                 usesImageAttachments: currentConfiguration.selectedModelSupportsImages
             )
             attachVisibleGenerationStateIfNeeded(for: nextConversation.id)
-            ConversationStore.saveSelectedConversationID(nextConversation.id)
+            saveSelectedConversationIDIfStored(nextConversation.id)
         }
 
-        ConversationStore.saveConversations(conversations)
+        saveStoredConversations()
         removeUnreferencedConversationImages()
     }
 
@@ -4580,7 +4851,7 @@ struct ContentView: View {
            !activeConversationIDs.contains(selectedConversationID) {
             persistCurrentConversation(synchronize: true, refreshesUpdatedAt: false)
         } else {
-            ConversationStore.saveConversations(conversations, synchronize: true)
+            saveStoredConversations(synchronize: true)
         }
 
         updateBackgroundRequestKeeper()
@@ -4654,10 +4925,27 @@ struct ContentView: View {
     }
 
     @discardableResult
+    private func saveStoredConversations(synchronize: Bool = false) -> Bool {
+        let conversationsForStorage = storedConversations
+        guard !conversationsForStorage.isEmpty else { return false }
+        return ConversationStore.saveConversations(conversationsForStorage, synchronize: synchronize)
+    }
+
+    private func saveSelectedConversationIDIfStored(_ id: UUID) {
+        guard privateConversationID != id,
+              storedConversations.contains(where: { $0.id == id }) else {
+            ConversationStore.clearSelectedConversationID()
+            return
+        }
+
+        ConversationStore.saveSelectedConversationID(id)
+    }
+
+    @discardableResult
     private func saveConversationsPreservingSelectedConversation(synchronize: Bool = false) -> Bool {
         flushSelectedGenerationForStorage()
         synchronizeSelectedConversationSnapshot(refreshesUpdatedAt: false)
-        return ConversationStore.saveConversations(conversations, synchronize: synchronize)
+        return saveStoredConversations(synchronize: synchronize)
     }
 
     private func flushSelectedGenerationForStorage() {
@@ -4699,18 +4987,20 @@ struct ContentView: View {
         guard synchronizeSelectedConversationSnapshot(refreshesUpdatedAt: refreshesUpdatedAt) else {
             return
         }
-        ConversationStore.saveConversations(conversations, synchronize: synchronize)
+        saveStoredConversations(synchronize: synchronize)
     }
 
     private func removeUnreferencedConversationImages() {
-        var retainedConversations = conversations
+        var retainedConversations = storedConversations
         if let selectedConversationID,
+           selectedConversationID != privateConversationID,
            let index = retainedConversations.firstIndex(where: { $0.id == selectedConversationID }) {
             retainedConversations[index].messages = messages
         }
+        let retainedPendingImageAttachments = isPrivateConversationSelected ? [] : pendingImageAttachments
         ConversationImageStore.removeUnreferencedImages(
             retainedBy: retainedConversations,
-            additionalAttachments: pendingImageAttachments
+            additionalAttachments: retainedPendingImageAttachments
         )
     }
 
@@ -4720,6 +5010,8 @@ struct ContentView: View {
     }
 
     private func generateTitleIfNeeded(for conversationID: UUID, configuration: AIConfiguration) {
+        guard conversationID != privateConversationID else { return }
+
         if selectedConversationID == conversationID {
             persistCurrentConversation(refreshesUpdatedAt: false)
         }
