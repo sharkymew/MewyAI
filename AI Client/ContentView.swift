@@ -1740,6 +1740,8 @@ struct ContentView: View {
                 transaction.animation = nil
                 transaction.disablesAnimations = true
             }
+
+            inputDisclaimer
         }
         .padding(.horizontal, inputBarHorizontalPadding)
         .padding(.top, inputBarTopPadding)
@@ -1848,6 +1850,15 @@ struct ContentView: View {
         ) {
             inputOptionsMenu
         }
+    }
+
+    private var inputDisclaimer: some View {
+        Text("AI也有可能出错，信息仅供参考，请亲自核查。")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
     }
 
     private var pendingAttachmentPreview: some View {
