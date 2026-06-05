@@ -588,11 +588,14 @@ private final class ChatInputDraft: ObservableObject {
     @Published var isFocused = false
     @Published private(set) var focusRequestID = 0
     @Published private(set) var textRevision = 0
-    @Published private(set) var layoutRevision = 0
+    @Published private(set) var measuredLineCount = 1
     @Published private(set) var hasSubmittableText = false
 
     private(set) var text = ""
-    private var measuredLineCount = 1
+
+    var showsExpandedInputButton: Bool {
+        measuredLineCount > 3
+    }
 
     var trimmedText: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -604,11 +607,17 @@ private final class ChatInputDraft: ObservableObject {
         updateSubmittableTextState()
     }
 
+    func updateFromExpandedTextView(_ newText: String) {
+        guard text != newText else { return }
+        text = newText
+        updateSubmittableTextState()
+        textRevision += 1
+    }
+
     func updateMeasuredLineCount(_ lineCount: Int) {
-        let lineCount = min(max(lineCount, 1), 5)
+        let lineCount = max(lineCount, 1)
         guard measuredLineCount != lineCount else { return }
         measuredLineCount = lineCount
-        layoutRevision += 1
     }
 
     func setText(_ newText: String) {
@@ -829,6 +838,7 @@ struct ContentView: View {
     @State private var speechInputLastTranscript = ""
     @State private var speechInputLastMergedText = ""
     @State private var inputBarMeasuredHeight: CGFloat = 0
+    @State private var isExpandedInputPresented = false
     @State private var hasLoadedInitialConversation = false
     @State private var showsMainSidebarToggleFadeExclusion = true
     @State private var showsSidebarToggleFadeExclusion = false
@@ -892,8 +902,7 @@ struct ContentView: View {
 
     private var bottomScrollContentPadding: CGFloat {
         let inputBarHeight = inputBarMeasuredHeight > 0 ? inputBarMeasuredHeight : inputBottomFadeOverlap
-        let capsuleClearance: CGFloat = activeAgentCapsules.isEmpty ? 0 : 64
-        return inputBarHeight + capsuleClearance + bottomScrollContentGap
+        return inputBarHeight + bottomScrollContentGap
     }
 
     private var scrollToBottomButtonBottomPadding: CGFloat {
@@ -1171,6 +1180,81 @@ struct ContentView: View {
         editingMessageID != nil
     }
 
+    private var hasPendingInputAttachments: Bool {
+        !pendingImageAttachments.isEmpty || !pendingFileAttachments.isEmpty
+    }
+
+    private var expandedInputCover: some View {
+        ExpandedChatInputView(
+            inputDraft: inputDraft,
+            isGenerating: isGenerating,
+            isEditingMessage: isEditingMessage,
+            isSpeechRecording: speechInputController.isRecording,
+            hasPendingAttachments: hasPendingInputAttachments,
+            onPasteImageProviders: pasteImageProvidersFromInputMenu,
+            onDismiss: dismissExpandedInputAndRefocus,
+            onToggleSpeechInput: toggleSpeechInput,
+            onStopGenerating: {
+                stopGenerating()
+            },
+            onSendMessage: handleExpandedInputSend,
+            onCancelEditingMessage: handleExpandedInputCancelEditing,
+            onSaveEditingMessageOnly: handleExpandedInputSaveEditingOnly,
+            onSaveEditingMessageAndRegenerate: handleExpandedInputSaveEditingAndRegenerate
+        )
+    }
+
+    private func presentExpandedInput() {
+        withAnimation(.easeInOut(duration: 0.22)) {
+            isExpandedInputPresented = true
+        }
+    }
+
+    private func dismissExpandedInput(refocusesInput: Bool) {
+        withAnimation(.easeInOut(duration: 0.22)) {
+            isExpandedInputPresented = false
+        }
+        guard refocusesInput else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
+            guard !isExpandedInputPresented else { return }
+            inputDraft.requestFocus()
+        }
+    }
+
+    private func dismissExpandedInputAndRefocus() {
+        dismissExpandedInput(refocusesInput: true)
+    }
+
+    private func handleExpandedInputSend() {
+        stopSpeechInputIfNeeded()
+        let didStartSending = sendMessage()
+        if didStartSending {
+            dismissExpandedInput(refocusesInput: false)
+        }
+    }
+
+    private func handleExpandedInputCancelEditing() {
+        cancelEditingMessage()
+        dismissExpandedInput(refocusesInput: false)
+    }
+
+    private func handleExpandedInputSaveEditingOnly() {
+        stopSpeechInputIfNeeded()
+        let didSave = saveEditingMessageOnly()
+        if didSave {
+            dismissExpandedInput(refocusesInput: false)
+        }
+    }
+
+    private func handleExpandedInputSaveEditingAndRegenerate() {
+        stopSpeechInputIfNeeded()
+        let didStartSending = saveEditingMessageAndRegenerate()
+        if didStartSending {
+            dismissExpandedInput(refocusesInput: false)
+        }
+    }
+
     private var conversationExportErrorPresented: Binding<Bool> {
         Binding {
             conversationExportErrorMessage != nil
@@ -1330,6 +1414,18 @@ struct ContentView: View {
                 }
             }
             .simultaneousGesture(closeSidebarGesture)
+        }
+        .overlay {
+            if isExpandedInputPresented {
+                expandedInputCover
+                    .transition(
+                        .asymmetric(
+                            insertion: .opacity.combined(with: .move(edge: .bottom)),
+                            removal: .opacity.combined(with: .move(edge: .bottom))
+                        )
+                    )
+                    .zIndex(1000)
+            }
         }
         .onAppear {
             guard !hasLoadedInitialConversation else { return }
@@ -1674,7 +1770,7 @@ struct ContentView: View {
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            Text("你现在在临时聊天中，此聊天不会出现在历史记录中，但是在此对话进行过程中，你的上下文记录会被发送到模型提供商。")
+            Text("在临时聊天中，聊天不会出现在历史记录中，但是在此对话进行过程中，你的上下文记录会被发送到模型提供商。")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -1745,7 +1841,7 @@ struct ContentView: View {
         .background(alignment: .bottom) {
             if includesLegacyFade {
                 inputBottomFadeBackdrop
-                    .ignoresSafeArea(edges: .bottom)
+                    .ignoresSafeArea(.container, edges: .bottom)
             }
         }
         .background {
@@ -1822,10 +1918,11 @@ struct ContentView: View {
             isGenerating: isGenerating,
             isEditingMessage: isEditingMessage,
             isSpeechRecording: speechInputController.isRecording,
-            hasPendingAttachments: !pendingImageAttachments.isEmpty || !pendingFileAttachments.isEmpty,
+            hasPendingAttachments: hasPendingInputAttachments,
             inputGlassTint: inputGlassTint,
             controlGlassHighlight: controlGlassHighlight,
             onPasteImageProviders: pasteImageProvidersFromInputMenu,
+            onExpandInput: presentExpandedInput,
             onToggleSpeechInput: toggleSpeechInput,
             onStopGenerating: {
                 stopGenerating()
@@ -1849,7 +1946,7 @@ struct ContentView: View {
     }
 
     private var inputDisclaimer: some View {
-        Text("AI也有可能出错，信息仅供参考，请亲自核查。")
+        Text("AI也有可能出错，输出仅供参考，请亲自核查重要信息。")
             .font(.caption2)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
@@ -1930,6 +2027,7 @@ struct ContentView: View {
             }
             .padding(.horizontal, 6)
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -2472,13 +2570,14 @@ struct ContentView: View {
         return value
     }
 
-    func sendMessage() {
+    @discardableResult
+    func sendMessage() -> Bool {
         stopSpeechInputIfNeeded()
         let userText = inputDraft.trimmedText
         let imageAttachments = pendingImageAttachments
         let fileAttachments = pendingFileAttachments
         ensureCurrentConversation()
-        startStreamingResponse(
+        return startStreamingResponse(
             userText: userText,
             imageAttachments: imageAttachments,
             fileAttachments: fileAttachments,
@@ -2487,6 +2586,7 @@ struct ContentView: View {
         )
     }
 
+    @discardableResult
     private func startStreamingResponse(
         userText: String,
         imageAttachments: [ChatImageAttachment],
@@ -2495,7 +2595,7 @@ struct ContentView: View {
         contextMessages: [ChatMessage],
         appendsUserMessage: Bool,
         existingUserMessageID: UUID? = nil
-    ) {
+    ) -> Bool {
         let configuration = currentConfiguration
         let trimmedBaseURL = configuration.requestURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         let apiFormat = configuration.apiFormat
@@ -2518,54 +2618,54 @@ struct ContentView: View {
             model: model
         )
 
-        guard !userText.isEmpty || !imageAttachments.isEmpty || !fileAttachments.isEmpty else { return }
+        guard !userText.isEmpty || !imageAttachments.isEmpty || !fileAttachments.isEmpty else { return false }
 
         guard !usesAgentTools || configuration.apiFormat != .vertexAIExpress else {
             appendAssistantError("Vertex Express 暂不支持 MCP 工具调用，请关闭 MCP 胶囊或切换 API 类型。")
-            return
+            return false
         }
 
         guard !usesAgentTools || configuration.selectedModelSupportsTools else {
             appendAssistantError("当前模型未标记为支持工具调用。请在模型设置里勾选“工具”，或关闭 MCP 胶囊后再发送。")
-            return
+            return false
         }
 
         guard !usesAgentTools || !agentTools.isEmpty else {
             appendAssistantError("当前启用的 MCP 没有可用工具。请在设置里刷新工具列表，或检查允许工具名称。")
-            return
+            return false
         }
 
         guard imageAttachments.isEmpty
                 || usesImageAttachments
                 || !imageContextDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             appendAssistantError("当前模型不支持图片输入，且这条图片消息还没有可用的隐藏描述。请切换到支持图片的多模态模型后重试。")
-            return
+            return false
         }
 
         guard usesImageAttachments || !containsImageWithoutContextDescription(in: contextMessages) else {
             appendAssistantError("当前模型不支持图片输入，且上下文中有图片消息还没有可用的隐藏描述。请稍后重试，或切换到支持图片的多模态模型。")
-            return
+            return false
         }
 
         guard !trimmedBaseURL.isEmpty else {
             appendAssistantError("请先配置 Base URL。")
-            return
+            return false
         }
 
         guard !model.isEmpty else {
             appendAssistantError("请先选择模型。")
-            return
+            return false
         }
 
-        guard let selectedConversationID else { return }
+        guard let selectedConversationID else { return false }
 
         guard activeConversationGenerations[selectedConversationID] == nil else {
-            return
+            return false
         }
 
         guard activeConversationGenerations.count < maxActiveConversationGenerations else {
             appendAssistantError("已有 \(maxActiveConversationGenerations) 个对话正在请求中，请等待其中一个完成后再发送。")
-            return
+            return false
         }
 
         let requestService = AIService()
@@ -2702,6 +2802,8 @@ struct ContentView: View {
                 reasoningEffort: reasoningEffort
             )
         }
+
+        return true
     }
 
     private func activeGeneration(
@@ -3306,12 +3408,13 @@ struct ContentView: View {
         clearInputState()
     }
 
-    private func saveEditingMessageOnly() {
+    @discardableResult
+    private func saveEditingMessageOnly() -> Bool {
         stopSpeechInputIfNeeded()
         guard let editingMessageID,
               let index = messages.firstIndex(where: { $0.id == editingMessageID && $0.role == "user" }) else {
             clearInputState()
-            return
+            return false
         }
 
         let previousMessages = messages
@@ -3331,15 +3434,17 @@ struct ContentView: View {
         persistCurrentConversation()
         removeUnreferencedConversationImages()
         clearInputState()
+        return true
     }
 
-    private func saveEditingMessageAndRegenerate() {
+    @discardableResult
+    private func saveEditingMessageAndRegenerate() -> Bool {
         stopSpeechInputIfNeeded()
         guard !isGenerating,
               let editingMessageID,
               let index = messages.firstIndex(where: { $0.id == editingMessageID && $0.role == "user" }) else {
             clearInputState()
-            return
+            return false
         }
 
         let editedText = inputDraft.trimmedText
@@ -3364,7 +3469,7 @@ struct ContentView: View {
         persistCurrentConversation()
         removeUnreferencedConversationImages()
 
-        startStreamingResponse(
+        return startStreamingResponse(
             userText: editedText,
             imageAttachments: editedImages,
             imageContextDescription: editedImageContextDescription,
@@ -7003,6 +7108,7 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
     let inputGlassTint: Color
     let controlGlassHighlight: Color
     let onPasteImageProviders: ([NSItemProvider]) -> Void
+    let onExpandInput: () -> Void
     let onToggleSpeechInput: () -> Void
     let onStopGenerating: () -> Void
     let onSendMessage: () -> Void
@@ -7020,6 +7126,7 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
         inputGlassTint: Color,
         controlGlassHighlight: Color,
         onPasteImageProviders: @escaping ([NSItemProvider]) -> Void,
+        onExpandInput: @escaping () -> Void,
         onToggleSpeechInput: @escaping () -> Void,
         onStopGenerating: @escaping () -> Void,
         onSendMessage: @escaping () -> Void,
@@ -7036,6 +7143,7 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
         self.inputGlassTint = inputGlassTint
         self.controlGlassHighlight = controlGlassHighlight
         self.onPasteImageProviders = onPasteImageProviders
+        self.onExpandInput = onExpandInput
         self.onToggleSpeechInput = onToggleSpeechInput
         self.onStopGenerating = onStopGenerating
         self.onSendMessage = onSendMessage
@@ -7049,12 +7157,27 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
         HStack(alignment: .center, spacing: 10) {
             optionsMenu()
 
+            textInputArea
+
+            speechInputControl
+
+            inputActionControl
+        }
+    }
+
+    private var textInputArea: some View {
+        ZStack(alignment: .topTrailing) {
             ImagePastingTextView(
                 text: inputDraft.text,
                 textRevision: inputDraft.textRevision,
                 isFocused: $inputDraft.isFocused,
                 focusRequestID: inputDraft.focusRequestID,
+                focusDelay: 0,
                 placeholder: "输入消息...",
+                maxVisibleLineCount: 4,
+                fillsAvailableHeight: false,
+                trailingAccessoryInset: 34,
+                allowsFocus: true,
                 onTextChanged: inputDraft.updateFromTextView,
                 onMeasuredLineCountChanged: inputDraft.updateMeasuredLineCount,
                 onPasteImageProviders: onPasteImageProviders
@@ -7062,12 +7185,32 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
             .font(.body)
             .foregroundStyle(Color.primary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 11)
 
-            speechInputControl
-
-            inputActionControl
+            if inputDraft.showsExpandedInputButton {
+                Button {
+                    onExpandInput()
+                } label: {
+                    expandInputIcon
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("展开输入框")
+            }
         }
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var expandInputIcon: some View {
+        ZStack {
+            Image(systemName: "arrow.up.left")
+                .offset(x: -3, y: -3)
+            Image(systemName: "arrow.down.right")
+                .offset(x: 3, y: 3)
+        }
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(.primary)
+        .frame(width: 32, height: 32)
+        .contentShape(Rectangle())
     }
 
     private var canSendMessage: Bool {
@@ -7196,12 +7339,193 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
     }
 }
 
+private struct ExpandedChatInputView: View {
+    @ObservedObject var inputDraft: ChatInputDraft
+    @Environment(\.colorScheme) private var colorScheme
+
+    let isGenerating: Bool
+    let isEditingMessage: Bool
+    let isSpeechRecording: Bool
+    let hasPendingAttachments: Bool
+    let onPasteImageProviders: ([NSItemProvider]) -> Void
+    let onDismiss: () -> Void
+    let onToggleSpeechInput: () -> Void
+    let onStopGenerating: () -> Void
+    let onSendMessage: () -> Void
+    let onCancelEditingMessage: () -> Void
+    let onSaveEditingMessageOnly: () -> Void
+    let onSaveEditingMessageAndRegenerate: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer(minLength: 0)
+
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("收起输入框")
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 10)
+
+            GeometryReader { geometry in
+                ImagePastingTextView(
+                    text: inputDraft.text,
+                    textRevision: inputDraft.textRevision,
+                    isFocused: .constant(true),
+                    focusRequestID: 1,
+                    focusDelay: 0.25,
+                    placeholder: "输入消息...",
+                    maxVisibleLineCount: 200,
+                    fillsAvailableHeight: true,
+                    trailingAccessoryInset: 0,
+                    allowsFocus: true,
+                    onTextChanged: inputDraft.updateFromExpandedTextView,
+                    onMeasuredLineCountChanged: { _ in },
+                    onPasteImageProviders: onPasteImageProviders
+                )
+                .font(.body)
+                .foregroundStyle(Color.primary)
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 28)
+            .padding(.top, 6)
+            .padding(.bottom, 14)
+
+            HStack(spacing: 12) {
+                speechInputControl
+
+                Spacer(minLength: 0)
+
+                inputActionControl
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 20)
+        }
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+    }
+
+    private var canSendMessage: Bool {
+        inputDraft.hasSubmittableText || hasPendingAttachments
+    }
+
+    private var activeControlTint: Color {
+        Color.accentColor.opacity(colorScheme == .dark ? 0.24 : 0.14)
+    }
+
+    private var quietControlTint: Color {
+        Color(uiColor: .secondarySystemBackground)
+    }
+
+    private var cancelControlTint: Color {
+        Color.red.opacity(colorScheme == .dark ? 0.22 : 0.12)
+    }
+
+    private var speechInputControl: some View {
+        Button {
+            onToggleSpeechInput()
+        } label: {
+            expandedControlIcon(
+                systemName: isSpeechRecording ? "mic.fill" : "mic",
+                foreground: isSpeechRecording ? .red : .primary,
+                tint: isSpeechRecording ? cancelControlTint : quietControlTint
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isSpeechRecording ? "停止语音输入" : "开始语音输入")
+    }
+
+    @ViewBuilder
+    private var inputActionControl: some View {
+        if isEditingMessage {
+            HStack(spacing: 10) {
+                Button {
+                    onCancelEditingMessage()
+                } label: {
+                    expandedControlIcon(
+                        systemName: "xmark",
+                        foreground: .red,
+                        tint: cancelControlTint
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("取消修改")
+
+                Menu {
+                    Button("仅修改") {
+                        onSaveEditingMessageOnly()
+                    }
+
+                    Button("修改并发送") {
+                        onSaveEditingMessageAndRegenerate()
+                    }
+                } label: {
+                    expandedControlIcon(
+                        systemName: "checkmark",
+                        tint: canSendMessage ? activeControlTint : quietControlTint
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSendMessage)
+                .accessibilityLabel("保存修改")
+            }
+        } else {
+            Button {
+                if isGenerating {
+                    onStopGenerating()
+                } else {
+                    onSendMessage()
+                }
+            } label: {
+                expandedControlIcon(
+                    systemName: isGenerating ? "stop.fill" : "paperplane.fill",
+                    tint: isGenerating || canSendMessage ? activeControlTint : quietControlTint
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!isGenerating && !canSendMessage)
+            .accessibilityLabel(isGenerating ? "停止生成" : "发送消息")
+        }
+    }
+
+    private func expandedControlIcon(
+        systemName: String,
+        foreground: Color = .primary,
+        tint: Color
+    ) -> some View {
+        ZStack {
+            Circle()
+                .fill(.ultraThinMaterial)
+                .overlay(Circle().fill(tint))
+
+            Image(systemName: systemName)
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(foreground)
+        }
+        .frame(width: 48, height: 48)
+    }
+}
+
 struct ImagePastingTextView: UIViewRepresentable {
     let text: String
     let textRevision: Int
     @Binding var isFocused: Bool
     let focusRequestID: Int
+    let focusDelay: TimeInterval
     let placeholder: String
+    let maxVisibleLineCount: Int
+    let fillsAvailableHeight: Bool
+    let trailingAccessoryInset: CGFloat
+    let allowsFocus: Bool
     let onTextChanged: (String) -> Void
     let onMeasuredLineCountChanged: (Int) -> Void
     let onPasteImageProviders: ([NSItemProvider]) -> Void
@@ -7217,16 +7541,33 @@ struct ImagePastingTextView: UIViewRepresentable {
         textView.tintColor = .tintColor
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
-        textView.isScrollEnabled = false
+        textView.isScrollEnabled = true
+        textView.alwaysBounceVertical = false
         textView.returnKeyType = .default
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return textView
     }
 
     func updateUIView(_ textView: ImagePastingUITextView, context: Context) {
+        textView.configure(
+            maxVisibleLineCount: maxVisibleLineCount,
+            fillsAvailableHeight: fillsAvailableHeight,
+            trailingAccessoryInset: trailingAccessoryInset
+        )
+
+        var didApplyExternalText = false
         if context.coordinator.lastAppliedTextRevision != textRevision,
            (textView.text ?? "") != text {
+            let previousText = textView.text ?? ""
+            let previousSelectedRange = textView.selectedRange
             textView.text = text
+            didApplyExternalText = true
+            textView.selectedRange = context.coordinator.restoredSelectedRange(
+                previousText: previousText,
+                newText: text,
+                previousSelectedRange: previousSelectedRange
+            )
+            textView.scrollCaretToVisibleIfNeeded()
         }
         context.coordinator.lastAppliedTextRevision = textRevision
 
@@ -7238,27 +7579,35 @@ struct ImagePastingTextView: UIViewRepresentable {
         textView.placeholderText = placeholder
         textView.accessibilityLabel = placeholder
         textView.updatePlaceholderVisibility()
+        textView.updateScrollingBehavior()
+        textView.scrollCaretToVisibleIfNeeded()
+        if didApplyExternalText || context.coordinator.needsScheduledLayoutStateRefresh(for: textView) {
+            context.coordinator.scheduleLayoutStateRefresh(for: textView)
+        }
 
         context.coordinator.updateFocus(
             for: textView,
             shouldBeFocused: isFocused,
-            requestID: focusRequestID
+            allowsFocus: allowsFocus,
+            requestID: focusRequestID,
+            focusDelay: focusDelay
         )
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ImagePastingUITextView, context: Context) -> CGSize? {
         let width = proposal.width ?? 0
         let fittingWidth = width > 0 ? width : UIScreen.main.bounds.width
+        let lineHeight = uiView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight
+        if fillsAvailableHeight, let proposedHeight = proposal.height, proposedHeight > 0 {
+            return CGSize(width: fittingWidth, height: max(proposedHeight, lineHeight))
+        }
+
         let fittingSize = uiView.sizeThatFits(
             CGSize(width: fittingWidth, height: .greatestFiniteMagnitude)
         )
-        let lineHeight = uiView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight
-        let maxHeight = lineHeight * 5
+
+        let maxHeight = lineHeight * CGFloat(max(maxVisibleLineCount, 1))
         let height = min(max(fittingSize.height, lineHeight), maxHeight)
-        let shouldScroll = fittingSize.height > maxHeight
-        if uiView.isScrollEnabled != shouldScroll {
-            uiView.isScrollEnabled = shouldScroll
-        }
         return CGSize(width: fittingWidth, height: height)
     }
 
@@ -7275,7 +7624,14 @@ struct ImagePastingTextView: UIViewRepresentable {
         var onTextChanged: (String) -> Void
         var onMeasuredLineCountChanged: (Int) -> Void
         private var lastHandledFocusRequestID: Int?
+        private var pendingDelayedFocusRequestID: Int?
         var lastAppliedTextRevision: Int?
+        private var lastScheduledLayoutRefreshKey: LayoutRefreshKey?
+
+        private struct LayoutRefreshKey: Equatable {
+            let width: CGFloat
+            let trailingInset: CGFloat
+        }
 
         init(
             isFocused: Binding<Bool>,
@@ -7291,7 +7647,15 @@ struct ImagePastingTextView: UIViewRepresentable {
             let updatedText = textView.text ?? ""
             onTextChanged(updatedText)
             (textView as? ImagePastingUITextView)?.updatePlaceholderVisibility()
-            publishMeasuredLineCount(for: textView)
+            if let textView = textView as? ImagePastingUITextView {
+                refreshLayoutState(for: textView)
+            } else {
+                publishMeasuredLineCount(for: textView)
+            }
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            (textView as? ImagePastingUITextView)?.scrollCaretToVisibleIfNeeded()
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -7307,11 +7671,39 @@ struct ImagePastingTextView: UIViewRepresentable {
         func updateFocus(
             for textView: ImagePastingUITextView,
             shouldBeFocused: Bool,
-            requestID: Int
+            allowsFocus: Bool,
+            requestID: Int,
+            focusDelay: TimeInterval
         ) {
             let isNewRequest = lastHandledFocusRequestID != requestID
-            guard isNewRequest || shouldBeFocused != textView.isFirstResponder else { return }
-            lastHandledFocusRequestID = requestID
+            guard allowsFocus else {
+                lastHandledFocusRequestID = requestID
+                pendingDelayedFocusRequestID = nil
+                if textView.isFirstResponder {
+                    textView.resignFirstResponder()
+                }
+                return
+            }
+
+            guard isNewRequest || (shouldBeFocused && !textView.isFirstResponder) else { return }
+
+            if isNewRequest {
+                lastHandledFocusRequestID = requestID
+                pendingDelayedFocusRequestID = nil
+            }
+
+            if shouldBeFocused, focusDelay > 0 {
+                guard pendingDelayedFocusRequestID != requestID else { return }
+
+                pendingDelayedFocusRequestID = requestID
+                retryFocus(
+                    to: textView,
+                    shouldBeFocused: shouldBeFocused,
+                    attemptsRemaining: 4,
+                    delay: focusDelay
+                )
+                return
+            }
 
             if shouldBeFocused, textView.window != nil {
                 if !textView.becomeFirstResponder() {
@@ -7320,15 +7712,20 @@ struct ImagePastingTextView: UIViewRepresentable {
                 return
             }
 
-            retryFocus(to: textView, shouldBeFocused: shouldBeFocused, attemptsRemaining: 4)
+            if shouldBeFocused {
+                retryFocus(to: textView, shouldBeFocused: shouldBeFocused, attemptsRemaining: 4)
+            } else if isNewRequest, textView.isFirstResponder {
+                textView.resignFirstResponder()
+            }
         }
 
         private func retryFocus(
             to textView: ImagePastingUITextView,
             shouldBeFocused: Bool,
-            attemptsRemaining: Int
+            attemptsRemaining: Int,
+            delay: TimeInterval = 0.01
         ) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self, weak textView] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak textView] in
                 guard let self,
                       let textView,
                       self.isFocused.wrappedValue == shouldBeFocused,
@@ -7361,15 +7758,68 @@ struct ImagePastingTextView: UIViewRepresentable {
             }
         }
 
-        private func publishMeasuredLineCount(for textView: UITextView) {
-            let lineHeight = max(
-                textView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight,
-                1
+        func refreshLayoutState(for textView: ImagePastingUITextView) {
+            textView.updateScrollingBehavior()
+            publishMeasuredLineCount(for: textView)
+            textView.scrollCaretToVisibleIfNeeded()
+        }
+
+        func needsScheduledLayoutStateRefresh(for textView: ImagePastingUITextView) -> Bool {
+            guard textView.bounds.width > 0 else { return false }
+
+            let key = LayoutRefreshKey(
+                width: Self.roundedLayoutValue(textView.bounds.width),
+                trailingInset: Self.roundedLayoutValue(textView.textContainerInset.right)
             )
-            let verticalInsets = textView.textContainerInset.top + textView.textContainerInset.bottom
-            let contentHeight = max(textView.contentSize.height - verticalInsets, lineHeight)
-            let lineCount = Int(ceil(contentHeight / lineHeight))
-            onMeasuredLineCountChanged(lineCount)
+            guard lastScheduledLayoutRefreshKey != key else { return false }
+
+            lastScheduledLayoutRefreshKey = key
+            return true
+        }
+
+        func scheduleLayoutStateRefresh(for textView: ImagePastingUITextView) {
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.refreshLayoutState(for: textView)
+            }
+        }
+
+        func restoredSelectedRange(
+            previousText: String,
+            newText: String,
+            previousSelectedRange: NSRange
+        ) -> NSRange {
+            let previousTextLength = (previousText as NSString).length
+            let newTextLength = (newText as NSString).length
+
+            if previousSelectedRange.location >= previousTextLength {
+                return NSRange(location: newTextLength, length: 0)
+            }
+
+            let location = min(max(previousSelectedRange.location, 0), newTextLength)
+            let availableLength = max(newTextLength - location, 0)
+            let length = min(max(previousSelectedRange.length, 0), availableLength)
+            return NSRange(location: location, length: length)
+        }
+
+        private func publishMeasuredLineCount(for textView: UITextView) {
+            if let textView = textView as? ImagePastingUITextView {
+                guard textView.bounds.width > 0 else { return }
+                onMeasuredLineCountChanged(textView.measuredVisualLineCount())
+            } else {
+                let lineHeight = max(
+                    textView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .body).lineHeight,
+                    1
+                )
+                let verticalInsets = textView.textContainerInset.top + textView.textContainerInset.bottom
+                let contentHeight = max(textView.contentSize.height - verticalInsets, lineHeight)
+                let lineCount = Int(ceil(contentHeight / lineHeight))
+                onMeasuredLineCountChanged(lineCount)
+            }
+        }
+
+        private static func roundedLayoutValue(_ value: CGFloat) -> CGFloat {
+            (value * 2).rounded() / 2
         }
     }
 }
@@ -7377,6 +7827,9 @@ struct ImagePastingTextView: UIViewRepresentable {
 final class ImagePastingUITextView: UITextView {
     var onPasteImageProviders: (([NSItemProvider]) -> Void)?
     private let placeholderLabel = UILabel()
+    private var placeholderTrailingConstraint: NSLayoutConstraint?
+    private var maxVisibleLineCount = 5
+    private var fillsAvailableHeight = false
 
     var placeholderText: String = "" {
         didSet {
@@ -7406,8 +7859,89 @@ final class ImagePastingUITextView: UITextView {
         setupPlaceholder()
     }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateScrollingBehavior()
+    }
+
+    func configure(
+        maxVisibleLineCount: Int,
+        fillsAvailableHeight: Bool,
+        trailingAccessoryInset: CGFloat
+    ) {
+        let clampedLineCount = max(maxVisibleLineCount, 1)
+        var didChangeLayoutBehavior = false
+
+        if self.maxVisibleLineCount != clampedLineCount {
+            self.maxVisibleLineCount = clampedLineCount
+            didChangeLayoutBehavior = true
+        }
+
+        if self.fillsAvailableHeight != fillsAvailableHeight {
+            self.fillsAvailableHeight = fillsAvailableHeight
+            didChangeLayoutBehavior = true
+        }
+
+        alwaysBounceVertical = fillsAvailableHeight
+
+        if abs(textContainerInset.right - trailingAccessoryInset) > 0.5 {
+            textContainerInset.right = trailingAccessoryInset
+            placeholderTrailingConstraint?.constant = -trailingAccessoryInset
+            didChangeLayoutBehavior = true
+        }
+
+        if didChangeLayoutBehavior {
+            setNeedsLayout()
+        }
+    }
+
     func updatePlaceholderVisibility() {
         placeholderLabel.isHidden = !text.isEmpty
+    }
+
+    func updateScrollingBehavior() {
+        if !isScrollEnabled {
+            isScrollEnabled = true
+        }
+
+        showsVerticalScrollIndicator = fillsAvailableHeight || measuredVisualLineCount() > maxVisibleLineCount
+    }
+
+    func scrollCaretToVisibleIfNeeded() {
+        guard isFirstResponder, isScrollEnabled else { return }
+
+        let textLength = ((text ?? "") as NSString).length
+        let caretLocation = min(selectedRange.location + selectedRange.length, textLength)
+        scrollRangeToVisible(NSRange(location: caretLocation, length: 0))
+    }
+
+    func measuredVisualLineCount() -> Int {
+        let textWidth = bounds.width
+            - textContainerInset.left
+            - textContainerInset.right
+            - textContainer.lineFragmentPadding * 2
+        guard textWidth > 0 else { return 1 }
+
+        let text = text ?? ""
+        guard !text.isEmpty else { return 1 }
+
+        let font = font ?? .preferredFont(forTextStyle: .body)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byCharWrapping
+
+        let boundingRect = (text as NSString).boundingRect(
+            with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [
+                .font: font,
+                .paragraphStyle: paragraphStyle
+            ],
+            context: nil
+        )
+
+        let baseLineCount = Int(ceil(max(boundingRect.height, font.lineHeight) / max(font.lineHeight, 1)))
+        let lineCount = text.hasSuffix("\n") ? baseLineCount + 1 : baseLineCount
+        return max(lineCount, 1)
     }
 
     private func setupPlaceholder() {
@@ -7418,10 +7952,13 @@ final class ImagePastingUITextView: UITextView {
         placeholderLabel.isUserInteractionEnabled = false
         addSubview(placeholderLabel)
 
+        let trailingConstraint = placeholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor)
+        placeholderTrailingConstraint = trailingConstraint
+
         NSLayoutConstraint.activate([
             placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
             placeholderLabel.topAnchor.constraint(equalTo: topAnchor),
-            placeholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor)
+            trailingConstraint
         ])
     }
 
