@@ -385,7 +385,7 @@ struct AIConfigurationView: View {
                                 .textFieldStyle(.roundedBorder)
                         }
 
-                        Text("\(model.supportsReasoning ? "支持推理" : "不支持推理") · \(model.supportsImages ? "支持图片" : "仅文字") · \(model.supportsTools ? "支持工具" : "无工具")")
+                        Text(modelCapabilitySummary(for: model))
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
@@ -461,9 +461,9 @@ struct AIConfigurationView: View {
                                         .lineLimit(2)
                                         .truncationMode(.middle)
                                     HStack(spacing: 8) {
-                                        Text(model.supportsReasoning ? "支持推理" : "不支持推理")
-                                        Text(model.supportsImages ? "支持图片" : "仅文字")
-                                        Text(model.supportsTools ? "支持工具" : "无工具")
+                                        Text(modelReasoningCapabilityText(model.supportsReasoning))
+                                        Text(modelImageCapabilityText(model.supportsImages))
+                                        Text(modelToolCapabilityText(model.supportsTools))
                                         if selectedConfiguration?.models.contains(where: { $0.name == model.name }) == true {
                                             Text("已在当前配置中")
                                         }
@@ -678,15 +678,53 @@ struct AIConfigurationView: View {
     private var authFooterText: String {
         switch selectedConfiguration?.apiFormat ?? .openAIChatCompletions {
         case .openAIChatCompletions, .openAIResponses:
-            return "填写 API Key 时会自动发送 Authorization: Bearer <API Key>。API Key 会存入钥匙串。"
+            return AppLocalizations.string(
+                "configuration.authFooter.bearer",
+                defaultValue: "When an API Key is provided, Authorization: Bearer <API Key> is sent automatically. The API Key is stored in Keychain."
+            )
         case .anthropicMessages:
             if selectedConfiguration?.anthropicClaudeCodeImpersonationEnabled == true {
-                return "Claude Code 伪装开启时，所有模型都会把 API Key 作为 Authorization: Bearer <API Key> 发送，并注入 1M context 和 Claude Code 契约。API Key 会存入钥匙串。"
+                return AppLocalizations.string(
+                    "configuration.authFooter.anthropicClaudeCode",
+                    defaultValue: "When Claude Code impersonation is enabled, every model sends the API Key as Authorization: Bearer <API Key> and injects 1M context plus the Claude Code contract. The API Key is stored in Keychain."
+                )
             }
-            return "Anthropic Messages 会把 API Key 作为 x-api-key 发送，并自动附加 anthropic-version。API Key 会存入钥匙串。"
+            return AppLocalizations.string(
+                "configuration.authFooter.anthropic",
+                defaultValue: "Anthropic Messages sends the API Key as x-api-key and automatically adds anthropic-version. The API Key is stored in Keychain."
+            )
         case .vertexAIExpress:
-            return "Vertex Express 会把 API Key 加到请求 query 中；错误诊断会隐藏 query，API Key 会存入钥匙串。"
+            return AppLocalizations.string(
+                "configuration.authFooter.vertex",
+                defaultValue: "Vertex Express adds the API Key to the request query. Error diagnostics hide the query, and the API Key is stored in Keychain."
+            )
         }
+    }
+
+    private func modelCapabilitySummary(for model: AIModelConfiguration) -> String {
+        [
+            modelReasoningCapabilityText(model.supportsReasoning),
+            modelImageCapabilityText(model.supportsImages),
+            modelToolCapabilityText(model.supportsTools)
+        ].joined(separator: " · ")
+    }
+
+    private func modelReasoningCapabilityText(_ isSupported: Bool) -> String {
+        isSupported
+            ? AppLocalizations.string("modelCapability.reasoningSupported", defaultValue: "Supports reasoning")
+            : AppLocalizations.string("modelCapability.reasoningUnsupported", defaultValue: "No reasoning")
+    }
+
+    private func modelImageCapabilityText(_ isSupported: Bool) -> String {
+        isSupported
+            ? AppLocalizations.string("modelCapability.imagesSupported", defaultValue: "Supports images")
+            : AppLocalizations.string("modelCapability.textOnly", defaultValue: "Text only")
+    }
+
+    private func modelToolCapabilityText(_ isSupported: Bool) -> String {
+        isSupported
+            ? AppLocalizations.string("modelCapability.toolsSupported", defaultValue: "Supports tools")
+            : AppLocalizations.string("modelCapability.noTools", defaultValue: "No tools")
     }
 
     private var generatesImageContextDescriptionsBinding: Binding<Bool> {
@@ -741,7 +779,12 @@ struct AIConfigurationView: View {
             normalizeConfigurationNames()
         }
         let didSave = AIConfigurationStore.saveConfigurations(configurations)
-        saveErrorMessage = didSave ? nil : "配置保存失败，请检查钥匙串或本机存储权限。"
+        saveErrorMessage = didSave
+            ? nil
+            : AppLocalizations.string(
+                "configuration.saveFailed",
+                defaultValue: "Failed to save configuration. Check Keychain or local storage permissions."
+            )
         if let selectedConfigurationID {
             AIConfigurationStore.saveSelectedConfigurationID(selectedConfigurationID)
         }
@@ -811,7 +854,11 @@ struct AIConfigurationView: View {
     private func addConfiguration(from provider: BuiltInAIProvider? = nil) {
         var configuration = provider?.makeConfiguration() ?? AIConfiguration()
         if provider == nil {
-            configuration.name = "配置 \(configurations.count + 1)"
+            configuration.name = AppLocalizations.format(
+                "configuration.numberedName",
+                defaultValue: "Configuration %d",
+                arguments: [configurations.count + 1]
+            )
         }
         configurations.append(configuration)
         selectedConfigurationID = configuration.id
@@ -863,7 +910,10 @@ struct AIConfigurationView: View {
             configuration.models.removeAll()
             configuration.selectedModel = ""
         }
-        modelFetchMessage = "已删除当前配置下的所有模型。"
+        modelFetchMessage = AppLocalizations.string(
+            "configuration.models.deletedAll",
+            defaultValue: "Deleted all models in the current configuration."
+        )
     }
     
     private func supportsReasoningBinding(for model: String) -> Binding<Bool> {
@@ -925,19 +975,33 @@ struct AIConfigurationView: View {
     private func modelParameterSummary(for model: AIModelConfiguration) -> String {
         var parts = [String]()
         if let temperature = model.temperature {
-            parts.append("温度 \(Self.parameterString(from: temperature))")
+            parts.append(AppLocalizations.format(
+                "modelParameters.temperature",
+                defaultValue: "Temperature %@",
+                arguments: [Self.parameterString(from: temperature)]
+            ))
         }
         if let topP = model.topP {
             parts.append("top_p \(Self.parameterString(from: topP))")
         }
         if let contextWindowTokens = model.contextWindowTokens {
-            parts.append("上下文 \(contextWindowTokens)")
+            parts.append(AppLocalizations.format(
+                "modelParameters.context",
+                defaultValue: "Context %d",
+                arguments: [contextWindowTokens]
+            ))
         }
         if let maxOutputTokens = model.maxOutputTokens {
-            parts.append("输出 \(maxOutputTokens)")
+            parts.append(AppLocalizations.format(
+                "modelParameters.output",
+                defaultValue: "Output %d",
+                arguments: [maxOutputTokens]
+            ))
         }
 
-        return parts.isEmpty ? "默认" : parts.joined(separator: " · ")
+        return parts.isEmpty
+            ? AppLocalizations.string("modelParameters.default", defaultValue: "Default")
+            : parts.joined(separator: " · ")
     }
 
     private func modelOptionalDoubleBinding(
@@ -1023,7 +1087,10 @@ struct AIConfigurationView: View {
             switch result {
             case .success(let models):
                 guard !models.isEmpty else {
-                    modelFetchMessage = "没有获取到模型。"
+                    modelFetchMessage = AppLocalizations.string(
+                        "configuration.models.fetchEmpty",
+                        defaultValue: "No models were fetched."
+                    )
                     return
                 }
                 let uniqueFetchedModels = uniqueModels(from: models)
@@ -1031,7 +1098,11 @@ struct AIConfigurationView: View {
                 let reasoningModelCount = uniqueFetchedModels.filter(\.supportsReasoning).count
                 let imageModelCount = uniqueFetchedModels.filter(\.supportsImages).count
                 let toolModelCount = uniqueFetchedModels.filter(\.supportsTools).count
-                modelFetchMessage = "已获取 \(fetchedModels.count) 个模型，识别到 \(reasoningModelCount) 个支持推理、\(imageModelCount) 个支持图片、\(toolModelCount) 个支持工具，请选择要导入的模型。"
+                modelFetchMessage = AppLocalizations.format(
+                    "configuration.models.fetchSuccess",
+                    defaultValue: "Fetched %d models. Detected %d reasoning-capable, %d image-capable, and %d tool-capable models. Select models to import.",
+                    arguments: [fetchedModels.count, reasoningModelCount, imageModelCount, toolModelCount]
+                )
                 isModelImportSheetPresented = true
             case .failure(let error):
                 modelFetchMessage = error.localizedDescription
@@ -1072,7 +1143,11 @@ struct AIConfigurationView: View {
             }
         }
 
-        modelFetchMessage = "已导入 \(selectedModels.count) 个模型。"
+        modelFetchMessage = AppLocalizations.format(
+            "configuration.models.imported",
+            defaultValue: "Imported %d models.",
+            arguments: [selectedModels.count]
+        )
         selectedFetchedModelNames.removeAll()
         isModelImportSheetPresented = false
     }
@@ -1106,7 +1181,9 @@ private struct CheckboxButton: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityValue(isOn ? "已选中" : "未选中")
+        .accessibilityValue(isOn
+            ? AppLocalizations.string("accessibility.selected", defaultValue: "Selected")
+            : AppLocalizations.string("accessibility.notSelected", defaultValue: "Not selected"))
     }
 }
 

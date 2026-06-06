@@ -16,8 +16,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "DF1124312FBD5F56007131D0"
-               BuildableName = "AI Client.app"
-               BlueprintName = "AI Client"
+               BuildableName = "MewyAI.app"
+               BlueprintName = "MewyAI"
                ReferencedContainer = "container:AI Client.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -46,8 +46,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DF1124312FBD5F56007131D0"
-            BuildableName = "AI Client.app"
-            BlueprintName = "AI Client"
+            BuildableName = "MewyAI.app"
+            BlueprintName = "MewyAI"
             ReferencedContainer = "container:AI Client.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -63,8 +63,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DF1124312FBD5F56007131D0"
-            BuildableName = "AI Client.app"
-            BlueprintName = "AI Client"
+            BuildableName = "MewyAI.app"
+            BlueprintName = "MewyAI"
             ReferencedContainer = "container:AI Client.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

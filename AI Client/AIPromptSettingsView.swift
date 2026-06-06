@@ -232,7 +232,14 @@ struct AIPromptSettingsView: View {
 
     private func addPromptPreset() {
         ensureSelection()
-        let promptPreset = AIPromptPreset(name: "提示词 \(promptPresets.count + 1)", content: "")
+        let promptPreset = AIPromptPreset(
+            name: AppLocalizations.format(
+                "promptPreset.numberedName",
+                defaultValue: "Prompt %d",
+                arguments: [promptPresets.count + 1]
+            ),
+            content: ""
+        )
         promptPresets.append(promptPreset)
         updateSelectedConfiguration(persists: false) { configuration in
             configuration.selectPromptPreset(promptPreset.id, from: promptPresets)
@@ -264,7 +271,12 @@ struct AIPromptSettingsView: View {
         let didSaveConfigurations = AIConfigurationStore.saveConfigurations(configurations)
         let didSavePromptPresets = AIConfigurationStore.savePromptPresets(promptPresets)
         let didSave = didSaveConfigurations && didSavePromptPresets
-        saveErrorMessage = didSave ? nil : "提示词保存失败，请检查钥匙串或本机存储权限。"
+        saveErrorMessage = didSave
+            ? nil
+            : AppLocalizations.string(
+                "promptPreset.saveFailed",
+                defaultValue: "Failed to save prompt. Check Keychain or local storage permissions."
+            )
         if let selectedConfigurationID {
             AIConfigurationStore.saveSelectedConfigurationID(selectedConfigurationID)
         }

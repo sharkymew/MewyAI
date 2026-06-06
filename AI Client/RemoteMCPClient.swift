@@ -258,11 +258,17 @@ enum RemoteMCPError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .insecureURL:
-            return "MCP 仅支持 HTTPS URL。"
+            return AppLocalizations.string("mcp.error.insecureURL", defaultValue: "MCP only supports HTTPS URLs.")
         case .invalidResponse:
-            return "MCP 响应无法解析。"
+            return AppLocalizations.string("mcp.error.invalidResponse", defaultValue: "The MCP response could not be parsed.")
         case .requestFailed(let message):
-            return message.isEmpty ? "MCP 请求失败。" : "MCP 请求失败：\(message)"
+            return message.isEmpty
+                ? AppLocalizations.string("mcp.error.requestFailed", defaultValue: "MCP request failed.")
+                : AppLocalizations.format(
+                    "mcp.error.requestFailedWithMessage",
+                    defaultValue: "MCP request failed: %@",
+                    arguments: [message]
+                )
         }
     }
 }

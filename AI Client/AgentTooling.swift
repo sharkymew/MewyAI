@@ -85,7 +85,7 @@ enum AgentTooling {
 
         return """
 
-        下面是用户在当前对话中持续启用的 AI Client Agent Skills。它们是文本指令包，不代表本机可以执行脚本、Python、shell、子进程或未声明工具。仅在与用户请求相关时遵循。
+        \(AppLocalizations.string("agent.skills.promptAppendixIntro", defaultValue: "The following AI Client Agent Skills are continuously enabled in the current conversation. They are text instruction packages and do not mean this device can execute scripts, Python, shell commands, subprocesses, or undeclared tools. Follow them only when they are relevant to the user's request."))
 
         \(sections.joined(separator: "\n\n"))
         """

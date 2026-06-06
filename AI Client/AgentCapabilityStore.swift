@@ -121,7 +121,7 @@ struct MCPServerConfiguration: Identifiable, Codable, Equatable {
     static func tavilyDefault() -> MCPServerConfiguration {
         MCPServerConfiguration(
             id: tavilyID,
-            name: "Tavily 搜索",
+            name: AppLocalizations.string("mcp.tavily.defaultName", defaultValue: "Tavily Search"),
             serverURL: tavilyURL,
             kind: .tavily,
             allowedToolNames: [tavilySearchToolName],
@@ -463,11 +463,20 @@ enum AgentSkillParseError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingFrontmatter:
-            return "SKILL.md 必须包含 YAML frontmatter。"
+            return AppLocalizations.string(
+                "skill.error.missingFrontmatter",
+                defaultValue: "SKILL.md must include YAML frontmatter."
+            )
         case .invalidName:
-            return "Skill name 只能包含小写字母、数字和连字符。"
+            return AppLocalizations.string(
+                "skill.error.invalidName",
+                defaultValue: "Skill name can only contain lowercase letters, numbers, and hyphens."
+            )
         case .missingDescription:
-            return "Skill description 不能为空。"
+            return AppLocalizations.string(
+                "skill.error.missingDescription",
+                defaultValue: "Skill description cannot be empty."
+            )
         }
     }
 }

@@ -719,7 +719,17 @@ private struct ActiveAgentCapsuleView: View {
                     )
             }
         }
-        .accessibilityLabel(capsule.kind == .skill ? "已启用 Skill：\(capsule.title)" : "已启用 MCP：\(capsule.title)")
+        .accessibilityLabel(capsule.kind == .skill
+            ? AppLocalizations.format(
+                "accessibility.enabledSkill",
+                defaultValue: "Enabled Skill: %@",
+                arguments: [capsule.title]
+            )
+            : AppLocalizations.format(
+                "accessibility.enabledMCP",
+                defaultValue: "Enabled MCP: %@",
+                arguments: [capsule.title]
+            ))
     }
 }
 
@@ -802,7 +812,10 @@ struct ContentView: View {
     @State private var renamingConversationTitle = ""
     @State private var isRenameConversationAlertPresented = false
     @State private var conversationExportDocument = ConversationMarkdownDocument(text: "")
-    @State private var conversationExportFileName = "对话"
+    @State private var conversationExportFileName = AppLocalizations.string(
+        "markdown.fileName.fallback",
+        defaultValue: "Conversation"
+    )
     @State private var isConversationExporterPresented = false
     @State private var conversationExportErrorMessage: String?
     @State private var isGenerating = false
@@ -1896,7 +1909,9 @@ struct ContentView: View {
                         topIconLabel(systemName: "sidebar.left")
                     }
                 }
-                .accessibilityLabel(showConversationSidebar ? "关闭对话列表" : "打开对话列表")
+                .accessibilityLabel(showConversationSidebar
+                    ? AppLocalizations.string("accessibility.closeConversationList", defaultValue: "Close conversation list")
+                    : AppLocalizations.string("accessibility.openConversationList", defaultValue: "Open conversation list"))
 
                 Spacer(minLength: 0)
             }
@@ -2114,7 +2129,11 @@ struct ContentView: View {
             }
         }
         .disabled(isGenerating)
-        .accessibilityLabel("当前模型：\(title)")
+        .accessibilityLabel(AppLocalizations.format(
+            "accessibility.currentModel",
+            defaultValue: "Current model: %@",
+            arguments: [title]
+        ))
     }
 
     private var inputOptionsMenu: some View {
@@ -2123,7 +2142,9 @@ struct ContentView: View {
                 isPhotoPickerPresented = true
             } label: {
                 Label(
-                    currentConfiguration.selectedModelSupportsImages ? "上传图片" : "当前模型不支持图片",
+                    currentConfiguration.selectedModelSupportsImages
+                        ? AppLocalizations.string("input.uploadImage", defaultValue: "Upload Image")
+                        : AppLocalizations.string("input.imageUnsupported", defaultValue: "Current model does not support images"),
                     systemImage: "photo"
                 )
             }
@@ -2198,9 +2219,9 @@ struct ContentView: View {
                     setReasoningEnabled(false)
                 } label: {
                     if currentConfiguration.reasoningEnabled {
-                        Text("思考强度：关闭")
+                        Text(AppLocalizations.string("reasoning.menu.off", defaultValue: "Reasoning: Off"))
                     } else {
-                        Label("思考强度：关闭", systemImage: "checkmark")
+                        Label(AppLocalizations.string("reasoning.menu.off", defaultValue: "Reasoning: Off"), systemImage: "checkmark")
                     }
                 }
 
@@ -2210,9 +2231,17 @@ struct ContentView: View {
                     } label: {
                         if currentConfiguration.reasoningEnabled,
                            effort == currentConfiguration.reasoningEffort {
-                            Label("思考强度：\(effort.title)", systemImage: "checkmark")
+                            Label(AppLocalizations.format(
+                                "reasoning.menu.effort",
+                                defaultValue: "Reasoning: %@",
+                                arguments: [effort.title]
+                            ), systemImage: "checkmark")
                         } else {
-                            Text("思考强度：\(effort.title)")
+                            Text(AppLocalizations.format(
+                                "reasoning.menu.effort",
+                                defaultValue: "Reasoning: %@",
+                                arguments: [effort.title]
+                            ))
                         }
                     }
                 }
@@ -2227,7 +2256,7 @@ struct ContentView: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("更多输入选项")
+        .accessibilityLabel(AppLocalizations.string("accessibility.moreInputOptions", defaultValue: "More input options"))
     }
 
     private var openSidebarGesture: some Gesture {
@@ -2267,14 +2296,18 @@ struct ContentView: View {
 
     private var topConversationActionAccessibilityLabel: String {
         if showsTemporaryChatNotice {
-            return "退出临时聊天"
+            return AppLocalizations.string("accessibility.exitTemporaryChat", defaultValue: "Exit temporary chat")
         }
 
-        return showsPrivateConversationAction ? "开始隐私对话" : "新建对话"
+        return showsPrivateConversationAction
+            ? AppLocalizations.string("accessibility.startPrivateConversation", defaultValue: "Start private conversation")
+            : AppLocalizations.string("accessibility.newConversation", defaultValue: "New conversation")
     }
 
     private var topConversationActionAccessibilityHint: String {
-        showsTemporaryChatNotice ? "临时聊天不会保存在本地" : ""
+        showsTemporaryChatNotice
+            ? AppLocalizations.string("accessibility.temporaryChatHint", defaultValue: "Temporary chats are not saved locally")
+            : ""
     }
 
     private var currentConversationIsBlank: Bool {
@@ -2314,19 +2347,36 @@ struct ContentView: View {
         let modelSummary = configuration.selectedModelDisplayName
         let hasAPIKey = !configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasCustomHeaders = !configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let authSummary = hasAPIKey ? "API Key" : (hasCustomHeaders ? "自定义请求头" : "未配置认证")
+        let authSummary = hasAPIKey
+            ? "API Key"
+            : (hasCustomHeaders
+                ? AppLocalizations.string("configuration.summary.customHeaders", defaultValue: "Custom headers")
+                : AppLocalizations.string("configuration.summary.noAuth", defaultValue: "No authentication configured"))
 
         let endpoint = configuration.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        let endpointSummary = endpoint.isEmpty ? "未配置 Endpoint" : endpoint
+        let endpointSummary = endpoint.isEmpty
+            ? AppLocalizations.string("configuration.summary.noEndpoint", defaultValue: "No Endpoint configured")
+            : endpoint
         let reasoningSummary = configuration.selectedModelSupportsReasoning
-            ? (configuration.reasoningEnabled ? "思考 \(configuration.reasoningEffort.title)" : "思考关闭")
-            : "无推理"
-        let imageSummary = configuration.selectedModelSupportsImages ? "图片" : "文字"
+            ? (configuration.reasoningEnabled
+                ? AppLocalizations.format(
+                    "configuration.summary.reasoning",
+                    defaultValue: "Reasoning %@",
+                    arguments: [configuration.reasoningEffort.title]
+                )
+                : AppLocalizations.string("configuration.summary.reasoningOff", defaultValue: "Reasoning off"))
+            : AppLocalizations.string("configuration.summary.noReasoning", defaultValue: "No reasoning")
+        let imageSummary = configuration.selectedModelSupportsImages
+            ? AppLocalizations.string("configuration.summary.images", defaultValue: "Images")
+            : AppLocalizations.string("configuration.summary.textOnly", defaultValue: "Text")
         let apiSummary = configuration.apiFormat.title
         let anthropicSummary = configuration.apiFormat == .anthropicMessages
             ? " · max_tokens \(configuration.anthropicMaxTokens)"
             : ""
-        return "\(configuration.name) · \(apiSummary) · \(modelSummary) · \(imageSummary) · \(reasoningSummary)\(anthropicSummary) · \(trimmedBaseURL.isEmpty ? "未配置 Base URL" : trimmedBaseURL) · \(endpointSummary) · \(authSummary)"
+        let baseURLSummary = trimmedBaseURL.isEmpty
+            ? AppLocalizations.string("configuration.summary.noBaseURL", defaultValue: "No Base URL configured")
+            : trimmedBaseURL
+        return "\(configuration.name) · \(apiSummary) · \(modelSummary) · \(imageSummary) · \(reasoningSummary)\(anthropicSummary) · \(baseURLSummary) · \(endpointSummary) · \(authSummary)"
     }
 
     private func reloadAgentCapabilities() {
@@ -2420,7 +2470,13 @@ struct ContentView: View {
                 arguments: request.argumentsJSON
             )
             guard isAllowed else {
-                return AgentToolCallResult(content: "用户拒绝了这次工具调用。", isError: true)
+                return AgentToolCallResult(
+                    content: AppLocalizations.string(
+                        "agentTool.result.userDenied",
+                        defaultValue: "The user denied this tool call."
+                    ),
+                    isError: true
+                )
             }
         }
 
@@ -2621,39 +2677,54 @@ struct ContentView: View {
         guard !userText.isEmpty || !imageAttachments.isEmpty || !fileAttachments.isEmpty else { return false }
 
         guard !usesAgentTools || configuration.apiFormat != .vertexAIExpress else {
-            appendAssistantError("Vertex Express 暂不支持 MCP 工具调用，请关闭 MCP 胶囊或切换 API 类型。")
+            appendAssistantError(AppLocalizations.string(
+                "chat.error.vertexMCPUnsupported",
+                defaultValue: "Vertex Express does not support MCP tool calls. Disable MCP capsules or switch API type."
+            ))
             return false
         }
 
         guard !usesAgentTools || configuration.selectedModelSupportsTools else {
-            appendAssistantError("当前模型未标记为支持工具调用。请在模型设置里勾选“工具”，或关闭 MCP 胶囊后再发送。")
+            appendAssistantError(AppLocalizations.string(
+                "chat.error.modelToolsUnsupported",
+                defaultValue: "The current model is not marked as supporting tool calls. Enable Tools in model settings, or disable MCP capsules before sending."
+            ))
             return false
         }
 
         guard !usesAgentTools || !agentTools.isEmpty else {
-            appendAssistantError("当前启用的 MCP 没有可用工具。请在设置里刷新工具列表，或检查允许工具名称。")
+            appendAssistantError(AppLocalizations.string(
+                "chat.error.noMCPTools",
+                defaultValue: "The enabled MCP servers have no available tools. Refresh the tool list in settings or check allowed tool names."
+            ))
             return false
         }
 
         guard imageAttachments.isEmpty
                 || usesImageAttachments
                 || !imageContextDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            appendAssistantError("当前模型不支持图片输入，且这条图片消息还没有可用的隐藏描述。请切换到支持图片的多模态模型后重试。")
+            appendAssistantError(AppLocalizations.string(
+                "chat.error.imageWithoutDescription",
+                defaultValue: "The current model does not support image input, and this image message does not have a usable hidden description yet. Switch to an image-capable multimodal model and try again."
+            ))
             return false
         }
 
         guard usesImageAttachments || !containsImageWithoutContextDescription(in: contextMessages) else {
-            appendAssistantError("当前模型不支持图片输入，且上下文中有图片消息还没有可用的隐藏描述。请稍后重试，或切换到支持图片的多模态模型。")
+            appendAssistantError(AppLocalizations.string(
+                "chat.error.contextImageWithoutDescription",
+                defaultValue: "The current model does not support image input, and an image message in the context does not have a usable hidden description yet. Try again later, or switch to an image-capable multimodal model."
+            ))
             return false
         }
 
         guard !trimmedBaseURL.isEmpty else {
-            appendAssistantError("请先配置 Base URL。")
+            appendAssistantError(AppLocalizations.string("chat.error.configureBaseURL", defaultValue: "Configure Base URL first."))
             return false
         }
 
         guard !model.isEmpty else {
-            appendAssistantError("请先选择模型。")
+            appendAssistantError(AppLocalizations.string("chat.error.selectModel", defaultValue: "Select a model first."))
             return false
         }
 
@@ -2664,7 +2735,11 @@ struct ContentView: View {
         }
 
         guard activeConversationGenerations.count < maxActiveConversationGenerations else {
-            appendAssistantError("已有 \(maxActiveConversationGenerations) 个对话正在请求中，请等待其中一个完成后再发送。")
+            appendAssistantError(AppLocalizations.format(
+                "chat.error.tooManyActiveRequests",
+                defaultValue: "%d conversations are already requesting. Wait for one to finish before sending.",
+                arguments: [maxActiveConversationGenerations]
+            ))
             return false
         }
 
@@ -3079,7 +3154,9 @@ struct ContentView: View {
 
     private func persistentAssistantErrorMessage(from error: String) -> String {
         let trimmedError = error.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedError.isEmpty ? "请求失败" : trimmedError
+        return trimmedError.isEmpty
+            ? AppLocalizations.string("aiService.diagnostics.requestFailedFallback", defaultValue: "Request failed")
+            : trimmedError
     }
 
     private func containsImageWithoutContextDescription(in messages: [ChatMessage]) -> Bool {
@@ -3939,7 +4016,10 @@ struct ContentView: View {
 
         guard currentConfiguration.selectedModelSupportsImages else {
             selectedPhotoItems = []
-            imageSelectionError = "当前模型不支持图片输入。"
+            imageSelectionError = AppLocalizations.string(
+                "attachment.image.unsupported",
+                defaultValue: "The current model does not support image input."
+            )
             return
         }
 
@@ -3959,7 +4039,10 @@ struct ContentView: View {
             }
 
             if attachments.isEmpty, !items.isEmpty {
-                imageSelectionError = "图片读取失败，请重新选择。"
+                imageSelectionError = AppLocalizations.string(
+                    "attachment.image.photoPickerReadFailed",
+                    defaultValue: "Failed to read images. Please select them again."
+                )
             } else {
                 setPendingImageAttachments(attachments)
                 imageSelectionError = nil
@@ -4051,30 +4134,49 @@ struct ContentView: View {
     private func setPendingImageAttachments(_ attachments: [ChatImageAttachment]) {
         pendingImageAttachments = Array(attachments.prefix(maxImageAttachmentCount))
         if attachments.count > maxImageAttachmentCount {
-            imageSelectionError = "最多只能添加 \(maxImageAttachmentCount) 张图片，已保留前 \(maxImageAttachmentCount) 张。"
+            imageSelectionError = AppLocalizations.format(
+                "attachment.image.limitTrimmed",
+                defaultValue: "You can add up to %d images. The first %d were kept.",
+                arguments: [maxImageAttachmentCount, maxImageAttachmentCount]
+            )
         }
     }
 
     private func appendPendingImageAttachments(_ attachments: [ChatImageAttachment], source: String) {
         guard currentConfiguration.selectedModelSupportsImages else {
-            imageSelectionError = "当前模型不支持图片输入。"
+            imageSelectionError = AppLocalizations.string(
+                "attachment.image.unsupported",
+                defaultValue: "The current model does not support image input."
+            )
             return
         }
 
         guard !attachments.isEmpty else {
-            imageSelectionError = "\(source)图片读取失败。"
+            imageSelectionError = AppLocalizations.format(
+                "attachment.image.readFailed",
+                defaultValue: "Failed to read images from %@.",
+                arguments: [source]
+            )
             return
         }
 
         let remainingCount = maxImageAttachmentCount - pendingImageAttachments.count
         guard remainingCount > 0 else {
-            imageSelectionError = "最多只能添加 \(maxImageAttachmentCount) 张图片。"
+            imageSelectionError = AppLocalizations.format(
+                "attachment.image.limit",
+                defaultValue: "You can add up to %d images.",
+                arguments: [maxImageAttachmentCount]
+            )
             return
         }
 
         pendingImageAttachments.append(contentsOf: attachments.prefix(remainingCount))
         imageSelectionError = attachments.count > remainingCount
-            ? "最多只能添加 \(maxImageAttachmentCount) 张图片，已保留前 \(maxImageAttachmentCount) 张。"
+            ? AppLocalizations.format(
+                "attachment.image.limitTrimmed",
+                defaultValue: "You can add up to %d images. The first %d were kept.",
+                arguments: [maxImageAttachmentCount, maxImageAttachmentCount]
+            )
             : nil
     }
 
@@ -4088,7 +4190,10 @@ struct ContentView: View {
         guard !imageProviders.isEmpty else { return false }
 
         guard currentConfiguration.selectedModelSupportsImages else {
-            imageSelectionError = "当前模型不支持图片输入，已忽略图片。"
+            imageSelectionError = AppLocalizations.string(
+                "attachment.image.droppedUnsupported",
+                defaultValue: "The current model does not support image input. Images were ignored."
+            )
             return false
         }
 
@@ -4109,7 +4214,10 @@ struct ContentView: View {
                 attachments.append(attachment)
             }
 
-            appendPendingImageAttachments(attachments, source: "拖拽")
+            appendPendingImageAttachments(
+                attachments,
+                source: AppLocalizations.string("attachment.source.drag", defaultValue: "drag and drop")
+            )
         }
 
         return true
@@ -4134,12 +4242,20 @@ struct ContentView: View {
                     }
                 }
 
-                appendPendingFileAttachments(attachments, source: "选择", fallbackError: firstError)
+                appendPendingFileAttachments(
+                    attachments,
+                    source: AppLocalizations.string("attachment.source.selection", defaultValue: "selection"),
+                    fallbackError: firstError
+                )
             }
         case .failure(let error):
             let nsError = error as NSError
             guard nsError.code != NSUserCancelledError else { return }
-            imageSelectionError = "文件选择失败：\(error.localizedDescription)"
+            imageSelectionError = AppLocalizations.format(
+                "attachment.file.selectionFailed",
+                defaultValue: "File selection failed: %@",
+                arguments: [error.localizedDescription]
+            )
         }
     }
 
@@ -4149,20 +4265,32 @@ struct ContentView: View {
         fallbackError: String? = nil
     ) {
         guard !attachments.isEmpty else {
-            imageSelectionError = fallbackError ?? "\(source)文件读取失败。"
+            imageSelectionError = fallbackError ?? AppLocalizations.format(
+                "attachment.file.readFailed",
+                defaultValue: "Failed to read files from %@.",
+                arguments: [source]
+            )
             return
         }
 
         let remainingCount = maxFileAttachmentCount - pendingFileAttachments.count
         guard remainingCount > 0 else {
-            imageSelectionError = "最多只能添加 \(maxFileAttachmentCount) 个文件。"
+            imageSelectionError = AppLocalizations.format(
+                "attachment.file.limit",
+                defaultValue: "You can add up to %d files.",
+                arguments: [maxFileAttachmentCount]
+            )
             return
         }
 
         pendingFileAttachments.append(contentsOf: attachments.prefix(remainingCount))
 
         if attachments.count > remainingCount {
-            imageSelectionError = "最多只能添加 \(maxFileAttachmentCount) 个文件，已保留前 \(maxFileAttachmentCount) 个。"
+            imageSelectionError = AppLocalizations.format(
+                "attachment.file.limitTrimmed",
+                defaultValue: "You can add up to %d files. The first %d were kept.",
+                arguments: [maxFileAttachmentCount, maxFileAttachmentCount]
+            )
         } else {
             imageSelectionError = fallbackError
         }
@@ -4189,7 +4317,10 @@ struct ContentView: View {
                 attachments.append(attachment)
             }
 
-            appendPendingFileAttachments(attachments, source: "拖拽")
+            appendPendingFileAttachments(
+                attachments,
+                source: AppLocalizations.string("attachment.source.drag", defaultValue: "drag and drop")
+            )
         }
 
         return true
@@ -4289,13 +4420,19 @@ struct ContentView: View {
 
     private func pasteImageProvidersFromInputMenu(_ providers: [NSItemProvider]) {
         guard currentConfiguration.selectedModelSupportsImages else {
-            imageSelectionError = "当前模型不支持图片输入。"
+            imageSelectionError = AppLocalizations.string(
+                "attachment.image.unsupported",
+                defaultValue: "The current model does not support image input."
+            )
             return
         }
 
         let imageProviders = providers.filter(providerContainsImage)
         guard !imageProviders.isEmpty else {
-            imageSelectionError = "剪贴板中没有可粘贴的图片。"
+            imageSelectionError = AppLocalizations.string(
+                "attachment.image.clipboardEmpty",
+                defaultValue: "There are no pasteable images on the clipboard."
+            )
             return
         }
 
@@ -4310,7 +4447,10 @@ struct ContentView: View {
                 attachments.append(attachment)
             }
 
-            appendPendingImageAttachments(attachments, source: "剪贴板")
+            appendPendingImageAttachments(
+                attachments,
+                source: AppLocalizations.string("attachment.source.clipboard", defaultValue: "clipboard")
+            )
         }
     }
 
@@ -4816,7 +4956,9 @@ struct ContentView: View {
 
     private func normalizedManualConversationTitle(_ title: String) -> String {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedTitle.isEmpty ? "新对话" : trimmedTitle
+        return trimmedTitle.isEmpty
+            ? AppLocalizations.string("conversation.newTitle", defaultValue: "New Chat")
+            : trimmedTitle
     }
 
     private func toggleConversationPin(_ id: UUID) {
@@ -4857,7 +4999,11 @@ struct ContentView: View {
         case .failure(let error):
             let nsError = error as NSError
             guard nsError.code != NSUserCancelledError else { return }
-            conversationExportErrorMessage = "无法导出 Markdown 文件：\(error.localizedDescription)"
+            conversationExportErrorMessage = AppLocalizations.format(
+                "markdown.exportFailed",
+                defaultValue: "Unable to export Markdown file: %@",
+                arguments: [error.localizedDescription]
+            )
         }
     }
 
@@ -5255,7 +5401,9 @@ struct MessageBubble: View {
                     onTap: onSelect
                 )
             } else if displayContent.isEmpty, !hasStreamingContent {
-                Text(message.isStopped ? "已停止生成。" : "正在生成回答...")
+                Text(message.isStopped
+                    ? AppLocalizations.string("chat.message.stopped", defaultValue: "Generation stopped.")
+                    : AppLocalizations.string("chat.message.generating", defaultValue: "Generating response..."))
             } else {
                 AssistantMessageContent(
                     content: displayContent,
@@ -5360,7 +5508,11 @@ struct MessageBubble: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("消息版本 \(state.displayText)")
+        .accessibilityLabel(AppLocalizations.format(
+            "accessibility.messageRevision",
+            defaultValue: "Message version %@",
+            arguments: [state.displayText]
+        ))
     }
 
     private var assistantMessageStack: some View {
@@ -5422,12 +5574,14 @@ struct MessageBubble: View {
                             }
 
                             if let result = exchange.toolResults.first(where: { $0.toolCallID == call.id }) {
-                                Text(result.isError ? "调用失败" : "调用完成")
+                                Text(result.isError
+                                    ? AppLocalizations.string("toolCall.failed", defaultValue: "Call failed")
+                                    : AppLocalizations.string("toolCall.completed", defaultValue: "Call completed"))
                                     .foregroundStyle(result.isError ? Color.red : Color.secondary)
 
                                 toolResultContent(result)
                             } else {
-                                Text("正在调用...")
+                                Text(AppLocalizations.string("toolCall.calling", defaultValue: "Calling..."))
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -5447,7 +5601,10 @@ struct MessageBubble: View {
                 Image(systemName: "wrench.and.screwdriver")
                     .foregroundStyle(.secondary)
 
-                MovingHighlightTitle(text: "工具调用", isActive: toolActivityTitleIsActive)
+                MovingHighlightTitle(
+                    text: AppLocalizations.string("toolCall.title", defaultValue: "Tool Calls"),
+                    isActive: toolActivityTitleIsActive
+                )
 
                 Spacer(minLength: 0)
             }
@@ -5513,7 +5670,11 @@ struct MessageBubble: View {
 
         let limit = 4_000
         guard trimmedContent.count > limit else { return trimmedContent }
-        return "\(String(trimmedContent.prefix(limit)))\n\n...（结果过长，已截断显示）"
+        return AppLocalizations.format(
+            "toolResult.previewTruncated",
+            defaultValue: "%@\n\n...(Result too long, display truncated)",
+            arguments: [String(trimmedContent.prefix(limit))]
+        )
     }
 
     private func toolSearchResults(from content: String) -> [ToolSearchResult] {
@@ -5772,7 +5933,10 @@ struct MessageBubble: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    MovingHighlightTitle(text: "思考过程", isActive: reasoningTitleIsActive)
+                    MovingHighlightTitle(
+                        text: AppLocalizations.string("reasoning.title", defaultValue: "Reasoning"),
+                        isActive: reasoningTitleIsActive
+                    )
                         .font(.caption.weight(.semibold))
 
                     Spacer()
@@ -5838,7 +6002,7 @@ struct AssistantMessageContent: View {
             }
 
             if isStopped {
-                Text("已停止生成。")
+                Text(AppLocalizations.string("chat.message.stopped", defaultValue: "Generation stopped."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -5874,10 +6038,15 @@ struct ErrorDetailContent: Equatable {
 
     private static func summaryLooksLikeError(_ summary: String) -> Bool {
         summary.hasPrefix("请求失败")
+            || summary.hasPrefix("Request failed")
             || summary.hasPrefix("解析失败")
+            || summary.hasPrefix("Parsing failed")
             || summary.hasPrefix("模型列表解析失败")
+            || summary.hasPrefix("Failed to parse model list")
             || summary.hasPrefix("流式请求失败")
+            || summary.hasPrefix("Streaming request failed")
             || summary.contains("状态码")
+            || summary.contains("status code")
     }
 }
 
@@ -6489,7 +6658,10 @@ private struct StreamingCodeBlock: View {
                 Button {
                     copyCode()
                 } label: {
-                    Label(didCopy ? "已复制" : "复制", systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                    Label(didCopy
+                        ? AppLocalizations.string("code.copy.copied", defaultValue: "Copied")
+                        : AppLocalizations.string("code.copy", defaultValue: "Copy"),
+                        systemImage: didCopy ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(didCopy ? Color.green : Color.secondary)
                         .frame(minWidth: 58, minHeight: 24)
@@ -6501,7 +6673,9 @@ private struct StreamingCodeBlock: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(didCopy ? "代码已复制" : "复制代码")
+                .accessibilityLabel(didCopy
+                    ? AppLocalizations.string("accessibility.codeCopied", defaultValue: "Code copied")
+                    : AppLocalizations.string("accessibility.copyCode", defaultValue: "Copy code"))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
@@ -6899,7 +7073,9 @@ enum ChatMarkdownPreprocessor {
             if trimmed.hasPrefix(":::") {
                 if containerTitle == nil {
                     let rawTitle = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-                    containerTitle = rawTitle.isEmpty ? "提示" : rawTitle
+                    containerTitle = rawTitle.isEmpty
+                        ? AppLocalizations.string("markdown.container.defaultTitle", defaultValue: "Note")
+                        : rawTitle
                     containerLines = []
                 } else {
                     flushContainer()
@@ -7173,7 +7349,7 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
                 isFocused: $inputDraft.isFocused,
                 focusRequestID: inputDraft.focusRequestID,
                 focusDelay: 0,
-                placeholder: "输入消息...",
+                placeholder: AppLocalizations.string("input.placeholder", defaultValue: "Type a message..."),
                 maxVisibleLineCount: 4,
                 fillsAvailableHeight: false,
                 trailingAccessoryInset: 34,
@@ -7193,7 +7369,7 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
                     expandInputIcon
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("展开输入框")
+                .accessibilityLabel(AppLocalizations.string("accessibility.expandInput", defaultValue: "Expand input"))
             }
         }
         .padding(.vertical, 11)
@@ -7247,7 +7423,9 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(isSpeechRecording ? "停止语音输入" : "开始语音输入")
+        .accessibilityLabel(isSpeechRecording
+            ? AppLocalizations.string("accessibility.stopSpeechInput", defaultValue: "Stop speech input")
+            : AppLocalizations.string("accessibility.startSpeechInput", defaultValue: "Start speech input"))
     }
 
     @ViewBuilder
@@ -7267,7 +7445,7 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("取消修改")
+                .accessibilityLabel(AppLocalizations.string("accessibility.cancelEdit", defaultValue: "Cancel edit"))
 
                 Menu {
                     Button("仅修改") {
@@ -7371,7 +7549,7 @@ private struct ExpandedChatInputView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("收起输入框")
+                .accessibilityLabel(AppLocalizations.string("accessibility.collapseInput", defaultValue: "Collapse input"))
             }
             .padding(.horizontal, 18)
             .padding(.top, 10)
@@ -7383,7 +7561,7 @@ private struct ExpandedChatInputView: View {
                     isFocused: .constant(true),
                     focusRequestID: 1,
                     focusDelay: 0.25,
-                    placeholder: "输入消息...",
+                    placeholder: AppLocalizations.string("input.placeholder", defaultValue: "Type a message..."),
                     maxVisibleLineCount: 200,
                     fillsAvailableHeight: true,
                     trailingAccessoryInset: 0,
@@ -7441,7 +7619,9 @@ private struct ExpandedChatInputView: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(isSpeechRecording ? "停止语音输入" : "开始语音输入")
+        .accessibilityLabel(isSpeechRecording
+            ? AppLocalizations.string("accessibility.stopSpeechInput", defaultValue: "Stop speech input")
+            : AppLocalizations.string("accessibility.startSpeechInput", defaultValue: "Start speech input"))
     }
 
     @ViewBuilder
@@ -7458,7 +7638,7 @@ private struct ExpandedChatInputView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("取消修改")
+                .accessibilityLabel(AppLocalizations.string("accessibility.cancelEdit", defaultValue: "Cancel edit"))
 
                 Menu {
                     Button("仅修改") {
@@ -7476,7 +7656,7 @@ private struct ExpandedChatInputView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSendMessage)
-                .accessibilityLabel("保存修改")
+                .accessibilityLabel(AppLocalizations.string("accessibility.saveEdit", defaultValue: "Save edit"))
             }
         } else {
             Button {
@@ -7493,7 +7673,9 @@ private struct ExpandedChatInputView: View {
             }
             .buttonStyle(.plain)
             .disabled(!isGenerating && !canSendMessage)
-            .accessibilityLabel(isGenerating ? "停止生成" : "发送消息")
+            .accessibilityLabel(isGenerating
+                ? AppLocalizations.string("accessibility.stopGenerating", defaultValue: "Stop generating")
+                : AppLocalizations.string("accessibility.sendMessage", defaultValue: "Send message"))
         }
     }
 

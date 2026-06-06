@@ -1,0 +1,3 @@
+"CFBundleDisplayName" = "MewyAI";
+"NSMicrophoneUsageDescription" = "Used to turn speech into input text. The recognized text is inserted into the composer first, and you confirm before sending.";
+"NSSpeechRecognitionUsageDescription" = "Used to turn speech into input text. The recognized text is inserted into the composer first, and you confirm before sending.";

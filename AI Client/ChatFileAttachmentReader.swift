@@ -11,13 +11,29 @@ enum ChatFileAttachmentReadError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .fileTooLarge(let name, let maxMegabytes):
-            return "\(name) 超过 \(maxMegabytes)MB，已跳过。"
+            return AppLocalizations.format(
+                "fileAttachment.error.tooLarge",
+                defaultValue: "%@ is larger than %d MB and was skipped.",
+                arguments: [name, maxMegabytes]
+            )
         case .unsupported(let name):
-            return "\(name) 不是可读取的文本或 PDF 文件。"
+            return AppLocalizations.format(
+                "fileAttachment.error.unsupported",
+                defaultValue: "%@ is not a readable text or PDF file.",
+                arguments: [name]
+            )
         case .empty(let name):
-            return "\(name) 没有提取到可用文本。"
+            return AppLocalizations.format(
+                "fileAttachment.error.empty",
+                defaultValue: "No usable text was extracted from %@.",
+                arguments: [name]
+            )
         case .unreadable(let name):
-            return "\(name) 读取失败。"
+            return AppLocalizations.format(
+                "fileAttachment.error.unreadable",
+                defaultValue: "Failed to read %@.",
+                arguments: [name]
+            )
         }
     }
 }
@@ -47,7 +63,9 @@ enum ChatFileAttachmentReader {
 
     static func attachment(from url: URL) throws -> ChatFileAttachment {
         guard url.isFileURL else {
-            throw ChatFileAttachmentReadError.unreadable(url.lastPathComponent.isEmpty ? "文件" : url.lastPathComponent)
+            throw ChatFileAttachmentReadError.unreadable(url.lastPathComponent.isEmpty
+                ? AppLocalizations.string("fileAttachment.defaultName", defaultValue: "File")
+                : url.lastPathComponent)
         }
 
         let didAccess = url.startAccessingSecurityScopedResource()

@@ -11,13 +11,13 @@ enum ReasoningEffort: String, CaseIterable, Codable, Identifiable {
     var title: String {
         switch self {
         case .low:
-            return "低"
+            return AppLocalizations.string("reasoning.effort.low", defaultValue: "Low")
         case .medium:
-            return "中"
+            return AppLocalizations.string("reasoning.effort.medium", defaultValue: "Medium")
         case .high:
-            return "高"
+            return AppLocalizations.string("reasoning.effort.high", defaultValue: "High")
         case .max:
-            return "极高"
+            return AppLocalizations.string("reasoning.effort.max", defaultValue: "Max")
         }
     }
 }
@@ -72,13 +72,25 @@ enum AIAPIFormat: String, CaseIterable, Codable, Identifiable {
     var requestFooterText: String {
         switch self {
         case .openAIChatCompletions:
-            return "Chat Completions 会把 Endpoint 与 Base URL 拼成最终请求地址，默认 endpoint 是 chat/completions。"
+            return AppLocalizations.string(
+                "apiFormat.openAIChatCompletions.requestFooter",
+                defaultValue: "Chat Completions combines Endpoint with Base URL to form the final request URL. The default endpoint is chat/completions."
+            )
         case .openAIResponses:
-            return "Responses API 默认 endpoint 是 responses，模型参数会按 Responses 字段名发送。"
+            return AppLocalizations.string(
+                "apiFormat.openAIResponses.requestFooter",
+                defaultValue: "Responses API uses responses as the default endpoint. Model parameters are sent using Responses field names."
+            )
         case .anthropicMessages:
-            return "Anthropic Messages 默认 endpoint 是 v1/messages，默认认证使用 x-api-key；模型名以 [1m] 结尾时会按 1M 上下文发送但实际 model 会去掉该后缀。开启 Claude Code 伪装后，所有模型都会改用 Bearer，并自动附加 beta=true、1M context、Claude Code headers 和请求体字段。Max Tokens 仅对当前配置生效。"
+            return AppLocalizations.string(
+                "apiFormat.anthropicMessages.requestFooter",
+                defaultValue: "Anthropic Messages uses v1/messages as the default endpoint and x-api-key for authentication. Model names ending in [1m] are sent with 1M context while the suffix is removed from the actual model value. With Claude Code impersonation enabled, all models use Bearer authentication and automatically add beta=true, 1M context, Claude Code headers, and request body fields. Max Tokens only applies to the current configuration."
+            )
         case .vertexAIExpress:
-            return "Vertex Express 默认 endpoint 使用 {model} 占位符，发送时会替换为当前模型 ID。"
+            return AppLocalizations.string(
+                "apiFormat.vertexAIExpress.requestFooter",
+                defaultValue: "Vertex Express uses a {model} placeholder in the default endpoint and replaces it with the current model ID before sending."
+            )
         }
     }
 }
@@ -370,9 +382,9 @@ enum BuiltInAIProvider: String, CaseIterable, Identifiable {
         case .vertexAIExpress:
             return "Google Vertex AI (Express Mode)"
         case .zhipu:
-            return "智谱开放平台"
+            return AppLocalizations.string("provider.zhipu.displayName", defaultValue: "Zhipu Open Platform")
         case .siliconFlow:
-            return "硅基流动"
+            return AppLocalizations.string("provider.siliconFlow.displayName", defaultValue: "SiliconFlow")
         case .openRouter:
             return "OpenRouter"
         case .minimax:
@@ -469,7 +481,13 @@ enum BuiltInAIProvider: String, CaseIterable, Identifiable {
 }
 
 struct AIConfiguration: Identifiable, Codable, Equatable {
-    static let defaultSystemPrompt = "你是一个友好且有帮助的AI助手。"
+    static var defaultSystemPrompt: String {
+        AppLocalizations.string(
+            "prompt.defaultSystem",
+            defaultValue: "You are a friendly and helpful AI assistant."
+        )
+    }
+
     static let defaultAnthropicMaxTokens = 4096
 
     var id: UUID
@@ -505,7 +523,9 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         }
 
         let trimmedModel = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedModel.isEmpty ? "未选择模型" : trimmedModel
+        return trimmedModel.isEmpty
+            ? AppLocalizations.string("configuration.noSelectedModel", defaultValue: "No model selected")
+            : trimmedModel
     }
 
     var selectedModelSupportsReasoning: Bool {
@@ -526,7 +546,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
 
     init(
         id: UUID = UUID(),
-        name: String = "默认配置",
+        name: String = AppLocalizations.string("configuration.defaultName", defaultValue: "Default Configuration"),
         baseURL: String = "https://api.deepseek.com",
         endpoint: String = "chat/completions",
         apiFormat: AIAPIFormat = .openAIChatCompletions,
@@ -599,7 +619,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "默认配置"
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+            ?? AppLocalizations.string("configuration.defaultName", defaultValue: "Default Configuration")
         customHeaders = try container.decodeIfPresent(String.self, forKey: .customHeaders) ?? ""
         let decodedSystemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? Self.defaultSystemPrompt
         let decodedPromptPresets = try container.decodeIfPresent([AIPromptPreset].self, forKey: .promptPresets)
@@ -743,7 +764,9 @@ enum AIConfigurationStore {
     private static let selectedConfigurationIDKey = "selectedAIConfigurationID"
     static let hapticFeedbackEnabledKey = "hapticFeedbackEnabled"
     static let defaultHapticFeedbackEnabled = true
-    private static let fallbackConfigurationName = "未命名配置"
+    private static var fallbackConfigurationName: String {
+        AppLocalizations.string("configuration.unnamed", defaultValue: "Unnamed Configuration")
+    }
 
     static func loadConfigurations() -> [AIConfiguration] {
         guard let data = UserDefaults.standard.data(forKey: configurationsKey),
@@ -875,11 +898,14 @@ enum AIConfigurationStore {
         if let defaultPromptPreset = promptPresets.first(where: { $0.content == AIConfiguration.defaultSystemPrompt }) {
             var normalizedDefaultPreset = defaultPromptPreset
             if normalizedDefaultPreset.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                normalizedDefaultPreset.name = "默认提示词"
+                normalizedDefaultPreset.name = AppLocalizations.string("promptPreset.defaultName", defaultValue: "Default Prompt")
             }
             appendIfNeeded(normalizedDefaultPreset)
         } else {
-            appendIfNeeded(AIPromptPreset(name: "默认提示词", content: AIConfiguration.defaultSystemPrompt))
+            appendIfNeeded(AIPromptPreset(
+                name: AppLocalizations.string("promptPreset.defaultName", defaultValue: "Default Prompt"),
+                content: AIConfiguration.defaultSystemPrompt
+            ))
         }
 
         for promptPreset in promptPresets where promptPreset.content != AIConfiguration.defaultSystemPrompt {
@@ -897,7 +923,7 @@ enum AIConfigurationStore {
         let customHeaders = defaults.string(forKey: "customHeaders") ?? ""
 
         return AIConfiguration(
-            name: "默认配置",
+            name: AppLocalizations.string("configuration.defaultName", defaultValue: "Default Configuration"),
             baseURL: split.baseURL,
             endpoint: split.endpoint,
             apiKey: apiKey,

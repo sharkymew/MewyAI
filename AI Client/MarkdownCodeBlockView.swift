@@ -45,7 +45,10 @@ struct ChatCodeBlock: View {
                 Button {
                     copyCode()
                 } label: {
-                    Label(didCopy ? "已复制" : "复制", systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                    Label(didCopy
+                        ? AppLocalizations.string("code.copy.copied", defaultValue: "Copied")
+                        : AppLocalizations.string("code.copy", defaultValue: "Copy"),
+                        systemImage: didCopy ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(didCopy ? Color.green : Color.secondary)
                         .frame(minWidth: 58, minHeight: 24)
@@ -57,7 +60,9 @@ struct ChatCodeBlock: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(didCopy ? "代码已复制" : "复制代码")
+                .accessibilityLabel(didCopy
+                    ? AppLocalizations.string("accessibility.codeCopied", defaultValue: "Code copied")
+                    : AppLocalizations.string("accessibility.copyCode", defaultValue: "Copy code"))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)

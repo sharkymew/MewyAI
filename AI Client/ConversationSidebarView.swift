@@ -10,15 +10,15 @@ private enum ConversationSidebarTimeBucket: CaseIterable, Hashable {
     var title: String {
         switch self {
         case .today:
-            "今天"
+            AppLocalizations.string("sidebar.bucket.today", defaultValue: "Today")
         case .yesterday:
-            "昨天"
+            AppLocalizations.string("sidebar.bucket.yesterday", defaultValue: "Yesterday")
         case .withinWeek:
-            "一周内"
+            AppLocalizations.string("sidebar.bucket.withinWeek", defaultValue: "Within a Week")
         case .withinMonth:
-            "一月内"
+            AppLocalizations.string("sidebar.bucket.withinMonth", defaultValue: "Within a Month")
         case .older:
-            "一月以上"
+            AppLocalizations.string("sidebar.bucket.older", defaultValue: "Older than a Month")
         }
     }
 
@@ -157,7 +157,7 @@ struct ConversationSidebarView: View {
         return ScrollView {
             VStack(spacing: 4) {
                 conversationSection(
-                    title: "置顶",
+                    title: AppLocalizations.string("sidebar.section.pinned", defaultValue: "Pinned"),
                     conversations: pinnedConversations,
                     isExpanded: $isPinnedSectionExpanded,
                     rowWidth: rowWidth
@@ -240,7 +240,7 @@ struct ConversationSidebarView: View {
                         topIconLabel(systemName: "sidebar.left")
                     }
                 }
-                .accessibilityLabel("关闭对话列表")
+                .accessibilityLabel(AppLocalizations.string("accessibility.closeConversationList", defaultValue: "Close conversation list"))
             }
 
             Spacer(minLength: 0)
@@ -250,7 +250,7 @@ struct ConversationSidebarView: View {
                     topIconLabel(systemName: "slider.horizontal.3")
                 }
             }
-            .accessibilityLabel("打开 AI 配置")
+            .accessibilityLabel(AppLocalizations.string("accessibility.openAIConfiguration", defaultValue: "Open AI configuration"))
         }
         .padding(.horizontal, topControlsHorizontalPadding)
         .padding(.top, topSafeAreaInset + topControlsTopPadding)
@@ -361,8 +361,14 @@ struct ConversationSidebarView: View {
                 )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(title)，\(conversations.count) 个对话")
-            .accessibilityValue(isExpanded.wrappedValue ? "已展开" : "已折叠")
+            .accessibilityLabel(AppLocalizations.format(
+                "accessibility.conversationSection",
+                defaultValue: "%@, %d conversations",
+                arguments: [title, conversations.count]
+            ))
+            .accessibilityValue(isExpanded.wrappedValue
+                ? AppLocalizations.string("accessibility.expanded", defaultValue: "Expanded")
+                : AppLocalizations.string("accessibility.collapsed", defaultValue: "Collapsed"))
 
             if isExpanded.wrappedValue {
                 VStack(spacing: 4) {
@@ -451,7 +457,9 @@ struct ConversationSidebarView: View {
                 onTogglePinned(conversation.id)
             } label: {
                 Label(
-                    conversation.isPinned ? "取消置顶" : "置顶",
+                    conversation.isPinned
+                        ? AppLocalizations.string("sidebar.unpin", defaultValue: "Unpin")
+                        : AppLocalizations.string("sidebar.pin", defaultValue: "Pin"),
                     systemImage: conversation.isPinned ? "pin.slash" : "pin"
                 )
             }

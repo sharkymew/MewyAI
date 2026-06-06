@@ -29,17 +29,26 @@ final class SpeechInputController: NSObject, ObservableObject {
         }
 
         guard let recognizer = SFSpeechRecognizer(locale: Locale.current) else {
-            errorMessage = "当前语言暂不支持语音识别。"
+            errorMessage = AppLocalizations.string(
+                "speech.error.unsupportedLocale",
+                defaultValue: "Speech recognition is not supported for the current language."
+            )
             return
         }
 
         guard recognizer.supportsOnDeviceRecognition else {
-            errorMessage = "当前设备或语言不支持本机语音识别。"
+            errorMessage = AppLocalizations.string(
+                "speech.error.onDeviceUnsupported",
+                defaultValue: "On-device speech recognition is not supported on this device or for this language."
+            )
             return
         }
 
         guard recognizer.isAvailable else {
-            errorMessage = "本机语音识别暂不可用，请稍后再试。"
+            errorMessage = AppLocalizations.string(
+                "speech.error.onDeviceUnavailable",
+                defaultValue: "On-device speech recognition is temporarily unavailable. Try again later."
+            )
             return
         }
 
@@ -47,7 +56,11 @@ final class SpeechInputController: NSObject, ObservableObject {
             try beginAudioRecognition(with: recognizer)
         } catch {
             cleanupAudioSession()
-            errorMessage = "语音输入启动失败：\(error.localizedDescription)"
+            errorMessage = AppLocalizations.format(
+                "speech.error.startFailed",
+                defaultValue: "Failed to start speech input: %@",
+                arguments: [error.localizedDescription]
+            )
         }
     }
 
@@ -93,13 +106,25 @@ final class SpeechInputController: NSObject, ObservableObject {
         case .authorized:
             return true
         case .denied:
-            errorMessage = "语音识别权限已关闭，请到系统设置中允许 MewyAI 使用语音识别。"
+            errorMessage = AppLocalizations.string(
+                "speech.error.permissionDenied",
+                defaultValue: "Speech recognition permission is disabled. Allow MewyAI to use speech recognition in System Settings."
+            )
         case .restricted:
-            errorMessage = "当前设备限制了语音识别权限。"
+            errorMessage = AppLocalizations.string(
+                "speech.error.permissionRestricted",
+                defaultValue: "Speech recognition permission is restricted on this device."
+            )
         case .notDetermined:
-            errorMessage = "语音识别权限尚未授权。"
+            errorMessage = AppLocalizations.string(
+                "speech.error.permissionNotDetermined",
+                defaultValue: "Speech recognition permission has not been granted yet."
+            )
         @unknown default:
-            errorMessage = "语音识别权限状态不可用。"
+            errorMessage = AppLocalizations.string(
+                "speech.error.permissionUnknown",
+                defaultValue: "Speech recognition permission status is unavailable."
+            )
         }
 
         return false
@@ -113,7 +138,10 @@ final class SpeechInputController: NSObject, ObservableObject {
         }
 
         if !isGranted {
-            errorMessage = "麦克风权限已关闭，请到系统设置中允许 MewyAI 使用麦克风。"
+            errorMessage = AppLocalizations.string(
+                "speech.error.microphoneDenied",
+                defaultValue: "Microphone permission is disabled. Allow MewyAI to use the microphone in System Settings."
+            )
         }
 
         return isGranted
@@ -174,7 +202,11 @@ final class SpeechInputController: NSObject, ObservableObject {
 
         if let errorDescription {
             if !didStopIntentionally {
-                errorMessage = "语音识别失败：\(errorDescription)"
+                errorMessage = AppLocalizations.format(
+                    "speech.error.recognitionFailed",
+                    defaultValue: "Speech recognition failed: %@",
+                    arguments: [errorDescription]
+                )
             }
             finishRecognitionTask()
             return
@@ -224,7 +256,10 @@ extension SpeechInputController: SFSpeechRecognizerDelegate {
         Task { @MainActor [weak self] in
             guard let self, self.isRecording else { return }
             self.cancelRecording()
-            self.errorMessage = "本机语音识别暂不可用，请稍后再试。"
+            self.errorMessage = AppLocalizations.string(
+                "speech.error.onDeviceUnavailable",
+                defaultValue: "On-device speech recognition is temporarily unavailable. Try again later."
+            )
         }
     }
 }

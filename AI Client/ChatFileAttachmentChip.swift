@@ -37,7 +37,7 @@ struct ChatFileAttachmentChip: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("移除文件")
+                .accessibilityLabel(AppLocalizations.string("accessibility.removeFile", defaultValue: "Remove file"))
             }
         }
         .padding(.horizontal, 10)
@@ -54,7 +54,13 @@ struct ChatFileAttachmentChip: View {
 
     private var detailText: String {
         let byteText = ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file)
-        let truncatedText = attachment.isTruncated ? " · 已截断" : ""
-        return "\(byteText) · \(attachment.characterCount) 字\(truncatedText)"
+        let truncatedText = attachment.isTruncated
+            ? AppLocalizations.string("fileAttachment.truncatedSuffix", defaultValue: " · truncated")
+            : ""
+        return AppLocalizations.format(
+            "fileAttachment.detail",
+            defaultValue: "%@ · %d characters%@",
+            arguments: [byteText, attachment.characterCount, truncatedText]
+        )
     }
 }

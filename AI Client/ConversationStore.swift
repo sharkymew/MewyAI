@@ -325,7 +325,7 @@ struct ChatMessageRevisionGroup: Identifiable, Codable, Equatable {
 
 struct AIConversation: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
-    var title: String = "新对话"
+    var title: String = AppLocalizations.string("conversation.newTitle", defaultValue: "New Chat")
     var messages: [ChatMessage] = []
     var messageRevisionGroups: [ChatMessageRevisionGroup] = []
     var createdAt: Date = Date()
@@ -337,7 +337,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
 
     init(
         id: UUID = UUID(),
-        title: String = "新对话",
+        title: String = AppLocalizations.string("conversation.newTitle", defaultValue: "New Chat"),
         messages: [ChatMessage] = [],
         messageRevisionGroups: [ChatMessageRevisionGroup] = [],
         createdAt: Date = Date(),
@@ -362,7 +362,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        title = try container.decodeIfPresent(String.self, forKey: .title) ?? "新对话"
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+            ?? AppLocalizations.string("conversation.newTitle", defaultValue: "New Chat")
         messages = try container.decodeIfPresent([ChatMessage].self, forKey: .messages) ?? []
         messageRevisionGroups = try container.decodeIfPresent([ChatMessageRevisionGroup].self, forKey: .messageRevisionGroups) ?? []
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()

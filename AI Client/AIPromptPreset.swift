@@ -20,7 +20,9 @@ struct AIPromptPreset: Identifiable, Codable, Equatable {
 
     var displayName: String {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedName.isEmpty ? "未命名提示词" : trimmedName
+        return trimmedName.isEmpty
+            ? AppLocalizations.string("promptPreset.unnamed", defaultValue: "Unnamed Prompt")
+            : trimmedName
     }
 }
 
@@ -69,7 +71,10 @@ extension AIConfiguration {
         if let promptPresets, !promptPresets.isEmpty {
             presets = promptPresets
         } else {
-            presets = [AIPromptPreset(name: "默认提示词", content: fallbackSystemPrompt)]
+            presets = [AIPromptPreset(
+                name: AppLocalizations.string("promptPreset.defaultName", defaultValue: "Default Prompt"),
+                content: fallbackSystemPrompt
+            )]
         }
 
         if let selectedPreset = selectedPromptPresetID.flatMap({ selectedID in
@@ -80,7 +85,7 @@ extension AIConfiguration {
 
         let recoveredPreset = AIPromptPreset(
             id: selectedPromptPresetID ?? UUID(),
-            name: "当前提示词",
+            name: AppLocalizations.string("promptPreset.currentName", defaultValue: "Current Prompt"),
             content: fallbackSystemPrompt
         )
         presets.append(recoveredPreset)

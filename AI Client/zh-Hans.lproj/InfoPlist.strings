@@ -1,1 +1,3 @@
 "CFBundleDisplayName" = "MewyAI";
+"NSMicrophoneUsageDescription" = "用于将语音转换为输入文本，识别结果会先填入输入框，由你确认后发送。";
+"NSSpeechRecognitionUsageDescription" = "用于将语音转换为输入文本，识别结果会先填入输入框，由你确认后发送。";
