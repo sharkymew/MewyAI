@@ -642,6 +642,11 @@ private final class ChatInputDraft: ObservableObject {
         focusRequestID += 1
     }
 
+    func resignFocus() {
+        isFocused = false
+        focusRequestID += 1
+    }
+
     private func updateSubmittableTextState() {
         let newValue = text.unicodeScalars.contains { !Self.blankScalarSet.contains($0) }
         if hasSubmittableText != newValue {
@@ -1218,6 +1223,7 @@ struct ContentView: View {
     }
 
     private func presentExpandedInput() {
+        inputDraft.resignFocus()
         withAnimation(.easeInOut(duration: 0.22)) {
             isExpandedInputPresented = true
         }
@@ -7520,6 +7526,8 @@ private struct ChatInputComposer<OptionsMenu: View>: View {
 private struct ExpandedChatInputView: View {
     @ObservedObject var inputDraft: ChatInputDraft
     @Environment(\.colorScheme) private var colorScheme
+    @State private var textViewIsFocused = false
+    @State private var focusRequestID = 0
 
     let isGenerating: Bool
     let isEditingMessage: Bool
@@ -7558,9 +7566,9 @@ private struct ExpandedChatInputView: View {
                 ImagePastingTextView(
                     text: inputDraft.text,
                     textRevision: inputDraft.textRevision,
-                    isFocused: .constant(true),
-                    focusRequestID: 1,
-                    focusDelay: 0.25,
+                    isFocused: $textViewIsFocused,
+                    focusRequestID: focusRequestID,
+                    focusDelay: 0,
                     placeholder: AppLocalizations.string("input.placeholder", defaultValue: "Type a message..."),
                     maxVisibleLineCount: 200,
                     fillsAvailableHeight: true,
@@ -7590,6 +7598,18 @@ private struct ExpandedChatInputView: View {
             .padding(.bottom, 20)
         }
         .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        .task {
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                textViewIsFocused = true
+                focusRequestID += 1
+            }
+        }
+        .onDisappear {
+            textViewIsFocused = false
+            focusRequestID += 1
+        }
     }
 
     private var canSendMessage: Bool {
