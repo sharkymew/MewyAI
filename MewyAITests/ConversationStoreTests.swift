@@ -75,4 +75,34 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertEqual(message.imageAttachments[0].mimeType, "image/png")
         XCTAssertEqual(message.imageAttachments[0].byteCount, 0)
     }
+
+    func testStorageDataCompressionRoundTrip() throws {
+        let conversations = [
+            AIConversation(messages: (0..<50).map { index in
+                ChatMessage(role: index.isMultiple(of: 2) ? "user" : "assistant",
+                            content: "Message body number \(index) with enough repeated text to compress.")
+            })
+        ]
+        let json = try JSONEncoder().encode(conversations)
+
+        let stored = ConversationStore.compressedStorageData(from: json)
+
+        XCTAssertLessThan(stored.count, json.count / 2)
+        XCTAssertEqual(ConversationStore.decompressedStorageData(from: stored), json)
+    }
+
+    func testDecompressedStorageDataPassesThroughLegacyPlainJSON() {
+        let json = Data("[{\"title\":\"legacy plain conversations\"}]".utf8)
+
+        XCTAssertEqual(ConversationStore.decompressedStorageData(from: json), json)
+    }
+
+    func testCompressedStorageDataKeepsIncompressibleDataIntact() {
+        let tiny = Data("[]".utf8)
+
+        let stored = ConversationStore.compressedStorageData(from: tiny)
+
+        XCTAssertEqual(stored, tiny)
+        XCTAssertEqual(ConversationStore.decompressedStorageData(from: stored), tiny)
+    }
 }

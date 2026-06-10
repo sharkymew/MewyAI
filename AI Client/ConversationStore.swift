@@ -439,7 +439,7 @@ enum ConversationStore {
         let storageConversations = migratedConversationsForStorage(conversations)
         guard let data = try? JSONEncoder().encode(storageConversations) else { return false }
 
-        guard writeProtectedConversations(data) else {
+        guard writeProtectedConversations(compressedStorageData(from: data)) else {
             return false
         }
 
@@ -473,7 +473,8 @@ enum ConversationStore {
     }
 
     private static func decodedConversations(from data: Data) -> [AIConversation]? {
-        guard let conversations = try? JSONDecoder().decode([AIConversation].self, from: data),
+        let jsonData = decompressedStorageData(from: data)
+        guard let conversations = try? JSONDecoder().decode([AIConversation].self, from: jsonData),
               !conversations.isEmpty else {
             return nil
         }
@@ -481,6 +482,26 @@ enum ConversationStore {
         return conversations
             .map(\.normalized)
             .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    // Conversations.json holds LZFSE-compressed JSON; installs that predate
+    // compression stored plain JSON, so both formats must stay readable.
+    private static let lzfseMagicPrefix = Data("bvx".utf8)
+
+    static func compressedStorageData(from data: Data) -> Data {
+        guard let compressed = try? (data as NSData).compressed(using: .lzfse) as Data,
+              compressed.count < data.count else {
+            return data
+        }
+        return compressed
+    }
+
+    static func decompressedStorageData(from data: Data) -> Data {
+        guard data.starts(with: lzfseMagicPrefix),
+              let decompressed = try? (data as NSData).decompressed(using: .lzfse) as Data else {
+            return data
+        }
+        return decompressed
     }
 
     private static func migratedConversationsForStorage(_ conversations: [AIConversation]) -> [AIConversation] {
