@@ -10,14 +10,30 @@
 		DF1124712FBF49A9007131D0 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF1124702FBF49A9007131D0 /* MarkdownUI */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		DF9000072FD8A000007131D0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DF11242A2FBD5F56007131D0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DF1124312FBD5F56007131D0;
+			remoteInfo = MewyAI;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		DF1124322FBD5F56007131D0 /* MewyAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MewyAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF9000012FD8A000007131D0 /* MewyAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MewyAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		DF1124342FBD5F56007131D0 /* AI Client */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "AI Client";
+			sourceTree = "<group>";
+		};
+		DF9000022FD8A000007131D0 /* MewyAITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MewyAITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +47,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DF9000032FD8A000007131D0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -38,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				DF1124342FBD5F56007131D0 /* AI Client */,
+				DF9000022FD8A000007131D0 /* MewyAITests */,
 				DF1124332FBD5F56007131D0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -46,6 +70,7 @@
 			isa = PBXGroup;
 			children = (
 				DF1124322FBD5F56007131D0 /* MewyAI.app */,
+				DF9000012FD8A000007131D0 /* MewyAITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -76,6 +101,29 @@
 			productReference = DF1124322FBD5F56007131D0 /* MewyAI.app */;
 			productType = "com.apple.product-type.application";
 		};
+		DF9000062FD8A000007131D0 /* MewyAITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DF90000B2FD8A000007131D0 /* Build configuration list for PBXNativeTarget "MewyAITests" */;
+			buildPhases = (
+				DF9000052FD8A000007131D0 /* Sources */,
+				DF9000032FD8A000007131D0 /* Frameworks */,
+				DF9000042FD8A000007131D0 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DF9000082FD8A000007131D0 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DF9000022FD8A000007131D0 /* MewyAITests */,
+			);
+			name = MewyAITests;
+			packageProductDependencies = (
+			);
+			productName = MewyAITests;
+			productReference = DF9000012FD8A000007131D0 /* MewyAITests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -88,6 +136,10 @@
 				TargetAttributes = {
 					DF1124312FBD5F56007131D0 = {
 						CreatedOnToolsVersion = 26.5;
+					};
+					DF9000062FD8A000007131D0 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = DF1124312FBD5F56007131D0;
 					};
 				};
 			};
@@ -111,12 +163,20 @@
 			projectRoot = "";
 			targets = (
 				DF1124312FBD5F56007131D0 /* MewyAI */,
+				DF9000062FD8A000007131D0 /* MewyAITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		DF1124302FBD5F56007131D0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF9000042FD8A000007131D0 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -133,7 +193,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DF9000052FD8A000007131D0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DF9000082FD8A000007131D0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DF1124312FBD5F56007131D0 /* MewyAI */;
+			targetProxy = DF9000072FD8A000007131D0 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		DF11243B2FBD5F58007131D0 /* Debug */ = {
@@ -347,6 +422,60 @@
 			};
 			name = Release;
 		};
+		DF9000092FD8A000007131D0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sharkymew.MewyAI.Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MewyAI.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MewyAI";
+			};
+			name = Debug;
+		};
+		DF90000A2FD8A000007131D0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sharkymew.MewyAI.Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MewyAI.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MewyAI";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -364,6 +493,15 @@
 			buildConfigurations = (
 				DF11243E2FBD5F58007131D0 /* Debug */,
 				DF11243F2FBD5F58007131D0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DF90000B2FD8A000007131D0 /* Build configuration list for PBXNativeTarget "MewyAITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DF9000092FD8A000007131D0 /* Debug */,
+				DF90000A2FD8A000007131D0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
