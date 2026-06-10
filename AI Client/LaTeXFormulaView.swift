@@ -1,5 +1,6 @@
 import Foundation
 import JavaScriptCore
+import Compression
 import SwiftUI
 import UIKit
 import WebKit
@@ -11,6 +12,7 @@ nonisolated struct PreparedLaTeXFormula: @unchecked Sendable {
     let imageSize: CGSize
     let fallbackText: String
     let errorMessage: String?
+    let allowsWebFallback: Bool
 
     var hasImage: Bool {
         image != nil && imageSize.width > 0 && imageSize.height > 0
@@ -52,6 +54,17 @@ struct PreparedLaTeXFormulaView: View {
                 .scrollDisabled(!formula.displayMode)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: formula.imageSize.height)
+            } else if formula.allowsWebFallback,
+                      LaTeXRenderBudget.canRenderFormula(formula.formula) {
+                LaTeXFormulaWebView(
+                    formula: formula.formula,
+                    displayMode: formula.displayMode,
+                    textColor: resolvedTextColor,
+                    fontSize: fontSize,
+                    height: $webHeight
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: webHeight)
             } else if formula.errorMessage != nil {
                 LaTeXFallbackText(
                     text: formula.fallbackText,
@@ -400,17 +413,99 @@ private enum LaTeXWebViewSupport {
     }
 }
 
+private nonisolated enum MathJaxScriptLoader {
+    private static let resourceName = "mathjax-headless-svg"
+    private static let compressedExtension = "js.lzma"
+    private static let initialBufferSize = 3_000_000
+    private static let maxDecompressedBytes = 8_000_000
+
+    private static let cachedScriptData: Result<Data, Error> = Result {
+        guard let compressedScriptURL = Bundle.main.url(
+            forResource: resourceName,
+            withExtension: compressedExtension
+        ) else {
+            throw ScriptLoadError.resourceMissing
+        }
+
+        let compressedData = try Data(contentsOf: compressedScriptURL)
+        return try decompressedData(from: compressedData)
+    }
+
+    static func scriptData() throws -> Data {
+        try cachedScriptData.get()
+    }
+
+    static func scriptString() throws -> String {
+        let data = try scriptData()
+        guard let script = String(data: data, encoding: .utf8) else {
+            throw ScriptLoadError.invalidUTF8
+        }
+        return script
+    }
+
+    private static func decompressedData(from compressedData: Data) throws -> Data {
+        var destinationSize = max(initialBufferSize, compressedData.count * 6)
+
+        while destinationSize <= maxDecompressedBytes {
+            var output = Data(count: destinationSize)
+            let decodedCount = output.withUnsafeMutableBytes { destinationBuffer in
+                compressedData.withUnsafeBytes { sourceBuffer -> Int in
+                    guard let destination = destinationBuffer.baseAddress,
+                          let source = sourceBuffer.baseAddress else {
+                        return 0
+                    }
+
+                    return compression_decode_buffer(
+                        destination.assumingMemoryBound(to: UInt8.self),
+                        destinationSize,
+                        source.assumingMemoryBound(to: UInt8.self),
+                        compressedData.count,
+                        nil,
+                        COMPRESSION_LZMA
+                    )
+                }
+            }
+
+            if decodedCount > 0 {
+                output.removeSubrange(decodedCount..<output.count)
+                return output
+            }
+
+            destinationSize *= 2
+        }
+
+        throw ScriptLoadError.decompressionFailed
+    }
+
+    private enum ScriptLoadError: LocalizedError {
+        case resourceMissing
+        case decompressionFailed
+        case invalidUTF8
+
+        var errorDescription: String? {
+            switch self {
+            case .resourceMissing:
+                return "mathjax-headless-svg.js.lzma missing from bundle"
+            case .decompressionFailed:
+                return "MathJax script decompression failed"
+            case .invalidUTF8:
+                return "MathJax script is not valid UTF-8"
+            }
+        }
+    }
+}
+
 private final class LaTeXWebViewResourceHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
-        guard urlSchemeTask.request.url?.lastPathComponent == "mathjax-headless-svg.js",
-              let scriptURL = Bundle.main.url(forResource: "mathjax-headless-svg", withExtension: "js"),
-              let data = try? Data(contentsOf: scriptURL) else {
+        guard let requestURL = urlSchemeTask.request.url,
+              requestURL.lastPathComponent == "mathjax-headless-svg.js",
+              let data = try? MathJaxScriptLoader.scriptData() else {
             urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
             return
         }
 
         let response = URLResponse(
-            url: urlSchemeTask.request.url ?? scriptURL,
+            url: requestURL,
             mimeType: "application/javascript",
             expectedContentLength: data.count,
             textEncodingName: "utf-8"
@@ -898,12 +993,18 @@ actor LaTeXSVGRenderer {
             return Self.fallback(
                 formula: trimmedFormula,
                 displayMode: displayMode,
-                error: loadFailure ?? "MathJax renderer unavailable"
+                error: loadFailure ?? "MathJax renderer unavailable",
+                allowsWebFallback: true
             )
         }
 
         guard !Task.isCancelled else {
-            return Self.fallback(formula: trimmedFormula, displayMode: displayMode, error: "Render cancelled")
+            return Self.fallback(
+                formula: trimmedFormula,
+                displayMode: displayMode,
+                error: "Render cancelled",
+                allowsWebFallback: true
+            )
         }
 
         guard let rawResult = rendererFunction.call(withArguments: [trimmedFormula, displayMode])?.toString(),
@@ -911,7 +1012,12 @@ actor LaTeXSVGRenderer {
               response.ok,
               let rawSVG = response.svg else {
             let error = context?.exception?.toString() ?? "MathJax conversion failed"
-            return Self.fallback(formula: trimmedFormula, displayMode: displayMode, error: error)
+            return Self.fallback(
+                formula: trimmedFormula,
+                displayMode: displayMode,
+                error: error,
+                allowsWebFallback: true
+            )
         }
 
         guard rawSVG.count <= LaTeXRenderBudget.maxRenderedSVGCharacters else {
@@ -928,7 +1034,12 @@ actor LaTeXSVGRenderer {
             fontSize: style.baseFont.pointSize,
             displayScale: style.displayScale
         ) else {
-            return Self.fallback(formula: trimmedFormula, displayMode: displayMode, error: "SVG image decoding failed")
+            return Self.fallback(
+                formula: trimmedFormula,
+                displayMode: displayMode,
+                error: "SVG image decoding failed",
+                allowsWebFallback: true
+            )
         }
 
         return PreparedLaTeXFormula(
@@ -937,7 +1048,8 @@ actor LaTeXSVGRenderer {
             image: renderedImage.image,
             imageSize: renderedImage.size,
             fallbackText: Self.fallbackText(formula: trimmedFormula, displayMode: displayMode),
-            errorMessage: nil
+            errorMessage: nil,
+            allowsWebFallback: false
         )
     }
 
@@ -953,13 +1065,8 @@ actor LaTeXSVGRenderer {
         if let rendererFunction { return rendererFunction }
         if loadFailure != nil { return nil }
 
-        guard let scriptURL = Bundle.main.url(forResource: "mathjax-headless-svg", withExtension: "js") else {
-            loadFailure = "mathjax-headless-svg.js missing from bundle"
-            return nil
-        }
-
         do {
-            let script = try String(contentsOf: scriptURL, encoding: .utf8)
+            let script = try MathJaxScriptLoader.scriptString()
             let nextContext = JSContext()
             nextContext?.evaluateScript(script)
             if let exception = nextContext?.exception?.toString() {
@@ -1104,7 +1211,8 @@ actor LaTeXSVGRenderer {
     private static func fallback(
         formula: String,
         displayMode: Bool,
-        error: String
+        error: String,
+        allowsWebFallback: Bool = false
     ) -> PreparedLaTeXFormula {
         PreparedLaTeXFormula(
             formula: formula,
@@ -1112,7 +1220,8 @@ actor LaTeXSVGRenderer {
             image: nil,
             imageSize: .zero,
             fallbackText: fallbackText(formula: formula, displayMode: displayMode),
-            errorMessage: error
+            errorMessage: error,
+            allowsWebFallback: allowsWebFallback
         )
     }
 
