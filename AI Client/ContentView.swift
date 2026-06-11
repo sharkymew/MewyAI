@@ -676,6 +676,9 @@ struct ContentView: View {
     @StateObject private var conversationActionHaptics = ConversationActionHaptics()
     @AppStorage(AIConfigurationStore.hapticFeedbackEnabledKey)
     private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
+    @AppStorage(ChatMemoryStore.memoryEnabledKey)
+    private var isGlobalMemoryEnabled = ChatMemoryStore.defaultMemoryEnabled
+    @State private var memoryExtractionConversationIDs = Set<UUID>()
     @StateObject private var inputDraft = ChatInputDraft()
     @State private var messages: [ChatMessage] = []
     @State private var conversations = ConversationStore.loadConversations()
@@ -2607,7 +2610,13 @@ struct ContentView: View {
         let usesImageAttachments = configuration.selectedModelSupportsImages
         let usesAgentTools = !activeMCPServers.isEmpty
         let agentTools = usesAgentTools ? activeAgentToolDefinitions() : []
-        let effectiveSystemPrompt = configuration.systemPrompt + AgentTooling.promptAppendix(for: activeSkills)
+        let usesGlobalMemory = isGlobalMemoryEnabled && !isPrivateConversationSelected
+        let memoryPromptAppendix = usesGlobalMemory
+            ? ChatMemoryStore.promptAppendix(for: ChatMemoryStore.loadEntries())
+            : ""
+        let effectiveSystemPrompt = configuration.systemPrompt
+            + AgentTooling.promptAppendix(for: activeSkills)
+            + memoryPromptAppendix
         let generatesImageContextDescriptions = configuration.generatesImageContextDescriptions
         let preservesReasoningContext = AIService.usesDeepSeekReasoningContext(
             apiFormat: apiFormat,
@@ -2979,6 +2988,7 @@ struct ContentView: View {
         )
         persistConversation(conversationID, refreshesUpdatedAt: true)
         generateTitleIfNeeded(for: conversationID, configuration: configuration)
+        extractMemoriesIfNeeded(for: conversationID, configuration: configuration)
     }
 
     private func attachAssistantUsage(
@@ -5323,6 +5333,71 @@ struct ContentView: View {
             conversations[currentIndex].title = title
             conversations[currentIndex].hasGeneratedTitle = true
             saveConversationsPreservingSelectedConversation()
+        }
+    }
+
+    private func extractMemoriesIfNeeded(for conversationID: UUID, configuration: AIConfiguration) {
+        guard isGlobalMemoryEnabled,
+              conversationID != privateConversationID,
+              !memoryExtractionConversationIDs.contains(conversationID),
+              let conversation = conversations.first(where: { $0.id == conversationID }) else {
+            return
+        }
+
+        let conversationMessages = conversation.messages
+        guard let assistantIndex = conversationMessages.lastIndex(where: {
+            $0.role == "assistant" && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) else {
+            return
+        }
+
+        let assistantText = conversationMessages[assistantIndex].content
+        let userText = conversationMessages[..<assistantIndex]
+            .last(where: { $0.role == "user" })?
+            .content ?? ""
+        guard !userText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else { return }
+
+        let memorySnapshot = ChatMemoryStore.loadEntries()
+        let snapshotIDs = memorySnapshot.map(\.id)
+        let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
+
+        memoryExtractionConversationIDs.insert(conversationID)
+
+        AIService().extractMemoryUpdates(
+            memoryEntries: memorySnapshot,
+            userText: userText,
+            assistantText: assistantText,
+            baseURL: configuration.requestURLString.trimmingCharacters(in: .whitespacesAndNewlines),
+            apiFormat: configuration.apiFormat,
+            apiKey: configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            customHeaders: configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines),
+            model: model,
+            modelParameters: configuration.selectedModelConfiguration,
+            anthropicMaxTokens: configuration.anthropicMaxTokens,
+            anthropicClaudeCodeImpersonationEnabled: configuration.anthropicClaudeCodeImpersonationEnabled,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEnabled == true ? configuration.reasoningEffort : nil
+        ) { operations in
+            memoryExtractionConversationIDs.remove(conversationID)
+            guard isGlobalMemoryEnabled,
+                  let operations,
+                  !operations.isEmpty else {
+                return
+            }
+
+            let currentEntries = ChatMemoryStore.loadEntries()
+            let updatedEntries = ChatMemoryStore.applying(
+                operations,
+                to: currentEntries,
+                snapshotIDs: snapshotIDs,
+                sourceConversationID: conversationID
+            )
+            if updatedEntries != currentEntries {
+                ChatMemoryStore.saveEntries(updatedEntries)
+            }
         }
     }
 

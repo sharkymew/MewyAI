@@ -19,9 +19,12 @@ struct AIConfigurationView: View {
     @State private var editingModelParameterName: String?
     @State private var saveErrorMessage: String?
     @State private var showAgentCapabilities = false
+    @State private var showMemorySettings = false
     @State private var notificationAuthorizationStatus: UNAuthorizationStatus?
     @AppStorage(AIConfigurationStore.hapticFeedbackEnabledKey)
     private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
+    @AppStorage(ChatMemoryStore.memoryEnabledKey)
+    private var isGlobalMemoryEnabled = ChatMemoryStore.defaultMemoryEnabled
     @FocusState private var focusedField: ConfigurationField?
     
     private let aiService = AIService()
@@ -146,6 +149,7 @@ struct AIConfigurationView: View {
                 modelsSection
                 customHeadersSection
                 agentCapabilitiesSection
+                memorySection
                 interactionSection
                 notificationSection
                 imageContextSection
@@ -195,6 +199,9 @@ struct AIConfigurationView: View {
             }
             .sheet(isPresented: $showAgentCapabilities) {
                 AgentCapabilitiesView()
+            }
+            .sheet(isPresented: $showMemorySettings) {
+                ChatMemorySettingsView()
             }
             .confirmationDialog(
                 "删除本配置下的所有模型？",
@@ -333,6 +340,23 @@ struct AIConfigurationView: View {
             }
         } footer: {
             Text("每行一个请求头，格式为 Header-Name: value。Authorization、Token、API Key 等敏感请求头会存入钥匙串。")
+        }
+    }
+
+    private var memorySection: some View {
+        Section {
+            Toggle("全局记忆", isOn: $isGlobalMemoryEnabled)
+
+            Button {
+                hideKeyboard()
+                showMemorySettings = true
+            } label: {
+                Label("管理记忆", systemImage: "brain")
+            }
+        } header: {
+            Text("记忆")
+        } footer: {
+            Text("开启后，每次对话完成会用当前模型在后台提取值得长期记住的信息，并注入到之后的所有对话中（不分配置和模型）。临时聊天不会读取或写入记忆。")
         }
     }
 

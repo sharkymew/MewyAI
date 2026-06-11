@@ -684,6 +684,105 @@ class AIService {
         }
     }
 
+    private static let memoryExtractionSystemPrompt = """
+    You maintain the long-term memory of the user for a chat app. You receive the current memory list and the latest exchange of a conversation. Decide whether the exchange reveals durable facts about the user worth keeping across future conversations: stable preferences, ongoing projects, profession, important personal context, or corrections to existing memories.
+
+    Output ONLY a JSON object, with no extra text, in this exact shape:
+    {"operations":[{"action":"add","content":"…"},{"action":"update","index":2,"content":"…"},{"action":"delete","index":3}]}
+
+    Rules:
+    - "add": a new durable fact not covered by existing memories. Write one concise sentence in the user's primary language.
+    - "update": refine, merge into, or correct the numbered existing memory.
+    - "delete": remove a numbered memory that is wrong or that the user retracted; also use this when the user asks to forget something.
+    - Never store one-off task details, transient questions, or secrets such as passwords and API keys.
+    - Most exchanges contain nothing worth remembering; then output {"operations":[]}.
+    """
+
+    func extractMemoryUpdates(
+        memoryEntries: [ChatMemoryEntry],
+        userText: String,
+        assistantText: String,
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        apiKey: String,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        anthropicClaudeCodeImpersonationEnabled: Bool = false,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping ([ChatMemoryOperation]?) -> Void
+    ) {
+        guard let url = try? requestURL(
+            from: baseURL,
+            apiFormat: apiFormat,
+            model: model,
+            apiKey: apiKey,
+            isStreaming: false,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+        ) else {
+            completion(nil)
+            return
+        }
+
+        let extractionMessages = [
+            ChatRequestMessage(role: "system", text: Self.memoryExtractionSystemPrompt),
+            ChatRequestMessage(role: "user", text: ChatMemoryStore.extractionUserPrompt(
+                entries: memoryEntries,
+                userText: userText,
+                assistantText: assistantText
+            ))
+        ]
+
+        guard let jsonData = try? requestBodyData(
+            apiFormat: apiFormat,
+            model: model,
+            messages: extractionMessages,
+            stream: false,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+        ) else {
+            completion(nil)
+            return
+        }
+
+        var request = makeRequest(
+            url: url,
+            apiFormat: apiFormat,
+            model: model,
+            apiKey: apiKey,
+            customHeaders: customHeaders,
+            acceptsEventStream: false,
+            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+        )
+        request.httpBody = jsonData
+
+        Task {
+            do {
+                let (data, response) = try await boundedResponseData(for: request)
+                let statusCode = (response as? HTTPURLResponse)?.statusCode
+                DispatchQueue.main.async {
+                    guard let statusCode,
+                          (200...299).contains(statusCode),
+                          let responseText = Self.decodedResponseText(from: data, apiFormat: apiFormat) else {
+                        completion(nil)
+                        return
+                    }
+
+                    completion(ChatMemoryUpdateParser.operations(from: responseText))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    completion(nil)
+                }
+            }
+        }
+    }
+
     func generateImageContextDescription(
         imageAttachments: [ChatImageAttachment],
         baseURL: String,
