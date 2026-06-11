@@ -1,7 +1,10 @@
 import SwiftUI
+import UIKit
+@preconcurrency import UserNotifications
 
 struct AIConfigurationView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var configurations = AIConfigurationStore.loadConfigurations()
     @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
     @State private var showAPIKey = false
@@ -16,6 +19,7 @@ struct AIConfigurationView: View {
     @State private var editingModelParameterName: String?
     @State private var saveErrorMessage: String?
     @State private var showAgentCapabilities = false
+    @State private var notificationAuthorizationStatus: UNAuthorizationStatus?
     @AppStorage(AIConfigurationStore.hapticFeedbackEnabledKey)
     private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
     @FocusState private var focusedField: ConfigurationField?
@@ -84,6 +88,44 @@ struct AIConfigurationView: View {
             lhs.sortKey.localizedStandardCompare(rhs.sortKey) == .orderedAscending
         }
     }
+
+    private var notificationAuthorizationStatusText: String {
+        guard let notificationAuthorizationStatus else {
+            return "检查中"
+        }
+
+        switch notificationAuthorizationStatus {
+        case .notDetermined:
+            return "尚未请求"
+        case .denied:
+            return "已关闭"
+        case .authorized:
+            return "已允许"
+        case .provisional:
+            return "临时允许"
+        case .ephemeral:
+            return "本次允许"
+        @unknown default:
+            return "未知"
+        }
+    }
+
+    private var notificationAuthorizationStatusColor: Color {
+        guard let notificationAuthorizationStatus else {
+            return .secondary
+        }
+
+        switch notificationAuthorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return .green
+        case .denied:
+            return .red
+        case .notDetermined:
+            return .secondary
+        @unknown default:
+            return .secondary
+        }
+    }
     
     private var selectedIndex: Int? {
         guard let selectedConfigurationID else { return configurations.indices.first }
@@ -105,6 +147,7 @@ struct AIConfigurationView: View {
                 customHeadersSection
                 agentCapabilitiesSection
                 interactionSection
+                notificationSection
                 imageContextSection
             }
             .background(
@@ -116,6 +159,7 @@ struct AIConfigurationView: View {
             .navigationTitle("设置")
             .onAppear {
                 ensureSelection()
+                refreshNotificationAuthorizationStatus()
                 if normalizeConfigurationNames() {
                     saveCurrentState()
                 }
@@ -127,6 +171,11 @@ struct AIConfigurationView: View {
             .onChange(of: focusedField) { oldField, newField in
                 if oldField != newField {
                     commitEditedField(oldField)
+                }
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    refreshNotificationAuthorizationStatus()
                 }
             }
             .toolbar {
@@ -294,6 +343,29 @@ struct AIConfigurationView: View {
             Text("交互")
         } footer: {
             Text("关闭后，输出刷新、输出完成和手动停止都不会触发震动。")
+        }
+    }
+
+    private var notificationSection: some View {
+        Section {
+            HStack {
+                Label("后台完成通知", systemImage: "bell.badge")
+                Spacer()
+                Text(notificationAuthorizationStatusText)
+                    .foregroundStyle(notificationAuthorizationStatusColor)
+            }
+
+            if notificationAuthorizationStatus == .denied {
+                Button {
+                    openAppNotificationSettings()
+                } label: {
+                    Label("打开系统通知设置", systemImage: "gear")
+                }
+            }
+        } header: {
+            Text("通知")
+        } footer: {
+            Text("App 在后台或非活跃状态完成普通对话后，会发送一条本机通知。临时聊天、失败或手动停止不会通知。")
         }
     }
 
@@ -789,6 +861,21 @@ struct AIConfigurationView: View {
             selectedConfigurationID = configurations[0].id
             AIConfigurationStore.saveSelectedConfigurationID(configurations[0].id)
         }
+    }
+
+    private func refreshNotificationAuthorizationStatus() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            Task { @MainActor in
+                notificationAuthorizationStatus = settings.authorizationStatus
+            }
+        }
+    }
+
+    private func openAppNotificationSettings() {
+        guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else {
+            return
+        }
+        UIApplication.shared.open(settingsURL)
     }
     
     private func updateSelectedConfiguration(

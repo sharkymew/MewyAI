@@ -707,6 +707,7 @@ struct ContentView: View {
     @State private var flushTask: Task<Void, Never>?
     @State private var activeConversationGenerations: [UUID: ActiveConversationGeneration] = [:]
     @State private var backgroundRequestKeeper = BackgroundRequestKeeper()
+    @State private var backgroundCompletionNotificationCoordinator = BackgroundCompletionNotificationCoordinator()
     @State private var activeAssistantMessageID: UUID?
     @State private var markdownRenderCache: [UUID: MarkdownRenderCacheEntry] = [:]
     @State private var markdownRenderTasks: [UUID: Task<Void, Never>] = [:]
@@ -1436,6 +1437,7 @@ struct ContentView: View {
             }
             speechInputController.stopRecording()
             persistApplicationStateForLifecycle()
+            updateBackgroundRequestKeeper()
         }
     }
 
@@ -2730,6 +2732,9 @@ struct ContentView: View {
         activeAssistantMessageID = assistantMessageID
         liveAssistantDisplays[assistantMessageID] = AssistantLiveDisplay()
         updateBackgroundRequestKeeper()
+        if selectedConversationID != privateConversationID {
+            backgroundCompletionNotificationCoordinator.requestAuthorizationIfNeeded()
+        }
 
         requestService.sendStreamingMessage(
             message: userText,
@@ -2941,6 +2946,24 @@ struct ContentView: View {
             to: assistantMessageID,
             in: conversationID,
             configuration: configuration
+        )
+
+        let backgroundNotificationTitle = conversations
+            .first(where: { $0.id == conversationID })?
+            .title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let notificationTitle = backgroundNotificationTitle?.isEmpty == false
+            ? backgroundNotificationTitle ?? "MewyAI"
+            : "MewyAI"
+        backgroundCompletionNotificationCoordinator.deliverCompletionNotificationIfNeeded(
+            assistantMessageID: assistantMessageID,
+            conversationID: conversationID,
+            privateConversationID: privateConversationID,
+            contentText: contentText,
+            title: notificationTitle,
+            onPendingCountChanged: {
+                updateBackgroundRequestKeeper()
+            }
         )
 
         if selectedConversationID == conversationID {
@@ -5152,8 +5175,9 @@ struct ContentView: View {
 
     private func updateBackgroundRequestKeeper() {
         backgroundRequestKeeper.update(
-            activeRequestCount: activeConversationGenerations.count,
-            isSceneBackgrounded: scenePhase == .inactive || scenePhase == .background
+            activeRequestCount: activeConversationGenerations.count
+                + backgroundCompletionNotificationCoordinator.pendingNotificationCount,
+            isSceneBackgrounded: UIApplication.shared.applicationState != .active
         ) {
             persistApplicationStateForLifecycle()
         }

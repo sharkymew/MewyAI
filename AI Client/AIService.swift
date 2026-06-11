@@ -778,6 +778,131 @@ class AIService {
         }
     }
 
+    nonisolated static let backgroundCompletionSummaryMaxLength = 200
+
+    nonisolated static func sanitizedBackgroundCompletionSummary(_ rawSummary: String?) -> String? {
+        guard let rawSummary else { return nil }
+
+        var summary = rawSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        for prefix in [
+            "摘要：", "摘要:", "总结：", "总结:", "通知：", "通知:",
+            "Summary:", "Summary：", "Notification:", "Notification："
+        ] where summary.hasPrefix(prefix) {
+            summary.removeFirst(prefix.count)
+            break
+        }
+
+        return backgroundCompletionNotificationBody(from: summary)
+    }
+
+    nonisolated static func fallbackBackgroundCompletionSummary(from responseText: String) -> String? {
+        backgroundCompletionNotificationBody(from: responseText)
+    }
+
+    private nonisolated static func backgroundCompletionNotificationBody(from rawText: String) -> String? {
+        var fragments: [String] = []
+        var insideCodeFence = false
+        var totalLength = 0
+
+        for rawLine in rawText.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("```") || line.hasPrefix("~~~") {
+                insideCodeFence.toggle()
+                continue
+            }
+            guard !insideCodeFence, !line.isEmpty, !containsSpecialTokenFragment(line) else { continue }
+
+            let cleaned = strippedInlineMarkdown(strippedLeadingBlockMarkers(line))
+            guard !cleaned.isEmpty else { continue }
+
+            fragments.append(cleaned)
+            totalLength += cleaned.count
+            if totalLength >= backgroundCompletionSummaryMaxLength { break }
+        }
+
+        guard !fragments.isEmpty else { return nil }
+
+        let joined = strippedWrappingQuotes(fragments.joined(separator: " "))
+        guard !joined.isEmpty else { return nil }
+        guard joined.count > backgroundCompletionSummaryMaxLength else { return joined }
+        return String(joined.prefix(backgroundCompletionSummaryMaxLength)) + "…"
+    }
+
+    private nonisolated static func strippedWrappingQuotes(_ text: String) -> String {
+        let pairs: [(Character, Character)] = [
+            ("「", "」"), ("『", "』"), ("“", "”"), ("‘", "’"),
+            ("\"", "\""), ("'", "'"), ("【", "】"), ("《", "》"),
+            ("（", "）"), ("(", ")"), ("[", "]")
+        ]
+
+        var result = Substring(text)
+        var changed = true
+        while changed, result.count > 2 {
+            changed = false
+            for (open, close) in pairs where result.first == open && result.last == close {
+                let inner = result.dropFirst().dropLast()
+                guard !inner.contains(open), !inner.contains(close) else { continue }
+                result = inner
+                changed = true
+                break
+            }
+        }
+
+        return result.trimmingCharacters(in: .whitespaces)
+    }
+
+    private nonisolated static func strippedLeadingBlockMarkers(_ line: String) -> String {
+        var text = Substring(line)
+        var changed = true
+        while changed {
+            changed = false
+
+            while text.first == ">" {
+                text = text.dropFirst().drop(while: { $0 == " " })
+                changed = true
+            }
+
+            let hashes = text.prefix(while: { $0 == "#" })
+            if (1...6).contains(hashes.count), text.dropFirst(hashes.count).first == " " {
+                text = text.dropFirst(hashes.count + 1)
+                changed = true
+            }
+
+            if let first = text.first, "-*+".contains(first), text.dropFirst().first == " " {
+                text = text.dropFirst(2).drop(while: { $0 == " " })
+                changed = true
+            }
+
+            let digits = text.prefix(while: \.isNumber)
+            if (1...3).contains(digits.count),
+               let separator = text.dropFirst(digits.count).first, separator == "." || separator == ")",
+               text.dropFirst(digits.count + 1).first == " " {
+                text = text.dropFirst(digits.count + 2)
+                changed = true
+            }
+        }
+
+        return text.trimmingCharacters(in: .whitespaces)
+    }
+
+    private nonisolated static let markdownLinkRegex = try! NSRegularExpression(
+        pattern: #"!?\[([^\]]*)\]\([^)]*\)"#
+    )
+
+    private nonisolated static func strippedInlineMarkdown(_ text: String) -> String {
+        var result = markdownLinkRegex.stringByReplacingMatches(
+            in: text,
+            range: NSRange(text.startIndex..., in: text),
+            withTemplate: "$1"
+        )
+        for token in ["**", "__", "~~", "`", "*"] {
+            result = result.replacingOccurrences(of: token, with: "")
+        }
+        return result
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
     private nonisolated static func sanitizedConversationTitle(_ rawTitle: String?) -> String? {
         guard let rawTitle else { return nil }
 
@@ -865,10 +990,14 @@ class AIService {
     }
 
     private nonisolated static func isAllowedTitleScalar(_ scalar: UnicodeScalar) -> Bool {
-        switch scalar.value {
-        case 48...57, 65...90, 97...122:
+        if CharacterSet.alphanumerics.contains(scalar) {
             return true
+        }
+
+        switch scalar.value {
         case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF:
+            return true
+        case 0x2600...0x27BF, 0x1F000...0x1FAFF:
             return true
         default:
             return false

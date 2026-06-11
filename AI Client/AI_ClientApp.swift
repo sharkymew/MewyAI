@@ -11,6 +11,7 @@ import WebKit
 @main
 struct AI_ClientApp: App {
     init() {
+        AppNotificationPresentationDelegate.install()
         WebKitStorageCleanup.removeLegacyPersistentDataIfNeeded()
     }
 
