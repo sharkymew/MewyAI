@@ -10,6 +10,7 @@ struct OpenAIRequest: Encodable {
     let model: String
     let messages: [ChatRequestMessage]
     let stream: Bool
+    let streamOptions: OpenAIStreamOptions?
     let thinking: ThinkingConfig?
     let reasoningEffort: ReasoningEffort?
     let tools: [OpenAIToolDefinition]?
@@ -21,12 +22,23 @@ struct OpenAIRequest: Encodable {
         case model
         case messages
         case stream
+        case streamOptions = "stream_options"
         case thinking
         case reasoningEffort = "reasoning_effort"
         case tools
         case temperature
         case topP = "top_p"
         case maxTokens = "max_tokens"
+    }
+}
+
+struct OpenAIStreamOptions: Encodable {
+    static let includesUsage = OpenAIStreamOptions(includeUsage: true)
+
+    let includeUsage: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case includeUsage = "include_usage"
     }
 }
 
@@ -866,6 +878,59 @@ struct OpenAIRequestToolCall: Encodable {
 
 struct OpenAIResponse: Codable {
     let choices: [Choice]
+    let usage: OpenAIUsage?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        choices = try container.decodeIfPresent([Choice].self, forKey: .choices) ?? []
+        usage = try container.decodeIfPresent(OpenAIUsage.self, forKey: .usage)
+    }
+}
+
+/// Usage block of OpenAI-compatible Chat Completions responses.
+/// `prompt_tokens` already includes cached tokens.
+struct OpenAIUsage: Codable {
+    let promptTokens: Int?
+    let completionTokens: Int?
+    let totalTokens: Int?
+    let promptTokensDetails: PromptTokensDetails?
+    let completionTokensDetails: CompletionTokensDetails?
+    let promptCacheHitTokens: Int?
+
+    struct PromptTokensDetails: Codable {
+        let cachedTokens: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case cachedTokens = "cached_tokens"
+        }
+    }
+
+    struct CompletionTokensDetails: Codable {
+        let reasoningTokens: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case reasoningTokens = "reasoning_tokens"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case promptTokens = "prompt_tokens"
+        case completionTokens = "completion_tokens"
+        case totalTokens = "total_tokens"
+        case promptTokensDetails = "prompt_tokens_details"
+        case completionTokensDetails = "completion_tokens_details"
+        case promptCacheHitTokens = "prompt_cache_hit_tokens"
+    }
+
+    var chatUsage: ChatUsage {
+        ChatUsage(
+            inputTokens: promptTokens,
+            outputTokens: completionTokens,
+            totalTokens: totalTokens,
+            cacheReadInputTokens: promptTokensDetails?.cachedTokens ?? promptCacheHitTokens,
+            reasoningOutputTokens: completionTokensDetails?.reasoningTokens
+        )
+    }
 }
 
 struct Choice: Codable {
@@ -884,11 +949,12 @@ struct OpenAIResponseToolCall: Codable {
 }
 
 struct OpenAIStreamResponse: Codable {
-    let choices: [StreamChoice]
+    let choices: [StreamChoice]?
+    let usage: OpenAIUsage?
 }
 
 struct StreamChoice: Codable {
-    let delta: StreamDelta
+    let delta: StreamDelta?
 }
 
 struct StreamDelta: Codable {
@@ -903,6 +969,7 @@ struct StreamDelta: Codable {
 
 struct OpenAIResponsesResponse: Decodable {
     let output: [OutputItem]?
+    let usage: OpenAIResponsesUsage?
 
     struct OutputItem: Decodable {
         let type: String?
@@ -954,15 +1021,65 @@ struct OpenAIResponsesResponse: Decodable {
 struct OpenAIResponsesStreamEvent: Decodable {
     let type: String?
     let delta: String?
+    let response: ResponsePayload?
     let error: ResponseError?
+
+    struct ResponsePayload: Decodable {
+        let usage: OpenAIResponsesUsage?
+    }
 
     struct ResponseError: Decodable {
         let message: String?
     }
 }
 
+/// Usage block of OpenAI Responses API payloads.
+/// `input_tokens` already includes cached tokens.
+struct OpenAIResponsesUsage: Decodable {
+    let inputTokens: Int?
+    let outputTokens: Int?
+    let totalTokens: Int?
+    let inputTokensDetails: InputTokensDetails?
+    let outputTokensDetails: OutputTokensDetails?
+
+    struct InputTokensDetails: Decodable {
+        let cachedTokens: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case cachedTokens = "cached_tokens"
+        }
+    }
+
+    struct OutputTokensDetails: Decodable {
+        let reasoningTokens: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case reasoningTokens = "reasoning_tokens"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case inputTokens = "input_tokens"
+        case outputTokens = "output_tokens"
+        case totalTokens = "total_tokens"
+        case inputTokensDetails = "input_tokens_details"
+        case outputTokensDetails = "output_tokens_details"
+    }
+
+    var chatUsage: ChatUsage {
+        ChatUsage(
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            totalTokens: totalTokens,
+            cacheReadInputTokens: inputTokensDetails?.cachedTokens,
+            reasoningOutputTokens: outputTokensDetails?.reasoningTokens
+        )
+    }
+}
+
 struct AnthropicResponse: Decodable {
     let content: [ContentItem]
+    let usage: AnthropicUsage?
 
     struct ContentItem: Decodable {
         let type: String?
@@ -1005,8 +1122,14 @@ struct ModelToolCall: Equatable {
 
 struct AnthropicStreamEvent: Decodable {
     let type: String?
+    let message: MessagePayload?
     let delta: Delta?
+    let usage: AnthropicUsage?
     let error: StreamError?
+
+    struct MessagePayload: Decodable {
+        let usage: AnthropicUsage?
+    }
 
     struct Delta: Decodable {
         let type: String?
@@ -1019,8 +1142,42 @@ struct AnthropicStreamEvent: Decodable {
     }
 }
 
+/// Usage block of Anthropic Messages payloads. Anthropic reports
+/// `input_tokens` excluding cache reads/writes, so `chatUsage` folds the
+/// cache counts back into the normalized input total.
+struct AnthropicUsage: Decodable {
+    let inputTokens: Int?
+    let outputTokens: Int?
+    let cacheCreationInputTokens: Int?
+    let cacheReadInputTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case inputTokens = "input_tokens"
+        case outputTokens = "output_tokens"
+        case cacheCreationInputTokens = "cache_creation_input_tokens"
+        case cacheReadInputTokens = "cache_read_input_tokens"
+    }
+
+    var chatUsage: ChatUsage {
+        let hasInputCounts = inputTokens != nil
+            || cacheCreationInputTokens != nil
+            || cacheReadInputTokens != nil
+        let normalizedInputTokens = hasInputCounts
+            ? (inputTokens ?? 0) + (cacheCreationInputTokens ?? 0) + (cacheReadInputTokens ?? 0)
+            : nil
+
+        return ChatUsage(
+            inputTokens: normalizedInputTokens,
+            outputTokens: outputTokens,
+            cacheReadInputTokens: cacheReadInputTokens,
+            cacheWriteInputTokens: cacheCreationInputTokens
+        )
+    }
+}
+
 struct VertexGenerateContentResponse: Decodable {
     let candidates: [Candidate]?
+    let usageMetadata: VertexUsageMetadata?
     let error: VertexError?
 
     struct Candidate: Decodable {
@@ -1044,6 +1201,29 @@ struct VertexGenerateContentResponse: Decodable {
             .flatMap { $0.content?.parts ?? [] }
             .compactMap(\.text)
             .joined() ?? ""
+    }
+}
+
+/// Usage block of Gemini/Vertex responses. `candidatesTokenCount` excludes
+/// thought tokens, so `chatUsage` folds them into the normalized output total.
+struct VertexUsageMetadata: Decodable {
+    let promptTokenCount: Int?
+    let candidatesTokenCount: Int?
+    let totalTokenCount: Int?
+    let thoughtsTokenCount: Int?
+    let cachedContentTokenCount: Int?
+
+    var chatUsage: ChatUsage {
+        let hasOutputCounts = candidatesTokenCount != nil || thoughtsTokenCount != nil
+        return ChatUsage(
+            inputTokens: promptTokenCount,
+            outputTokens: hasOutputCounts
+                ? (candidatesTokenCount ?? 0) + (thoughtsTokenCount ?? 0)
+                : nil,
+            totalTokens: totalTokenCount,
+            cacheReadInputTokens: cachedContentTokenCount,
+            reasoningOutputTokens: thoughtsTokenCount
+        )
     }
 }
 

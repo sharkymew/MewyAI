@@ -1553,6 +1553,7 @@ struct ContentView: View {
                                 streamingContentChannel: isStreamingMessage ? liveAssistantDisplay?.contentChannel : nil,
                                 streamingReasoningChannel: liveReasoningChannel,
                                 markdownRenderCache: markdownRenderCache[message.id],
+                                usageDisplayText: usageFooterText(for: message),
                                 showsActions: activeMessageActionID == message.id,
                                 revisionNavigationState: revisionNavigationState,
                                 onSelect: {
@@ -1953,6 +1954,11 @@ struct ContentView: View {
 
     @ViewBuilder
     private var topModelSelectionMenuItems: some View {
+        if let conversationUsageSummaryText {
+            Section(AppLocalizations.string("chat.usage.conversationSectionTitle", defaultValue: "Usage in this chat")) {
+                Text(conversationUsageSummaryText)
+            }
+        }
         modelChoiceMenuItems
         Divider()
         Button {
@@ -2008,6 +2014,65 @@ struct ContentView: View {
             defaultValue: "Current model: %@",
             arguments: [title]
         ))
+    }
+
+    private func usageFooterText(for message: ChatMessage) -> String? {
+        guard message.role == "assistant",
+              let usage = message.usage,
+              usage.hasTokenCounts else {
+            return nil
+        }
+
+        var parts = [String]()
+        if let tokensText = Self.usageTokensText(for: usage) {
+            parts.append(tokensText)
+        }
+        if let cost = ChatUsagePricing.estimatedCost(for: usage, in: configurations) {
+            parts.append("≈" + ChatUsageFormatting.costText(cost))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static func usageTokensText(for usage: ChatUsage) -> String? {
+        if usage.inputTokens != nil || usage.outputTokens != nil {
+            return AppLocalizations.format(
+                "chat.usage.tokens",
+                defaultValue: "↑ %@ · ↓ %@",
+                arguments: [
+                    ChatUsageFormatting.tokenCountText(usage.inputTokens ?? 0),
+                    ChatUsageFormatting.tokenCountText(usage.outputTokens ?? 0)
+                ]
+            )
+        }
+
+        guard let totalTokens = usage.resolvedTotalTokens else { return nil }
+        return AppLocalizations.format(
+            "chat.usage.totalTokens",
+            defaultValue: "%@ tokens",
+            arguments: [ChatUsageFormatting.tokenCountText(totalTokens)]
+        )
+    }
+
+    private var conversationUsageSummaryText: String? {
+        guard let summary = ConversationUsageSummary.summary(
+            of: messages,
+            configurations: configurations
+        ) else {
+            return nil
+        }
+
+        var text = AppLocalizations.format(
+            "chat.usage.tokens",
+            defaultValue: "↑ %@ · ↓ %@",
+            arguments: [
+                ChatUsageFormatting.tokenCountText(summary.inputTokens),
+                ChatUsageFormatting.tokenCountText(summary.outputTokens)
+            ]
+        )
+        if let costsText = ChatUsageFormatting.costsText(summary.costsByCurrency) {
+            text += " · ≈" + costsText
+        }
+        return text
     }
 
     private var inputOptionsMenu: some View {
@@ -2713,11 +2778,12 @@ struct ContentView: View {
                     in: selectedConversationID
                 )
             },
-            onComplete: { contentText in
+            onComplete: { contentText, usage in
                 completeStreamingResponse(
                     for: assistantMessageID,
                     in: selectedConversationID,
                     contentText: contentText,
+                    usage: usage,
                     configuration: configuration
                 )
             },
@@ -2853,6 +2919,7 @@ struct ContentView: View {
         for assistantMessageID: UUID,
         in conversationID: UUID,
         contentText: String,
+        usage: ChatUsage?,
         configuration: AIConfiguration
     ) {
         guard activeGeneration(for: assistantMessageID, in: conversationID) != nil else { return }
@@ -2869,6 +2936,12 @@ struct ContentView: View {
             for: assistantMessageID,
             in: conversationID
         )
+        attachAssistantUsage(
+            usage,
+            to: assistantMessageID,
+            in: conversationID,
+            configuration: configuration
+        )
 
         if selectedConversationID == conversationID {
             triggerOutputCompletionHapticIfNeeded()
@@ -2883,6 +2956,36 @@ struct ContentView: View {
         )
         persistConversation(conversationID, refreshesUpdatedAt: true)
         generateTitleIfNeeded(for: conversationID, configuration: configuration)
+    }
+
+    private func attachAssistantUsage(
+        _ usage: ChatUsage?,
+        to assistantMessageID: UUID,
+        in conversationID: UUID,
+        configuration: AIConfiguration
+    ) {
+        guard var stampedUsage = usage, stampedUsage.hasTokenCounts else { return }
+        stampedUsage.modelName = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        stampedUsage.configurationID = configuration.id
+
+        if selectedConversationID == conversationID {
+            guard let index = messages.firstIndex(where: { $0.id == assistantMessageID }) else { return }
+            messages[index].usage = stampedUsage
+            return
+        }
+
+        guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }),
+              let messageIndex = conversations[conversationIndex]
+                .messages
+                .firstIndex(where: { $0.id == assistantMessageID }) else {
+            return
+        }
+
+        conversations[conversationIndex].messages[messageIndex].usage = stampedUsage
+        updateActiveMessageRevisionSnapshots(
+            in: conversationIndex,
+            with: conversations[conversationIndex].messages
+        )
     }
 
     private func synchronizeCompletedAssistantContent(
@@ -5209,6 +5312,7 @@ struct MessageBubble: View {
     let streamingContentChannel: StreamingTextUpdateChannel?
     let streamingReasoningChannel: StreamingTextUpdateChannel?
     let markdownRenderCache: MarkdownRenderCacheEntry?
+    let usageDisplayText: String?
     let showsActions: Bool
     let revisionNavigationState: MessageRevisionNavigationState?
     let onSelect: () -> Void
@@ -5401,6 +5505,14 @@ struct MessageBubble: View {
 
             if shouldShowMessageContentBubble {
                 messageContentBubble
+            }
+
+            if !isStreaming, let usageDisplayText {
+                Text(usageDisplayText)
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 6)
             }
 
             if showsActions, !displayContent.isEmpty {

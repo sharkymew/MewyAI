@@ -198,6 +198,7 @@ class AIService {
                 model: model,
                 messages: messages,
                 stream: stream,
+                streamOptions: stream ? .includesUsage : nil,
                 thinking: thinkingConfig(from: reasoningEnabled),
                 reasoningEffort: reasoningEnabled == true ? reasoningEffort : nil,
                 tools: openAITools(from: tools),
@@ -1029,7 +1030,7 @@ class AIService {
         isReasoningDisplayActive: @escaping @MainActor () -> Bool,
         onReasoningToken: @escaping (String) -> Void,
         onContentToken: @escaping (String) -> Void,
-        onComplete: @escaping (_ contentText: String) -> Void,
+        onComplete: @escaping (_ contentText: String, _ usage: ChatUsage?) -> Void,
         onError: @escaping (String) -> Void
     ) {
         cancelStreaming()
@@ -1146,7 +1147,7 @@ class AIService {
             ))
 
             await MainActor.run {
-                onComplete(streamedResponse.content)
+                onComplete(streamedResponse.content, streamedResponse.usage)
             }
 
             streamingTask = nil
@@ -1181,6 +1182,7 @@ class AIService {
 
             var fullReasoningChunks: [String] = []
             var fullContentChunks: [String] = []
+            var collectedUsage: ChatUsage?
             var pendingReasoningCallbackChunks: [String] = []
             var pendingContentCallbackChunks: [String] = []
             var fullContentCharacterCount = 0
@@ -1282,11 +1284,16 @@ class AIService {
                     return nil
                 }
 
+                if let eventUsage = streamResult.usage {
+                    collectedUsage = (collectedUsage ?? ChatUsage()).merging(eventUsage)
+                }
+
                 if streamResult.isDone {
                     await flushTokenCallbacks(force: true)
                     return StreamedResponse(
                         content: fullContentChunks.joined(),
-                        reasoningContent: fullReasoningChunks.joined()
+                        reasoningContent: fullReasoningChunks.joined(),
+                        usage: collectedUsage
                     )
                 }
 
@@ -1331,7 +1338,8 @@ class AIService {
             await flushTokenCallbacks(force: true)
             return StreamedResponse(
                 content: fullContentChunks.joined(),
-                reasoningContent: fullReasoningChunks.joined()
+                reasoningContent: fullReasoningChunks.joined(),
+                usage: collectedUsage
             )
         } catch {
             if Task.isCancelled {
@@ -1375,7 +1383,7 @@ class AIService {
         isReasoningDisplayActive: @escaping @MainActor () -> Bool,
         onReasoningToken: @escaping (String) -> Void,
         onContentToken: @escaping (String) -> Void,
-        onComplete: @escaping (_ contentText: String) -> Void,
+        onComplete: @escaping (_ contentText: String, _ usage: ChatUsage?) -> Void,
         onError: @escaping (String) -> Void
     ) {
         guard apiFormat != .vertexAIExpress else {
@@ -1439,6 +1447,12 @@ class AIService {
             var workingMessages = conversationHistory
             var exchanges = [ChatToolExchange]()
             var executedToolCallCount = 0
+            var accumulatedUsage: ChatUsage?
+
+            func accumulateUsage(_ usage: ChatUsage?) {
+                guard let usage else { return }
+                accumulatedUsage = accumulatedUsage?.adding(usage) ?? usage
+            }
 
             @MainActor
             func completeWithStreamingFinalAnswer() async {
@@ -1491,6 +1505,7 @@ class AIService {
                     return
                 }
 
+                accumulateUsage(streamedResponse.usage)
                 conversationHistory = workingMessages + [ChatRequestMessage(
                     role: "assistant",
                     text: streamedResponse.content,
@@ -1498,7 +1513,7 @@ class AIService {
                     toolCalls: []
                 )]
                 await MainActor.run {
-                    onComplete(streamedResponse.content)
+                    onComplete(streamedResponse.content, accumulatedUsage)
                 }
                 streamingTask = nil
             }
@@ -1569,6 +1584,8 @@ class AIService {
                         return
                     }
 
+                    accumulateUsage(modelResponse.usage)
+
                     if modelResponse.toolCalls.isEmpty {
                         if exchanges.isEmpty {
                             let content = modelResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1586,7 +1603,7 @@ class AIService {
                                 }
                                 onToolExchangesUpdated(exchanges)
                                 onContentToken(content)
-                                onComplete(content)
+                                onComplete(content, accumulatedUsage)
                             }
                             streamingTask = nil
                             return
@@ -1866,21 +1883,21 @@ class AIService {
         let content: String
         let reasoningContent: String
         let toolCalls: [ModelToolCall]
+        let usage: ChatUsage?
     }
 
     private struct StreamedResponse {
         let content: String
         let reasoningContent: String
+        let usage: ChatUsage?
     }
 
     private static func toolModelResponse(from data: Data, apiFormat: AIAPIFormat) -> ToolModelResponse? {
         let decoder = JSONDecoder()
         switch apiFormat {
         case .openAIChatCompletions:
-            guard let message = (try? decoder.decode(OpenAIResponse.self, from: data))?
-                .choices
-                .first?
-                .message else {
+            guard let response = try? decoder.decode(OpenAIResponse.self, from: data),
+                  let message = response.choices.first?.message else {
                 return nil
             }
             let calls = message.toolCalls?.compactMap { call -> ModelToolCall? in
@@ -1897,7 +1914,8 @@ class AIService {
             return ToolModelResponse(
                 content: message.content,
                 reasoningContent: message.reasoningContent ?? "",
-                toolCalls: calls
+                toolCalls: calls,
+                usage: response.usage?.chatUsage
             )
         case .openAIResponses:
             guard let response = try? decoder.decode(OpenAIResponsesResponse.self, from: data) else {
@@ -1906,7 +1924,8 @@ class AIService {
             return ToolModelResponse(
                 content: response.outputText,
                 reasoningContent: "",
-                toolCalls: response.toolCalls
+                toolCalls: response.toolCalls,
+                usage: response.usage?.chatUsage
             )
         case .anthropicMessages:
             guard let response = try? decoder.decode(AnthropicResponse.self, from: data) else {
@@ -1915,7 +1934,8 @@ class AIService {
             return ToolModelResponse(
                 content: response.outputText,
                 reasoningContent: "",
-                toolCalls: response.toolCalls
+                toolCalls: response.toolCalls,
+                usage: response.usage?.chatUsage
             )
         case .vertexAIExpress:
             guard let response = try? decoder.decode(VertexGenerateContentResponse.self, from: data) else {
@@ -1924,7 +1944,8 @@ class AIService {
             return ToolModelResponse(
                 content: response.outputText,
                 reasoningContent: "",
-                toolCalls: []
+                toolCalls: [],
+                usage: response.usageMetadata?.chatUsage
             )
         }
     }

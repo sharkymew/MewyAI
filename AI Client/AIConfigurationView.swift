@@ -556,6 +556,37 @@ struct AIConfigurationView: View {
                     } footer: {
                         Text("空参数不会发送；上下文窗口只作为模型能力信息保存。Anthropic 的 max_tokens 使用 provider 级设置。")
                     }
+
+                    Section {
+                        TextField("输入价格 / 1M tokens（空为不计费）", text: modelOptionalDoubleBinding(
+                            for: model.name,
+                            keyPath: \.inputPricePerMillionTokens,
+                            range: 0...Double.greatestFiniteMagnitude
+                        ))
+                        .keyboardType(.decimalPad)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                        TextField("输出价格 / 1M tokens（空为不计费）", text: modelOptionalDoubleBinding(
+                            for: model.name,
+                            keyPath: \.outputPricePerMillionTokens,
+                            range: 0...Double.greatestFiniteMagnitude
+                        ))
+                        .keyboardType(.decimalPad)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                        Picker("货币", selection: modelPriceCurrencyBinding(for: model.name)) {
+                            ForEach(ChatUsagePricing.supportedCurrencyCodes, id: \.self) { code in
+                                Text("\(code) (\(ChatUsagePricing.currencySymbol(for: code)))")
+                                    .tag(code)
+                            }
+                        }
+                    } header: {
+                        Text("价格")
+                    } footer: {
+                        Text("价格按每百万 tokens 手动维护，仅用于在会话中本地估算费用，不影响请求。")
+                    }
                 } else {
                     Text("未找到模型。")
                         .foregroundStyle(.secondary)
@@ -998,10 +1029,40 @@ struct AIConfigurationView: View {
                 arguments: [maxOutputTokens]
             ))
         }
+        if model.hasPricing {
+            let currencySymbol = ChatUsagePricing.currencySymbol(
+                for: model.priceCurrencyCode ?? ChatUsagePricing.defaultCurrencyCode
+            )
+            parts.append(AppLocalizations.format(
+                "modelParameters.pricing",
+                defaultValue: "Price %@%@/%@%@",
+                arguments: [
+                    currencySymbol,
+                    Self.parameterString(from: model.inputPricePerMillionTokens ?? 0),
+                    currencySymbol,
+                    Self.parameterString(from: model.outputPricePerMillionTokens ?? 0)
+                ]
+            ))
+        }
 
         return parts.isEmpty
             ? AppLocalizations.string("modelParameters.default", defaultValue: "Default")
             : parts.joined(separator: " · ")
+    }
+
+    private func modelPriceCurrencyBinding(for model: String) -> Binding<String> {
+        Binding(
+            get: {
+                selectedConfiguration?.models.first(where: { $0.name == model })?.priceCurrencyCode
+                    ?? ChatUsagePricing.defaultCurrencyCode
+            },
+            set: { newValue in
+                updateSelectedConfiguration { configuration in
+                    guard let index = configuration.models.firstIndex(where: { $0.name == model }) else { return }
+                    configuration.models[index].priceCurrencyCode = newValue
+                }
+            }
+        )
     }
 
     private func modelOptionalDoubleBinding(
@@ -1132,6 +1193,9 @@ struct AIConfigurationView: View {
                     importedModel.topP = existingModel.topP
                     importedModel.contextWindowTokens = existingModel.contextWindowTokens
                     importedModel.maxOutputTokens = existingModel.maxOutputTokens
+                    importedModel.inputPricePerMillionTokens = existingModel.inputPricePerMillionTokens
+                    importedModel.outputPricePerMillionTokens = existingModel.outputPricePerMillionTokens
+                    importedModel.priceCurrencyCode = existingModel.priceCurrencyCode
                     configuration.models[index] = importedModel
                 } else {
                     configuration.models.append(model)

@@ -51,6 +51,7 @@ struct ConversationSidebarView: View {
     @State private var expandedTimeBuckets = Set(ConversationSidebarTimeBucket.allCases)
     @State private var isSuppressingRowActions = false
     @State private var rowActionSuppressionResetTask: Task<Void, Never>?
+    @State private var searchText = ""
 
     let conversations: [AIConversation]
     let selectedConversationID: UUID?
@@ -68,6 +69,8 @@ struct ConversationSidebarView: View {
     private let topControlSize: CGFloat = 44
     private let topControlsTopPadding: CGFloat = 8
     private let topControlsHorizontalPadding: CGFloat = 16
+    private let searchBarHeight: CGFloat = 38
+    private let searchBarTopGap: CGFloat = 10
     private let topFadeBottomPadding: CGFloat = 155
     private let topFadeVerticalOffset: CGFloat = -55
     private let topGlassFadeExclusionInset: CGFloat = 8
@@ -101,7 +104,7 @@ struct ConversationSidebarView: View {
     }
 
     private func topScrollContentPadding(topSafeAreaInset: CGFloat) -> CGFloat {
-        topSafeAreaInset + topControlsTopPadding + topControlSize + 18
+        topSafeAreaInset + topControlsTopPadding + topControlSize + searchBarTopGap + searchBarHeight + 18
     }
 
     @ViewBuilder
@@ -145,21 +148,38 @@ struct ConversationSidebarView: View {
             )
 
             topFloatingControls(topSafeAreaInset: topSafeAreaInset)
+
+            topSearchBar(topSafeAreaInset: topSafeAreaInset)
         }
         .frame(width: sidebarWidth, height: sidebarHeight, alignment: .top)
     }
 
     private func sidebarContent(rowWidth: CGFloat, topPadding: CGFloat) -> some View {
-        let sortedConversations = sortedConversations()
-        let pinnedConversations = sortedConversations.filter(\.isPinned)
+        let queryTerms = ConversationSearchFilter.queryTerms(from: searchText)
+        let isSearching = !queryTerms.isEmpty
+        let visibleConversations = isSearching
+            ? sortedConversations().filter { ConversationSearchFilter.matches($0, queryTerms: queryTerms) }
+            : sortedConversations()
+        let pinnedConversations = visibleConversations.filter(\.isPinned)
         let now = Date()
 
         return ScrollView {
             VStack(spacing: 4) {
+                if isSearching, visibleConversations.isEmpty {
+                    Text(AppLocalizations.string(
+                        "sidebar.search.noResults",
+                        defaultValue: "No matching conversations"
+                    ))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 28)
+                }
+
                 conversationSection(
                     title: AppLocalizations.string("sidebar.section.pinned", defaultValue: "Pinned"),
                     conversations: pinnedConversations,
-                    isExpanded: $isPinnedSectionExpanded,
+                    isExpanded: isSearching ? .constant(true) : $isPinnedSectionExpanded,
                     rowWidth: rowWidth
                 )
 
@@ -168,10 +188,10 @@ struct ConversationSidebarView: View {
                         title: bucket.title,
                         conversations: conversations(
                             in: bucket,
-                            from: sortedConversations,
+                            from: visibleConversations,
                             now: now
                         ),
-                        isExpanded: timeBucketExpansionBinding(for: bucket),
+                        isExpanded: isSearching ? .constant(true) : timeBucketExpansionBinding(for: bucket),
                         rowWidth: rowWidth
                     )
                 }
@@ -179,7 +199,60 @@ struct ConversationSidebarView: View {
             .padding(8)
             .padding(.top, topPadding)
         }
+        .scrollDismissesKeyboard(.immediately)
         .simultaneousGesture(rowActionSuppressionGesture)
+    }
+
+    private func topSearchBar(topSafeAreaInset: CGFloat) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            TextField(
+                AppLocalizations.string("sidebar.search.placeholder", defaultValue: "Search conversations"),
+                text: $searchText
+            )
+            .font(.subheadline)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.search)
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(AppLocalizations.string(
+                    "accessibility.clearConversationSearch",
+                    defaultValue: "Clear conversation search"
+                ))
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: searchBarHeight)
+        .background {
+            if #available(iOS 26.0, *) {
+                Capsule()
+                    .fill(.clear)
+                    .glassEffect(.regular.tint(glassTint), in: Capsule())
+            } else {
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay(Capsule().fill(glassTint))
+                    .overlay(
+                        Capsule()
+                            .stroke(glassHighlight, lineWidth: 1)
+                            .blendMode(.screen)
+                    )
+            }
+        }
+        .padding(.horizontal, topControlsHorizontalPadding)
+        .padding(.top, topSafeAreaInset + topControlsTopPadding + topControlSize + searchBarTopGap)
     }
 
     private func topFade(topSafeAreaInset: CGFloat) -> some View {

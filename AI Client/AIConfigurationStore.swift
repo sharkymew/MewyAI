@@ -279,6 +279,9 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
     var topP: Double?
     var contextWindowTokens: Int?
     var maxOutputTokens: Int?
+    var inputPricePerMillionTokens: Double?
+    var outputPricePerMillionTokens: Double?
+    var priceCurrencyCode: String?
 
     var hasAlias: Bool {
         !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -287,6 +290,10 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
     var displayName: String {
         let trimmedAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedAlias.isEmpty ? name : trimmedAlias
+    }
+
+    nonisolated var hasPricing: Bool {
+        inputPricePerMillionTokens != nil || outputPricePerMillionTokens != nil
     }
 
     init(
@@ -298,7 +305,10 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         temperature: Double? = nil,
         topP: Double? = nil,
         contextWindowTokens: Int? = nil,
-        maxOutputTokens: Int? = nil
+        maxOutputTokens: Int? = nil,
+        inputPricePerMillionTokens: Double? = nil,
+        outputPricePerMillionTokens: Double? = nil,
+        priceCurrencyCode: String? = nil
     ) {
         self.name = name
         self.alias = alias
@@ -309,6 +319,9 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         self.topP = topP
         self.contextWindowTokens = contextWindowTokens
         self.maxOutputTokens = maxOutputTokens
+        self.inputPricePerMillionTokens = inputPricePerMillionTokens
+        self.outputPricePerMillionTokens = outputPricePerMillionTokens
+        self.priceCurrencyCode = priceCurrencyCode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -321,6 +334,9 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         case topP
         case contextWindowTokens
         case maxOutputTokens
+        case inputPricePerMillionTokens
+        case outputPricePerMillionTokens
+        case priceCurrencyCode
     }
 
     init(from decoder: Decoder) throws {
@@ -335,6 +351,9 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         topP = try container.decodeIfPresent(Double.self, forKey: .topP)
         contextWindowTokens = try container.decodeIfPresent(Int.self, forKey: .contextWindowTokens)
         maxOutputTokens = try container.decodeIfPresent(Int.self, forKey: .maxOutputTokens)
+        inputPricePerMillionTokens = try container.decodeIfPresent(Double.self, forKey: .inputPricePerMillionTokens)
+        outputPricePerMillionTokens = try container.decodeIfPresent(Double.self, forKey: .outputPricePerMillionTokens)
+        priceCurrencyCode = try container.decodeIfPresent(String.self, forKey: .priceCurrencyCode)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -348,6 +367,9 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(topP, forKey: .topP)
         try container.encodeIfPresent(contextWindowTokens, forKey: .contextWindowTokens)
         try container.encodeIfPresent(maxOutputTokens, forKey: .maxOutputTokens)
+        try container.encodeIfPresent(inputPricePerMillionTokens, forKey: .inputPricePerMillionTokens)
+        try container.encodeIfPresent(outputPricePerMillionTokens, forKey: .outputPricePerMillionTokens)
+        try container.encodeIfPresent(priceCurrencyCode, forKey: .priceCurrencyCode)
     }
 
     static func defaultToolsSupport(for modelName: String) -> Bool {

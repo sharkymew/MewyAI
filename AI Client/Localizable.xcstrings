@@ -82,6 +82,16 @@
         }
       }
     },
+    "%@ (%@)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ (%2$@)"
+          }
+        }
+      }
+    },
     "%@ is larger than %d MB and was skipped." : {
       "localizations" : {
         "en" : {
@@ -99,6 +109,9 @@
       }
     },
     "%@ is not a readable text or PDF file." : {
+
+    },
+    "%@ tokens" : {
 
     },
     "%@, %d characters" : {
@@ -139,6 +152,16 @@
     "%lld" : {
 
     },
+    "↑ %@ · ↓ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "↑ %1$@ · ↓ %2$@"
+          }
+        }
+      }
+    },
     "<summary>Reasoning</summary>" : {
 
     },
@@ -164,6 +187,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "取消修改"
+          }
+        }
+      }
+    },
+    "accessibility.clearConversationSearch" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear conversation search"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除搜索内容"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除搜尋內容"
           }
         }
       }
@@ -2346,6 +2392,78 @@
         }
       }
     },
+    "chat.usage.conversationSectionTitle" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usage in this chat"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本会话用量"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本對話用量"
+          }
+        }
+      }
+    },
+    "chat.usage.tokens" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "↑ %1$@ · ↓ %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "↑ %1$@ · ↓ %2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "↑ %1$@ · ↓ %2$@"
+          }
+        }
+      }
+    },
+    "chat.usage.totalTokens" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ tokens"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ tokens"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ tokens"
+          }
+        }
+      }
+    },
+    "Clear conversation search" : {
+
+    },
     "clipboard" : {
 
     },
@@ -4235,6 +4353,29 @@
         }
       }
     },
+    "modelParameters.pricing" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Price %1$@%2$@/%3$@%4$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格 %1$@%2$@/%3$@%4$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "價格 %1$@%2$@/%3$@%4$@"
+          }
+        }
+      }
+    },
     "modelParameters.temperature" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4274,6 +4415,9 @@
 
     },
     "No Endpoint configured" : {
+
+    },
+    "No matching conversations" : {
 
     },
     "No model selected" : {
@@ -4335,6 +4479,16 @@
     },
     "Please answer based on the uploaded file content." : {
 
+    },
+    "Price %@%@/%@%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Price %1$@%2$@/%3$@%4$@"
+          }
+        }
+      }
     },
     "Prompt %d" : {
 
@@ -4918,6 +5072,9 @@
     "Save edit" : {
 
     },
+    "Search conversations" : {
+
+    },
     "Select a model first." : {
 
     },
@@ -5064,6 +5221,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "釘選"
+          }
+        }
+      }
+    },
+    "sidebar.search.noResults" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No matching conversations"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的对话"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有相符的對話"
+          }
+        }
+      }
+    },
+    "sidebar.search.placeholder" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search conversations"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索对话"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋對話"
           }
         }
       }
@@ -5857,6 +6060,9 @@
     "Upload Image" : {
 
     },
+    "Usage in this chat" : {
+
+    },
     "User" : {
 
     },
@@ -6112,6 +6318,12 @@
           }
         }
       }
+    },
+    "价格" : {
+
+    },
+    "价格按每百万 tokens 手动维护，仅用于在会话中本地估算费用，不影响请求。" : {
+
     },
     "伪装为 Claude Code" : {
       "localizations" : {
@@ -8014,6 +8226,12 @@
         }
       }
     },
+    "货币" : {
+
+    },
+    "输入价格 / 1M tokens（空为不计费）" : {
+
+    },
     "输入模型别名（可选）" : {
       "localizations" : {
         "en" : {
@@ -8035,6 +8253,9 @@
           }
         }
       }
+    },
+    "输出价格 / 1M tokens（空为不计费）" : {
+
     },
     "输出要求" : {
       "localizations" : {

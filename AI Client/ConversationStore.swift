@@ -199,6 +199,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var reasoningContent: String = ""
     var reasoningChunks: [String] = []
     var toolExchanges: [ChatToolExchange] = []
+    var usage: ChatUsage?
     var isReasoningExpanded: Bool = false
     var isStopped: Bool = false
 
@@ -213,6 +214,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         reasoningContent: String = "",
         reasoningChunks: [String] = [],
         toolExchanges: [ChatToolExchange] = [],
+        usage: ChatUsage? = nil,
         isReasoningExpanded: Bool = false,
         isStopped: Bool = false
     ) {
@@ -226,6 +228,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         self.reasoningContent = reasoningContent
         self.reasoningChunks = reasoningChunks
         self.toolExchanges = toolExchanges
+        self.usage = usage
         self.isReasoningExpanded = isReasoningExpanded
         self.isStopped = isStopped
     }
@@ -242,6 +245,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent) ?? ""
         reasoningChunks = try container.decodeIfPresent([String].self, forKey: .reasoningChunks) ?? []
         toolExchanges = try container.decodeIfPresent([ChatToolExchange].self, forKey: .toolExchanges) ?? []
+        usage = try container.decodeIfPresent(ChatUsage.self, forKey: .usage)
         isReasoningExpanded = try container.decodeIfPresent(Bool.self, forKey: .isReasoningExpanded) ?? false
         isStopped = try container.decodeIfPresent(Bool.self, forKey: .isStopped) ?? false
     }
