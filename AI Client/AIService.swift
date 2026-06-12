@@ -1255,6 +1255,7 @@ class AIService {
         agentTools: [AgentToolDefinition] = [],
         toolExecutor: ((AgentToolCallRequest) async -> AgentToolCallResult)? = nil,
         onToolExchangesUpdated: @escaping ([ChatToolExchange]) -> Void = { _ in },
+        onToolRoundReset: @escaping () -> Void = {},
         isReasoningDisplayActive: @escaping @MainActor () -> Bool,
         onReasoningToken: @escaping (String) -> Void,
         onContentToken: @escaping (String) -> Void,
@@ -1283,6 +1284,7 @@ class AIService {
                 agentTools: agentTools,
                 toolExecutor: toolExecutor,
                 onToolExchangesUpdated: onToolExchangesUpdated,
+                onToolRoundReset: onToolRoundReset,
                 isReasoningDisplayActive: isReasoningDisplayActive,
                 onReasoningToken: onReasoningToken,
                 onContentToken: onContentToken,
@@ -1411,6 +1413,12 @@ class AIService {
             var fullReasoningChunks: [String] = []
             var fullContentChunks: [String] = []
             var collectedUsage: ChatUsage?
+            var toolCallFragmentsByIndex: [Int: [AIServiceStreamToolCallFragment]] = [:]
+            var completedToolCalls: [ModelToolCall]?
+
+            func collectedToolCalls() -> [ModelToolCall] {
+                completedToolCalls ?? AIServiceStreamParser.assembledToolCalls(from: toolCallFragmentsByIndex)
+            }
             var pendingReasoningCallbackChunks: [String] = []
             var pendingContentCallbackChunks: [String] = []
             var fullContentCharacterCount = 0
@@ -1516,12 +1524,20 @@ class AIService {
                     collectedUsage = (collectedUsage ?? ChatUsage()).merging(eventUsage)
                 }
 
+                for fragment in streamResult.toolCallFragments {
+                    toolCallFragmentsByIndex[fragment.index, default: []].append(fragment)
+                }
+                if let eventToolCalls = streamResult.completedToolCalls, !eventToolCalls.isEmpty {
+                    completedToolCalls = eventToolCalls
+                }
+
                 if streamResult.isDone {
                     await flushTokenCallbacks(force: true)
                     return StreamedResponse(
                         content: fullContentChunks.joined(),
                         reasoningContent: fullReasoningChunks.joined(),
-                        usage: collectedUsage
+                        usage: collectedUsage,
+                        toolCalls: collectedToolCalls()
                     )
                 }
 
@@ -1567,7 +1583,8 @@ class AIService {
             return StreamedResponse(
                 content: fullContentChunks.joined(),
                 reasoningContent: fullReasoningChunks.joined(),
-                usage: collectedUsage
+                usage: collectedUsage,
+                toolCalls: collectedToolCalls()
             )
         } catch {
             if Task.isCancelled {
@@ -1608,6 +1625,7 @@ class AIService {
         agentTools: [AgentToolDefinition],
         toolExecutor: @escaping (AgentToolCallRequest) async -> AgentToolCallResult,
         onToolExchangesUpdated: @escaping ([ChatToolExchange]) -> Void,
+        onToolRoundReset: @escaping () -> Void,
         isReasoningDisplayActive: @escaping @MainActor () -> Bool,
         onReasoningToken: @escaping (String) -> Void,
         onContentToken: @escaping (String) -> Void,
@@ -1622,17 +1640,8 @@ class AIService {
             return
         }
 
-        let toolURL: URL
         let streamURL: URL
         do {
-            toolURL = try requestURL(
-                from: baseURL,
-                apiFormat: apiFormat,
-                model: model,
-                apiKey: apiKey,
-                isStreaming: false,
-                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
-            )
             streamURL = try requestURL(
                 from: baseURL,
                 apiFormat: apiFormat,
@@ -1755,7 +1764,7 @@ class AIService {
                         apiFormat: apiFormat,
                         model: model,
                         messages: workingMessages,
-                        stream: false,
+                        stream: true,
                         reasoningEnabled: reasoningEnabled,
                         reasoningEffort: reasoningEffort,
                         modelParameters: modelParameters,
@@ -1772,177 +1781,150 @@ class AIService {
                 }
 
                 var request = makeRequest(
-                    url: toolURL,
+                    url: streamURL,
                     apiFormat: apiFormat,
                     model: model,
                     apiKey: apiKey,
                     customHeaders: customHeaders,
-                    acceptsEventStream: false,
+                    acceptsEventStream: true,
                     anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
                 )
                 request.httpBody = jsonData
 
-                do {
-                    let (data, response) = try await boundedResponseData(for: request)
-                    let statusCode = (response as? HTTPURLResponse)?.statusCode
-                    let responseText = Self.responseText(from: data, redacting: redactionValues)
+                // Tool rounds stream like plain responses: content and
+                // reasoning reach the UI live while tool-call fragments
+                // accumulate. A round without tool calls IS the final answer.
+                guard let modelResponse = await streamResponse(
+                    request: request,
+                    apiFormat: apiFormat,
+                    redactionValues: redactionValues,
+                    isReasoningDisplayActive: isReasoningDisplayActive,
+                    onReasoningToken: onReasoningToken,
+                    onContentToken: onContentToken,
+                    onError: onError
+                ) else {
+                    streamingTask = nil
+                    return
+                }
 
-                    guard let statusCode, (200...299).contains(statusCode) else {
+                accumulateUsage(modelResponse.usage)
+
+                if modelResponse.toolCalls.isEmpty {
+                    var content = modelResponse.content
+                    if exchanges.isEmpty,
+                       content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        content = AppLocalizations.string("chat.emptyAssistantReply", defaultValue: "No reply")
+                        let placeholderContent = content
                         await MainActor.run {
-                            onError(Self.errorMessage(
-                                statusCode: statusCode,
-                                body: responseText,
-                                request: request,
-                                redacting: redactionValues
-                            ))
+                            onContentToken(placeholderContent)
                         }
-                        streamingTask = nil
-                        return
                     }
 
-                    guard let modelResponse = Self.toolModelResponse(from: data, apiFormat: apiFormat) else {
-                        await MainActor.run {
-                            onError(AppLocalizations.format(
-                                "aiService.tools.decodingFailed",
-                                defaultValue: "Failed to parse tool call response\n\n%@",
-                                arguments: [responseText]
-                            ))
-                        }
-                        streamingTask = nil
-                        return
-                    }
-
-                    accumulateUsage(modelResponse.usage)
-
-                    if modelResponse.toolCalls.isEmpty {
-                        if exchanges.isEmpty {
-                            let content = modelResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                ? AppLocalizations.string("chat.emptyAssistantReply", defaultValue: "No reply")
-                                : modelResponse.content
-                            conversationHistory = workingMessages + [ChatRequestMessage(
-                                role: "assistant",
-                                text: content,
-                                reasoningContent: preservesReasoningContext ? modelResponse.reasoningContent : "",
-                                toolCalls: []
-                            )]
-                            await MainActor.run {
-                                if !modelResponse.reasoningContent.isEmpty {
-                                    onReasoningToken(modelResponse.reasoningContent)
-                                }
-                                onToolExchangesUpdated(exchanges)
-                                onContentToken(content)
-                                onComplete(content, accumulatedUsage)
-                            }
-                            streamingTask = nil
-                            return
-                        }
-
-                        await completeWithStreamingFinalAnswer()
-                        return
-                    }
-
-                    executedToolCallCount += modelResponse.toolCalls.count
-                    if executedToolCallCount > AgentTooling.maxToolCalls {
-                        await completeWithStreamingFinalAnswer()
-                        return
-                    }
-
-                    let chatToolCalls = modelResponse.toolCalls.map { call -> ChatToolCall in
-                        let tool = toolsByName[call.name]
-                        return ChatToolCall(
-                            id: call.id,
-                            name: call.name,
-                            displayName: tool?.displayName ?? call.name,
-                            argumentsJSON: call.argumentsJSON,
-                            mcpServerID: tool?.mcpServerID,
-                            mcpServerName: tool?.mcpServerName ?? "",
-                            mcpToolName: tool?.mcpToolName ?? call.name
-                        )
-                    }
-
-                    workingMessages.append(ChatRequestMessage(
+                    conversationHistory = workingMessages + [ChatRequestMessage(
                         role: "assistant",
-                        text: modelResponse.content,
+                        text: content,
                         reasoningContent: preservesReasoningContext ? modelResponse.reasoningContent : "",
-                        toolCalls: chatToolCalls
-                    ))
+                        toolCalls: []
+                    )]
+                    let finalContent = content
+                    await MainActor.run {
+                        onToolExchangesUpdated(exchanges)
+                        onComplete(finalContent, accumulatedUsage)
+                    }
+                    streamingTask = nil
+                    return
+                }
 
-                    var exchange = ChatToolExchange(
-                        assistantContent: modelResponse.content,
-                        reasoningContent: modelResponse.reasoningContent,
-                        toolCalls: chatToolCalls,
-                        toolResults: []
+                executedToolCallCount += modelResponse.toolCalls.count
+                if executedToolCallCount > AgentTooling.maxToolCalls {
+                    await MainActor.run {
+                        onToolRoundReset()
+                    }
+                    await completeWithStreamingFinalAnswer()
+                    return
+                }
+
+                let chatToolCalls = modelResponse.toolCalls.map { call -> ChatToolCall in
+                    let tool = toolsByName[call.name]
+                    return ChatToolCall(
+                        id: call.id,
+                        name: call.name,
+                        displayName: tool?.displayName ?? call.name,
+                        argumentsJSON: call.argumentsJSON,
+                        mcpServerID: tool?.mcpServerID,
+                        mcpServerName: tool?.mcpServerName ?? "",
+                        mcpToolName: tool?.mcpToolName ?? call.name
                     )
+                }
 
-                    for call in modelResponse.toolCalls {
-                        guard let tool = toolsByName[call.name] else {
-                            let result = ChatToolResult(
-                                toolCallID: call.id,
-                                name: call.name,
-                                content: AppLocalizations.format(
-                                    "aiService.tools.unknownToolRequested",
-                                    defaultValue: "The model requested an unknown tool: %@",
-                                    arguments: [call.name]
-                                ),
-                                isError: true
-                            )
-                            exchange.toolResults.append(result)
-                            workingMessages.append(ChatRequestMessage(
-                                toolCallID: call.id,
-                                name: call.name,
-                                content: result.content
-                            ))
-                            continue
-                        }
+                workingMessages.append(ChatRequestMessage(
+                    role: "assistant",
+                    text: modelResponse.content,
+                    reasoningContent: preservesReasoningContext ? modelResponse.reasoningContent : "",
+                    toolCalls: chatToolCalls
+                ))
 
-                        let result = await toolExecutor(AgentToolCallRequest(
-                            id: call.id,
-                            functionName: call.name,
-                            argumentsJSON: call.argumentsJSON,
-                            tool: tool
-                        ))
-                        let limitedContent = String(result.content.prefix(AgentTooling.maxToolResultCharacters))
-                        let chatResult = ChatToolResult(
+                var exchange = ChatToolExchange(
+                    assistantContent: modelResponse.content,
+                    reasoningContent: modelResponse.reasoningContent,
+                    toolCalls: chatToolCalls,
+                    toolResults: []
+                )
+
+                // The streamed prefix now belongs to this exchange; clear the
+                // live message display and show it inside the exchange instead.
+                let pendingExchanges = exchanges + [exchange]
+                await MainActor.run {
+                    onToolRoundReset()
+                    onToolExchangesUpdated(pendingExchanges)
+                }
+
+                for call in modelResponse.toolCalls {
+                    guard let tool = toolsByName[call.name] else {
+                        let result = ChatToolResult(
                             toolCallID: call.id,
                             name: call.name,
-                            content: limitedContent,
-                            isError: result.isError
+                            content: AppLocalizations.format(
+                                "aiService.tools.unknownToolRequested",
+                                defaultValue: "The model requested an unknown tool: %@",
+                                arguments: [call.name]
+                            ),
+                            isError: true
                         )
-                        exchange.toolResults.append(chatResult)
+                        exchange.toolResults.append(result)
                         workingMessages.append(ChatRequestMessage(
                             toolCallID: call.id,
                             name: call.name,
-                            content: limitedContent
+                            content: result.content
                         ))
+                        continue
                     }
 
-                    exchanges.append(exchange)
-                    await MainActor.run {
-                        onToolExchangesUpdated(exchanges)
-                    }
-                } catch BoundedResponseDataError.responseTooLarge {
-                    await MainActor.run {
-                        onError(AppLocalizations.string(
-                            "aiService.error.responseTooLarge",
-                            defaultValue: "The response is too large and was rejected."
-                        ))
-                    }
-                    streamingTask = nil
-                    return
-                } catch {
-                    await MainActor.run {
-                        let sanitizedMessage = Self.sanitizedErrorBody(
-                            error.localizedDescription,
-                            redacting: redactionValues
-                        )
-                        onError(AppLocalizations.format(
-                            "aiService.tools.requestFailed",
-                            defaultValue: "Tool call request failed: %@",
-                            arguments: [sanitizedMessage]
-                        ))
-                    }
-                    streamingTask = nil
-                    return
+                    let result = await toolExecutor(AgentToolCallRequest(
+                        id: call.id,
+                        functionName: call.name,
+                        argumentsJSON: call.argumentsJSON,
+                        tool: tool
+                    ))
+                    let limitedContent = String(result.content.prefix(AgentTooling.maxToolResultCharacters))
+                    let chatResult = ChatToolResult(
+                        toolCallID: call.id,
+                        name: call.name,
+                        content: limitedContent,
+                        isError: result.isError
+                    )
+                    exchange.toolResults.append(chatResult)
+                    workingMessages.append(ChatRequestMessage(
+                        toolCallID: call.id,
+                        name: call.name,
+                        content: limitedContent
+                    ))
+                }
+
+                exchanges.append(exchange)
+                let publishedExchanges = exchanges
+                await MainActor.run {
+                    onToolExchangesUpdated(publishedExchanges)
                 }
             }
 
@@ -2107,74 +2089,22 @@ class AIService {
         }
     }
 
-    private struct ToolModelResponse {
-        let content: String
-        let reasoningContent: String
-        let toolCalls: [ModelToolCall]
-        let usage: ChatUsage?
-    }
-
     private struct StreamedResponse {
         let content: String
         let reasoningContent: String
         let usage: ChatUsage?
-    }
+        let toolCalls: [ModelToolCall]
 
-    private static func toolModelResponse(from data: Data, apiFormat: AIAPIFormat) -> ToolModelResponse? {
-        let decoder = JSONDecoder()
-        switch apiFormat {
-        case .openAIChatCompletions:
-            guard let response = try? decoder.decode(OpenAIResponse.self, from: data),
-                  let message = response.choices.first?.message else {
-                return nil
-            }
-            let calls = message.toolCalls?.compactMap { call -> ModelToolCall? in
-                guard let id = call.id,
-                      let name = call.function?.name else {
-                    return nil
-                }
-                return ModelToolCall(
-                    id: id,
-                    name: name,
-                    argumentsJSON: call.function?.arguments ?? "{}"
-                )
-            } ?? []
-            return ToolModelResponse(
-                content: message.content,
-                reasoningContent: message.reasoningContent ?? "",
-                toolCalls: calls,
-                usage: response.usage?.chatUsage
-            )
-        case .openAIResponses:
-            guard let response = try? decoder.decode(OpenAIResponsesResponse.self, from: data) else {
-                return nil
-            }
-            return ToolModelResponse(
-                content: response.outputText,
-                reasoningContent: "",
-                toolCalls: response.toolCalls,
-                usage: response.usage?.chatUsage
-            )
-        case .anthropicMessages:
-            guard let response = try? decoder.decode(AnthropicResponse.self, from: data) else {
-                return nil
-            }
-            return ToolModelResponse(
-                content: response.outputText,
-                reasoningContent: "",
-                toolCalls: response.toolCalls,
-                usage: response.usage?.chatUsage
-            )
-        case .vertexAIExpress:
-            guard let response = try? decoder.decode(VertexGenerateContentResponse.self, from: data) else {
-                return nil
-            }
-            return ToolModelResponse(
-                content: response.outputText,
-                reasoningContent: "",
-                toolCalls: [],
-                usage: response.usageMetadata?.chatUsage
-            )
+        init(
+            content: String,
+            reasoningContent: String,
+            usage: ChatUsage?,
+            toolCalls: [ModelToolCall] = []
+        ) {
+            self.content = content
+            self.reasoningContent = reasoningContent
+            self.usage = usage
+            self.toolCalls = toolCalls
         }
     }
 

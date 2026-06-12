@@ -678,6 +678,8 @@ struct ContentView: View {
     private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
     @AppStorage(ChatMemoryStore.memoryEnabledKey)
     private var isGlobalMemoryEnabled = ChatMemoryStore.defaultMemoryEnabled
+    @AppStorage(ChatMemoryStore.historyRecallEnabledKey)
+    private var isHistoryRecallEnabled = ChatMemoryStore.defaultHistoryRecallEnabled
     @State private var memoryExtractionConversationIDs = Set<UUID>()
     @StateObject private var inputDraft = ChatInputDraft()
     @State private var messages: [ChatMessage] = []
@@ -2407,7 +2409,26 @@ struct ContentView: View {
         return filteredTools
     }
 
-    private func executeAgentTool(_ request: AgentToolCallRequest) async -> AgentToolCallResult {
+    private func executeAgentTool(
+        _ request: AgentToolCallRequest,
+        in conversationID: UUID?
+    ) async -> AgentToolCallResult {
+        if ConversationRecallTool.isRecallTool(request.tool) {
+            var excludedConversationIDs = Set<UUID>()
+            if let conversationID {
+                excludedConversationIDs.insert(conversationID)
+            }
+            if let privateConversationID {
+                excludedConversationIDs.insert(privateConversationID)
+            }
+            return ConversationRecallTool.execute(
+                functionName: request.functionName,
+                argumentsJSON: request.argumentsJSON,
+                conversations: conversations,
+                excludedConversationIDs: excludedConversationIDs
+            )
+        }
+
         if request.tool.requiresApproval {
             let isAllowed = await requestToolApproval(
                 toolName: request.tool.displayName,
@@ -2609,7 +2630,28 @@ struct ContentView: View {
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
         let usesImageAttachments = configuration.selectedModelSupportsImages
         let usesAgentTools = !activeMCPServers.isEmpty
-        let agentTools = usesAgentTools ? activeAgentToolDefinitions() : []
+        let mcpTools = usesAgentTools ? activeAgentToolDefinitions() : []
+        let usesHistoryRecall = isHistoryRecallEnabled
+            && !isPrivateConversationSelected
+            && configuration.selectedModelSupportsTools
+            && apiFormat != .vertexAIExpress
+        let recallTools = usesHistoryRecall
+            ? ConversationRecallTool.definitions(excludingFunctionNames: Set(mcpTools.map(\.functionName)))
+            : []
+        let agentTools = mcpTools + recallTools
+        var recallExcludedConversationIDs = Set<UUID>()
+        if let selectedConversationID {
+            recallExcludedConversationIDs.insert(selectedConversationID)
+        }
+        if let privateConversationID {
+            recallExcludedConversationIDs.insert(privateConversationID)
+        }
+        let recallPromptAppendix = recallTools.isEmpty
+            ? ""
+            : ConversationRecallTool.promptAppendix(
+                conversations: conversations,
+                excludedConversationIDs: recallExcludedConversationIDs
+            )
         let usesGlobalMemory = isGlobalMemoryEnabled && !isPrivateConversationSelected
         let memoryPromptAppendix = usesGlobalMemory
             ? ChatMemoryStore.promptAppendix(for: ChatMemoryStore.loadEntries())
@@ -2617,6 +2659,7 @@ struct ContentView: View {
         let effectiveSystemPrompt = configuration.systemPrompt
             + AgentTooling.promptAppendix(for: activeSkills)
             + memoryPromptAppendix
+            + recallPromptAppendix
         let generatesImageContextDescriptions = configuration.generatesImageContextDescriptions
         let preservesReasoningContext = AIService.usesDeepSeekReasoningContext(
             apiFormat: apiFormat,
@@ -2642,7 +2685,7 @@ struct ContentView: View {
             return false
         }
 
-        guard !usesAgentTools || !agentTools.isEmpty else {
+        guard !usesAgentTools || !mcpTools.isEmpty else {
             appendAssistantError(AppLocalizations.string(
                 "chat.error.noMCPTools",
                 defaultValue: "The enabled MCP servers have no available tools. Refresh the tool list in settings or check allowed tool names."
@@ -2763,11 +2806,17 @@ struct ContentView: View {
             usesImageAttachments: usesImageAttachments,
             agentTools: agentTools,
             toolExecutor: { request in
-                await executeAgentTool(request)
+                await executeAgentTool(request, in: selectedConversationID)
             },
             onToolExchangesUpdated: { exchanges in
                 updateToolExchanges(
                     exchanges,
+                    for: assistantMessageID,
+                    in: selectedConversationID
+                )
+            },
+            onToolRoundReset: {
+                resetStreamingRoundDisplay(
                     for: assistantMessageID,
                     in: selectedConversationID
                 )
@@ -2881,6 +2930,49 @@ struct ContentView: View {
             with: conversations[conversationIndex].messages
         )
         saveConversationsPreservingSelectedConversation()
+    }
+
+    /// Clears the streamed content/reasoning of an in-flight assistant message
+    /// after a tool round: the streamed text moves into the tool exchange, so
+    /// the live message display must start over for the next round.
+    private func resetStreamingRoundDisplay(
+        for assistantMessageID: UUID,
+        in conversationID: UUID
+    ) {
+        guard let generation = activeGeneration(for: assistantMessageID, in: conversationID) else { return }
+
+        cancelScheduledFlush(for: conversationID)
+        generation.tokenBuffer.clearPendingTokens()
+        generation.hasContent = false
+        generation.hasReasoning = false
+
+        if selectedConversationID == conversationID {
+            if let index = messages.firstIndex(where: { $0.id == assistantMessageID }) {
+                messages[index].content = ""
+                messages[index].contentChunks = []
+                messages[index].reasoningContent = ""
+                messages[index].reasoningChunks = []
+            }
+            if activeAssistantMessageID == assistantMessageID {
+                activeAssistantHasContent = false
+                activeAssistantHasReasoning = false
+                activeAssistantDidCollapseReasoningAfterThinking = false
+            }
+            resetLiveContentDisplay(for: assistantMessageID)
+            clearLiveReasoningDisplay(for: assistantMessageID)
+            invalidateMarkdownCache(for: assistantMessageID)
+            return
+        }
+
+        guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }),
+              let messageIndex = conversations[conversationIndex].messages.firstIndex(where: { $0.id == assistantMessageID }) else {
+            return
+        }
+
+        conversations[conversationIndex].messages[messageIndex].content = ""
+        conversations[conversationIndex].messages[messageIndex].contentChunks = []
+        conversations[conversationIndex].messages[messageIndex].reasoningContent = ""
+        conversations[conversationIndex].messages[messageIndex].reasoningChunks = []
     }
 
     private func handleReasoningToken(

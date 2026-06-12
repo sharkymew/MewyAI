@@ -54,6 +54,8 @@ nonisolated struct ChatMemoryOperation: Equatable {
 enum ChatMemoryStore {
     static let memoryEnabledKey = "globalMemoryEnabled"
     static let defaultMemoryEnabled = true
+    static let historyRecallEnabledKey = "chatHistoryRecallEnabled"
+    static let defaultHistoryRecallEnabled = true
     nonisolated static let maxEntryCount = 200
     nonisolated static let maxEntryCharacters = 400
     nonisolated static let maxExchangeCharacters = 4_000

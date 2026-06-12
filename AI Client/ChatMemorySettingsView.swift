@@ -4,6 +4,8 @@ struct ChatMemorySettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage(ChatMemoryStore.memoryEnabledKey)
     private var isGlobalMemoryEnabled = ChatMemoryStore.defaultMemoryEnabled
+    @AppStorage(ChatMemoryStore.historyRecallEnabledKey)
+    private var isHistoryRecallEnabled = ChatMemoryStore.defaultHistoryRecallEnabled
     @State private var entries = ChatMemoryStore.loadEntries()
     @State private var isClearConfirmationPresented = false
 
@@ -47,8 +49,9 @@ struct ChatMemorySettingsView: View {
     private var toggleSection: some View {
         Section {
             Toggle("启用全局记忆", isOn: $isGlobalMemoryEnabled)
+            Toggle("参考历史对话", isOn: $isHistoryRecallEnabled)
         } footer: {
-            Text("开启后，每次对话完成都会用当前模型在后台提取值得长期记住的信息，并注入到之后的所有对话中（不分配置和模型）。临时聊天不会读取或写入记忆。")
+            Text("全局记忆：每次对话完成后用当前模型在后台提取值得长期记住的信息，注入到之后的所有对话（不分配置和模型）。\n参考历史对话：为支持工具调用的模型提供搜索和查阅全部历史对话的工具，模型在需要时自行调用，不需要先保存记忆；Vertex Express 与不支持工具的模型自动不启用。\n临时聊天不参与两者，也不会被检索到。")
         }
     }
 

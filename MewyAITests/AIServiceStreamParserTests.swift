@@ -94,4 +94,69 @@ final class AIServiceStreamParserTests: XCTestCase {
         XCTAssertEqual(result?.usage?.outputTokens, 11)
         XCTAssertEqual(result?.usage?.totalTokens, 20)
     }
+
+    func testParsesOpenAIChatToolCallFragments() {
+        let firstJSON = #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"chat_history_search","arguments":""}}]}}]}"#
+        let deltaJSON = #"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"query\":\"swift\"}"}}]}}]}"#
+
+        let firstResult = AIServiceStreamParser.parseResult(from: firstJSON, apiFormat: .openAIChatCompletions)
+        let deltaResult = AIServiceStreamParser.parseResult(from: deltaJSON, apiFormat: .openAIChatCompletions)
+
+        XCTAssertEqual(firstResult?.toolCallFragments, [
+            AIServiceStreamToolCallFragment(index: 0, id: "call_1", name: "chat_history_search", argumentsDelta: "")
+        ])
+        XCTAssertEqual(deltaResult?.toolCallFragments, [
+            AIServiceStreamToolCallFragment(index: 0, id: nil, name: nil, argumentsDelta: #"{"query":"swift"}"#)
+        ])
+    }
+
+    func testParsesAnthropicToolUseFragments() {
+        let startJSON = #"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"chat_history_read"}}"#
+        let deltaJSON = #"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"conversation_id\""}}"#
+        let textStartJSON = #"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#
+
+        let startResult = AIServiceStreamParser.parseResult(from: startJSON, apiFormat: .anthropicMessages)
+        let deltaResult = AIServiceStreamParser.parseResult(from: deltaJSON, apiFormat: .anthropicMessages)
+        let textStartResult = AIServiceStreamParser.parseResult(from: textStartJSON, apiFormat: .anthropicMessages)
+
+        XCTAssertEqual(startResult?.toolCallFragments, [
+            AIServiceStreamToolCallFragment(index: 1, id: "toolu_1", name: "chat_history_read", argumentsDelta: nil)
+        ])
+        XCTAssertEqual(deltaResult?.toolCallFragments, [
+            AIServiceStreamToolCallFragment(index: 1, id: nil, name: nil, argumentsDelta: #"{"conversation_id""#)
+        ])
+        XCTAssertEqual(textStartResult?.toolCallFragments, [])
+    }
+
+    func testParsesOpenAIResponsesCompletedToolCalls() {
+        let json = #"{"type":"response.completed","response":{"output":[{"type":"function_call","call_id":"call_9","name":"chat_history_search","arguments":"{\"query\":\"memory\"}"},{"type":"message","content":[{"type":"output_text","text":"hi"}]}],"usage":{"input_tokens":5,"output_tokens":6,"total_tokens":11}}}"#
+
+        let result = AIServiceStreamParser.parseResult(from: json, apiFormat: .openAIResponses)
+
+        XCTAssertEqual(result?.isDone, true)
+        XCTAssertEqual(result?.completedToolCalls, [
+            ModelToolCall(id: "call_9", name: "chat_history_search", argumentsJSON: #"{"query":"memory"}"#)
+        ])
+    }
+
+    func testAssemblesToolCallsFromFragmentsInIndexOrder() {
+        let assembled = AIServiceStreamParser.assembledToolCalls(from: [
+            1: [
+                AIServiceStreamToolCallFragment(index: 1, id: "call_b", name: "tool_b", argumentsDelta: nil),
+                AIServiceStreamToolCallFragment(index: 1, id: nil, name: nil, argumentsDelta: "{\"a\""),
+                AIServiceStreamToolCallFragment(index: 1, id: nil, name: nil, argumentsDelta: ":1}")
+            ],
+            0: [
+                AIServiceStreamToolCallFragment(index: 0, id: "call_a", name: "tool_a", argumentsDelta: "")
+            ],
+            2: [
+                AIServiceStreamToolCallFragment(index: 2, id: nil, name: nil, argumentsDelta: "{}")
+            ]
+        ])
+
+        XCTAssertEqual(assembled, [
+            ModelToolCall(id: "call_a", name: "tool_a", argumentsJSON: "{}"),
+            ModelToolCall(id: "call_b", name: "tool_b", argumentsJSON: #"{"a":1}"#)
+        ])
+    }
 }

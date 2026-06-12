@@ -25,6 +25,8 @@ struct AIConfigurationView: View {
     private var isHapticFeedbackEnabled = AIConfigurationStore.defaultHapticFeedbackEnabled
     @AppStorage(ChatMemoryStore.memoryEnabledKey)
     private var isGlobalMemoryEnabled = ChatMemoryStore.defaultMemoryEnabled
+    @AppStorage(ChatMemoryStore.historyRecallEnabledKey)
+    private var isHistoryRecallEnabled = ChatMemoryStore.defaultHistoryRecallEnabled
     @FocusState private var focusedField: ConfigurationField?
     
     private let aiService = AIService()
@@ -346,6 +348,7 @@ struct AIConfigurationView: View {
     private var memorySection: some View {
         Section {
             Toggle("全局记忆", isOn: $isGlobalMemoryEnabled)
+            Toggle("参考历史对话", isOn: $isHistoryRecallEnabled)
 
             Button {
                 hideKeyboard()
@@ -356,7 +359,7 @@ struct AIConfigurationView: View {
         } header: {
             Text("记忆")
         } footer: {
-            Text("开启后，每次对话完成会用当前模型在后台提取值得长期记住的信息，并注入到之后的所有对话中（不分配置和模型）。临时聊天不会读取或写入记忆。")
+            Text("全局记忆：每次对话完成后用当前模型在后台提取值得长期记住的信息，注入到之后的所有对话。参考历史对话：让支持工具调用的模型在需要时直接搜索和查阅全部历史对话，无需先保存记忆。临时聊天不参与两者。")
         }
     }
 

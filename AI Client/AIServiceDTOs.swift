@@ -960,10 +960,26 @@ struct StreamChoice: Codable {
 struct StreamDelta: Codable {
     let reasoningContent: String?
     let content: String?
+    let toolCalls: [StreamToolCallFragment]?
 
     enum CodingKeys: String, CodingKey {
         case reasoningContent = "reasoning_content"
         case content
+        case toolCalls = "tool_calls"
+    }
+}
+
+/// One incremental piece of a streamed OpenAI chat tool call. The first
+/// fragment of a call carries `id` and `function.name`; later fragments append
+/// to `function.arguments`. Fragments belonging to the same call share `index`.
+struct StreamToolCallFragment: Codable {
+    let index: Int?
+    let id: String?
+    let function: FunctionFragment?
+
+    struct FunctionFragment: Codable {
+        let name: String?
+        let arguments: String?
     }
 }
 
@@ -1026,10 +1042,27 @@ struct OpenAIResponsesStreamEvent: Decodable {
 
     struct ResponsePayload: Decodable {
         let usage: OpenAIResponsesUsage?
+        let output: [OpenAIResponsesResponse.OutputItem]?
     }
 
     struct ResponseError: Decodable {
         let message: String?
+    }
+
+    /// Function calls of the final `response.completed` payload.
+    var completedToolCalls: [ModelToolCall] {
+        response?.output?.compactMap { item in
+            guard item.type == "function_call",
+                  let callID = item.callID,
+                  let name = item.name else {
+                return nil
+            }
+            return ModelToolCall(
+                id: callID,
+                name: name,
+                argumentsJSON: item.arguments ?? "{}"
+            )
+        } ?? []
     }
 }
 
@@ -1122,19 +1155,45 @@ struct ModelToolCall: Equatable {
 
 struct AnthropicStreamEvent: Decodable {
     let type: String?
+    let index: Int?
     let message: MessagePayload?
+    let contentBlock: ContentBlock?
     let delta: Delta?
     let usage: AnthropicUsage?
     let error: StreamError?
 
+    enum CodingKeys: String, CodingKey {
+        case type
+        case index
+        case message
+        case contentBlock = "content_block"
+        case delta
+        case usage
+        case error
+    }
+
     struct MessagePayload: Decodable {
         let usage: AnthropicUsage?
+    }
+
+    struct ContentBlock: Decodable {
+        let type: String?
+        let id: String?
+        let name: String?
     }
 
     struct Delta: Decodable {
         let type: String?
         let text: String?
         let thinking: String?
+        let partialJSON: String?
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case text
+            case thinking
+            case partialJSON = "partial_json"
+        }
     }
 
     struct StreamError: Decodable {
