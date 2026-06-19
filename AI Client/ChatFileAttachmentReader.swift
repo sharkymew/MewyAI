@@ -39,11 +39,11 @@ enum ChatFileAttachmentReadError: LocalizedError {
 }
 
 enum ChatFileAttachmentReader {
-    static let maxFileByteCount = 8 * 1024 * 1024
-    static let maxCharactersPerFile = 24_000
-    static let maxPDFPageCount = 80
+    nonisolated static let maxFileByteCount = 8 * 1024 * 1024
+    nonisolated static let maxCharactersPerFile = 24_000
+    nonisolated static let maxPDFPageCount = 80
 
-    static let supportedDocumentTypes: [UTType] = [
+    nonisolated static let supportedDocumentTypes: [UTType] = [
         .pdf,
         .plainText,
         .text,
@@ -55,7 +55,7 @@ enum ChatFileAttachmentReader {
         .commaSeparatedText
     ]
 
-    static let dropTypeIdentifiers: [String] = {
+    nonisolated static let dropTypeIdentifiers: [String] = {
         var identifiers = supportedDocumentTypes.map(\.identifier)
         identifiers.insert(UTType.fileURL.identifier, at: 0)
         return identifiers

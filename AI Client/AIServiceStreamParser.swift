@@ -44,7 +44,7 @@ nonisolated struct AIServiceStreamParseResult {
     }
 }
 
-enum AIServiceStreamParser {
+nonisolated enum AIServiceStreamParser {
     static func parseResult(
         from jsonString: String,
         apiFormat: AIAPIFormat,
@@ -55,8 +55,49 @@ enum AIServiceStreamParser {
         }
 
         guard let data = jsonString.data(using: .utf8) else { return nil }
+        return adapter(for: apiFormat).parse(data: data, decoder: decoder)
+    }
+
+    /// Assembles complete tool calls from accumulated stream fragments,
+    /// ordered by fragment index. Calls without an id or name are dropped.
+    static func assembledToolCalls(
+        from fragmentsByIndex: [Int: [AIServiceStreamToolCallFragment]]
+    ) -> [ModelToolCall] {
+        fragmentsByIndex
+            .sorted { $0.key < $1.key }
+            .compactMap { _, fragments in
+                let id = fragments.compactMap(\.id).first
+                let name = fragments.compactMap(\.name).first
+                guard let id, let name else { return nil }
+
+                let arguments = fragments.compactMap(\.argumentsDelta).joined()
+                return ModelToolCall(
+                    id: id,
+                    name: name,
+                    argumentsJSON: arguments.isEmpty ? "{}" : arguments
+                )
+            }
+    }
+
+    private static func adapter(for apiFormat: AIAPIFormat) -> StreamProviderAdapter {
         switch apiFormat {
         case .openAIChatCompletions:
+            OpenAIChatCompletionsStreamAdapter()
+        case .openAIResponses:
+            OpenAIResponsesStreamAdapter()
+        case .anthropicMessages:
+            AnthropicMessagesStreamAdapter()
+        case .vertexAIExpress:
+            VertexAIExpressStreamAdapter()
+        }
+    }
+
+    private protocol StreamProviderAdapter {
+        func parse(data: Data, decoder: JSONDecoder) -> AIServiceStreamParseResult?
+    }
+
+    private struct OpenAIChatCompletionsStreamAdapter: StreamProviderAdapter {
+        func parse(data: Data, decoder: JSONDecoder) -> AIServiceStreamParseResult? {
             guard let decoded = try? decoder.decode(OpenAIStreamResponse.self, from: data) else { return nil }
             let delta = decoded.choices?.first?.delta
             let fragments = (delta?.toolCalls ?? []).enumerated().map { position, fragment in
@@ -75,7 +116,11 @@ enum AIServiceStreamParser {
                 errorMessage: nil,
                 toolCallFragments: fragments
             )
-        case .openAIResponses:
+        }
+    }
+
+    private struct OpenAIResponsesStreamAdapter: StreamProviderAdapter {
+        func parse(data: Data, decoder: JSONDecoder) -> AIServiceStreamParseResult? {
             guard let event = try? decoder.decode(OpenAIResponsesStreamEvent.self, from: data) else { return nil }
             if let message = event.error?.message {
                 return AIServiceStreamParseResult(reasoningToken: nil, contentToken: nil, isDone: false, errorMessage: message)
@@ -89,7 +134,11 @@ enum AIServiceStreamParser {
                 errorMessage: nil,
                 completedToolCalls: type == "response.completed" ? event.completedToolCalls : nil
             )
-        case .anthropicMessages:
+        }
+    }
+
+    private struct AnthropicMessagesStreamAdapter: StreamProviderAdapter {
+        func parse(data: Data, decoder: JSONDecoder) -> AIServiceStreamParseResult? {
             guard let event = try? decoder.decode(AnthropicStreamEvent.self, from: data) else { return nil }
             if let message = event.error?.message {
                 return AIServiceStreamParseResult(reasoningToken: nil, contentToken: nil, isDone: false, errorMessage: message)
@@ -134,7 +183,11 @@ enum AIServiceStreamParser {
                 errorMessage: nil,
                 toolCallFragments: fragments
             )
-        case .vertexAIExpress:
+        }
+    }
+
+    private struct VertexAIExpressStreamAdapter: StreamProviderAdapter {
+        func parse(data: Data, decoder: JSONDecoder) -> AIServiceStreamParseResult? {
             guard let response = try? decoder.decode(VertexGenerateContentResponse.self, from: data) else { return nil }
             if let message = response.error?.message {
                 return AIServiceStreamParseResult(reasoningToken: nil, contentToken: nil, isDone: false, errorMessage: message)
@@ -148,26 +201,5 @@ enum AIServiceStreamParser {
                 errorMessage: nil
             )
         }
-    }
-
-    /// Assembles complete tool calls from accumulated stream fragments,
-    /// ordered by fragment index. Calls without an id or name are dropped.
-    static func assembledToolCalls(
-        from fragmentsByIndex: [Int: [AIServiceStreamToolCallFragment]]
-    ) -> [ModelToolCall] {
-        fragmentsByIndex
-            .sorted { $0.key < $1.key }
-            .compactMap { _, fragments in
-                let id = fragments.compactMap(\.id).first
-                let name = fragments.compactMap(\.name).first
-                guard let id, let name else { return nil }
-
-                let arguments = fragments.compactMap(\.argumentsDelta).joined()
-                return ModelToolCall(
-                    id: id,
-                    name: name,
-                    argumentsJSON: arguments.isEmpty ? "{}" : arguments
-                )
-            }
     }
 }

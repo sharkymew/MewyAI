@@ -217,6 +217,72 @@ final class ChatUsageTests: XCTestCase {
         XCTAssertNil(ConversationUsageSummary.summary(of: messages, configurations: []))
     }
 
+    func testUsageDisplayFooterIncludesTokensAndEstimatedCost() {
+        let configuration = AIConfiguration(
+            models: [
+                AIModelConfiguration(
+                    name: "deepseek-v4-pro",
+                    inputPricePerMillionTokens: 2,
+                    outputPricePerMillionTokens: 8,
+                    priceCurrencyCode: "CNY"
+                )
+            ],
+            selectedModel: "deepseek-v4-pro"
+        )
+        let usage = ChatUsage(
+            inputTokens: 1_000_000,
+            outputTokens: 500_000,
+            modelName: "deepseek-v4-pro",
+            configurationID: configuration.id
+        )
+        let message = ChatMessage(role: "assistant", content: "hi", usage: usage)
+
+        let text = ChatUsageDisplayFormatter.footerText(for: message, configurations: [configuration])
+
+        XCTAssertEqual(text, "↑ 1,000,000 · ↓ 500,000 · ≈¥6.00")
+    }
+
+    func testUsageDisplayFooterSkipsNonAssistantMessages() {
+        let message = ChatMessage(
+            role: "user",
+            content: "hello",
+            usage: ChatUsage(inputTokens: 1, outputTokens: 2)
+        )
+
+        XCTAssertNil(ChatUsageDisplayFormatter.footerText(for: message, configurations: []))
+    }
+
+    func testUsageDisplayConversationSummaryIncludesCosts() {
+        let configuration = AIConfiguration(
+            models: [
+                AIModelConfiguration(
+                    name: "deepseek-v4-pro",
+                    inputPricePerMillionTokens: 2,
+                    outputPricePerMillionTokens: 8,
+                    priceCurrencyCode: "CNY"
+                )
+            ],
+            selectedModel: "deepseek-v4-pro"
+        )
+        let usage = ChatUsage(
+            inputTokens: 1_000_000,
+            outputTokens: 500_000,
+            modelName: "deepseek-v4-pro",
+            configurationID: configuration.id
+        )
+        let messages = [
+            ChatMessage(role: "assistant", content: "hi", usage: usage),
+            ChatMessage(role: "assistant", content: "again", usage: usage)
+        ]
+
+        let text = ChatUsageDisplayFormatter.conversationSummaryText(
+            for: messages,
+            configurations: [configuration]
+        )
+
+        XCTAssertEqual(text, "↑ 2,000,000 · ↓ 1,000,000 · ≈¥12.00")
+    }
+
     func testCostTextFormatting() {
         XCTAssertEqual(
             ChatUsageFormatting.costText(ChatUsageCost(amount: 1.234567, currencyCode: "USD")),

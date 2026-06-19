@@ -889,7 +889,7 @@ struct OpenAIResponse: Codable {
 
 /// Usage block of OpenAI-compatible Chat Completions responses.
 /// `prompt_tokens` already includes cached tokens.
-struct OpenAIUsage: Codable {
+nonisolated struct OpenAIUsage: Codable {
     let promptTokens: Int?
     let completionTokens: Int?
     let totalTokens: Int?
@@ -948,16 +948,16 @@ struct OpenAIResponseToolCall: Codable {
     }
 }
 
-struct OpenAIStreamResponse: Codable {
+nonisolated struct OpenAIStreamResponse: Codable {
     let choices: [StreamChoice]?
     let usage: OpenAIUsage?
 }
 
-struct StreamChoice: Codable {
+nonisolated struct StreamChoice: Codable {
     let delta: StreamDelta?
 }
 
-struct StreamDelta: Codable {
+nonisolated struct StreamDelta: Codable {
     let reasoningContent: String?
     let content: String?
     let toolCalls: [StreamToolCallFragment]?
@@ -972,7 +972,7 @@ struct StreamDelta: Codable {
 /// One incremental piece of a streamed OpenAI chat tool call. The first
 /// fragment of a call carries `id` and `function.name`; later fragments append
 /// to `function.arguments`. Fragments belonging to the same call share `index`.
-struct StreamToolCallFragment: Codable {
+nonisolated struct StreamToolCallFragment: Codable {
     let index: Int?
     let id: String?
     let function: FunctionFragment?
@@ -1034,7 +1034,7 @@ struct OpenAIResponsesResponse: Decodable {
     }
 }
 
-struct OpenAIResponsesStreamEvent: Decodable {
+nonisolated struct OpenAIResponsesStreamEvent: Decodable {
     let type: String?
     let delta: String?
     let response: ResponsePayload?
@@ -1068,7 +1068,7 @@ struct OpenAIResponsesStreamEvent: Decodable {
 
 /// Usage block of OpenAI Responses API payloads.
 /// `input_tokens` already includes cached tokens.
-struct OpenAIResponsesUsage: Decodable {
+nonisolated struct OpenAIResponsesUsage: Decodable {
     let inputTokens: Int?
     let outputTokens: Int?
     let totalTokens: Int?
@@ -1147,13 +1147,13 @@ struct AnthropicResponse: Decodable {
     }
 }
 
-struct ModelToolCall: Equatable {
+nonisolated struct ModelToolCall: Equatable {
     let id: String
     let name: String
     let argumentsJSON: String
 }
 
-struct AnthropicStreamEvent: Decodable {
+nonisolated struct AnthropicStreamEvent: Decodable {
     let type: String?
     let index: Int?
     let message: MessagePayload?
@@ -1204,7 +1204,7 @@ struct AnthropicStreamEvent: Decodable {
 /// Usage block of Anthropic Messages payloads. Anthropic reports
 /// `input_tokens` excluding cache reads/writes, so `chatUsage` folds the
 /// cache counts back into the normalized input total.
-struct AnthropicUsage: Decodable {
+nonisolated struct AnthropicUsage: Decodable {
     let inputTokens: Int?
     let outputTokens: Int?
     let cacheCreationInputTokens: Int?
@@ -1234,7 +1234,7 @@ struct AnthropicUsage: Decodable {
     }
 }
 
-struct VertexGenerateContentResponse: Decodable {
+nonisolated struct VertexGenerateContentResponse: Decodable {
     let candidates: [Candidate]?
     let usageMetadata: VertexUsageMetadata?
     let error: VertexError?
@@ -1265,7 +1265,7 @@ struct VertexGenerateContentResponse: Decodable {
 
 /// Usage block of Gemini/Vertex responses. `candidatesTokenCount` excludes
 /// thought tokens, so `chatUsage` folds them into the normalized output total.
-struct VertexUsageMetadata: Decodable {
+nonisolated struct VertexUsageMetadata: Decodable {
     let promptTokenCount: Int?
     let candidatesTokenCount: Int?
     let totalTokenCount: Int?

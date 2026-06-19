@@ -133,12 +133,9 @@ enum ChatMemoryStore {
         userText: String,
         assistantText: String
     ) -> String {
-        let lines = numberedMemoryLines(for: entries)
-        let memoryBlock = lines.isEmpty ? "(no memories yet)" : lines.joined(separator: "\n")
-
         return """
         <existing_memories>
-        \(memoryBlock)
+        \(numberedMemoryBlock(for: entries))
         </existing_memories>
 
         <latest_exchange>
@@ -146,6 +143,34 @@ enum ChatMemoryStore {
         assistant: \(truncatedExchangeText(assistantText))
         </latest_exchange>
         """
+    }
+
+    nonisolated static func summaryUserPrompt(entries: [ChatMemoryEntry]) -> String {
+        """
+        <existing_memories>
+        \(numberedMemoryBlock(for: entries))
+        </existing_memories>
+        """
+    }
+
+    nonisolated static func managementUserPrompt(
+        entries: [ChatMemoryEntry],
+        userInstruction: String
+    ) -> String {
+        """
+        <existing_memories>
+        \(numberedMemoryBlock(for: entries))
+        </existing_memories>
+
+        <user_instruction>
+        \(truncatedExchangeText(userInstruction))
+        </user_instruction>
+        """
+    }
+
+    nonisolated static func numberedMemoryBlock(for entries: [ChatMemoryEntry]) -> String {
+        let lines = numberedMemoryLines(for: entries)
+        return lines.isEmpty ? "(no memories yet)" : lines.joined(separator: "\n")
     }
 
     private nonisolated static func numberedMemoryLines(for entries: [ChatMemoryEntry]) -> [String] {

@@ -54,6 +54,7 @@ struct ConversationSidebarView: View {
     @State private var searchText = ""
 
     let conversations: [AIConversation]
+    let conversationForSearch: (AIConversation) -> AIConversation
     let selectedConversationID: UUID?
     let topSafeAreaInset: CGFloat
     let showsSidebarToggleFadeExclusion: Bool
@@ -157,9 +158,12 @@ struct ConversationSidebarView: View {
     private func sidebarContent(rowWidth: CGFloat, topPadding: CGFloat) -> some View {
         let queryTerms = ConversationSearchFilter.queryTerms(from: searchText)
         let isSearching = !queryTerms.isEmpty
+        let sortedConversations = sortedConversations()
         let visibleConversations = isSearching
-            ? sortedConversations().filter { ConversationSearchFilter.matches($0, queryTerms: queryTerms) }
-            : sortedConversations()
+            ? sortedConversations.filter {
+                ConversationSearchFilter.matches(conversationForSearch($0), queryTerms: queryTerms)
+            }
+            : sortedConversations
         let pinnedConversations = visibleConversations.filter(\.isPinned)
         let now = Date()
 

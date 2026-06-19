@@ -25,7 +25,7 @@ enum ConversationRecallTool {
         excludedConversationIDs: Set<UUID>
     ) -> String {
         let recentConversations = conversations
-            .filter { !excludedConversationIDs.contains($0.id) && !$0.messages.isEmpty }
+            .filter { !excludedConversationIDs.contains($0.id) && $0.hasInformation }
             .sorted { $0.updatedAt > $1.updatedAt }
             .prefix(recentConversationIndexLimit)
 
@@ -180,7 +180,7 @@ enum ConversationRecallTool {
                 """
                 [\(index + 1)] conversation_id: \(conversation.id.uuidString)
                     title: \(conversation.title)
-                    updated: \(dateText(conversation.updatedAt)) · \(conversation.messages.count) messages
+                    updated: \(dateText(conversation.updatedAt)) · \(conversation.storedMessageCount) messages
                 """
             }
             return "Most recent conversations (newest first):\n\n" + lines.joined(separator: "\n")

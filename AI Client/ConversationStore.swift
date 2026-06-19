@@ -338,6 +338,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
     var isPinned: Bool = false
     var activeSkillIDs: [UUID] = []
     var activeMCPServerIDs: [UUID] = []
+    var indexedMessageCount: Int?
 
     init(
         id: UUID = UUID(),
@@ -349,7 +350,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
         hasGeneratedTitle: Bool = false,
         isPinned: Bool = false,
         activeSkillIDs: [UUID] = [],
-        activeMCPServerIDs: [UUID] = []
+        activeMCPServerIDs: [UUID] = [],
+        indexedMessageCount: Int? = nil
     ) {
         self.id = id
         self.title = title
@@ -361,6 +363,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         self.isPinned = isPinned
         self.activeSkillIDs = activeSkillIDs
         self.activeMCPServerIDs = activeMCPServerIDs
+        self.indexedMessageCount = indexedMessageCount
     }
 
     init(from decoder: Decoder) throws {
@@ -376,6 +379,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         activeSkillIDs = try container.decodeIfPresent([UUID].self, forKey: .activeSkillIDs) ?? []
         activeMCPServerIDs = try container.decodeIfPresent([UUID].self, forKey: .activeMCPServerIDs) ?? []
+        indexedMessageCount = nil
     }
 
     var normalized: AIConversation {
@@ -387,8 +391,16 @@ struct AIConversation: Identifiable, Codable, Equatable {
         return conversation
     }
 
-    var hasInformation: Bool {
-        !messages.isEmpty
+    nonisolated var hasInformation: Bool {
+        storedMessageCount > 0
+    }
+
+    nonisolated var storedMessageCount: Int {
+        indexedMessageCount ?? messages.count
+    }
+
+    nonisolated var isIndexOnly: Bool {
+        indexedMessageCount != nil && messages.isEmpty
     }
 
     nonisolated var allStoredMessages: [ChatMessage] {
@@ -415,15 +427,148 @@ enum ConversationStore {
     private static let conversationsKey = "savedConversations"
     private static let selectedConversationIDKey = "selectedConversationID"
     private static let conversationsFileName = "Conversations.json"
+    private static let conversationsDirectoryName = "Conversations"
+    private static let conversationIndexFileName = "Index.json"
+
+    nonisolated private struct ConversationIndex: Codable, Equatable {
+        var version: Int
+        var conversations: [ConversationIndexEntry]
+    }
+
+    nonisolated private struct ConversationIndexEntry: Codable, Equatable {
+        var id: UUID
+        var title: String
+        var createdAt: Date
+        var updatedAt: Date
+        var hasGeneratedTitle: Bool
+        var isPinned: Bool
+        var activeSkillIDs: [UUID]
+        var activeMCPServerIDs: [UUID]
+        var messageCount: Int
+
+        init(_ conversation: AIConversation) {
+            id = conversation.id
+            title = conversation.title
+            createdAt = conversation.createdAt
+            updatedAt = conversation.updatedAt
+            hasGeneratedTitle = conversation.hasGeneratedTitle
+            isPinned = conversation.isPinned
+            activeSkillIDs = conversation.activeSkillIDs
+            activeMCPServerIDs = conversation.activeMCPServerIDs
+            messageCount = conversation.storedMessageCount
+        }
+    }
 
     static func loadConversations() -> [AIConversation] {
-        if let fileURL = conversationsFileURL,
+        loadConversations(fileManager: .default)
+    }
+
+    static func loadConversationsForStartup() -> [AIConversation] {
+        loadConversationsForStartup(
+            selectedConversationID: loadSelectedConversationID(),
+            fileManager: .default
+        )
+    }
+
+    static func loadConversationsForStartup(
+        selectedConversationID: UUID?,
+        fileManager: FileManager = .default,
+        applicationSupportURL: URL? = nil
+    ) -> [AIConversation] {
+        var conversations = loadConversationList(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        )
+        guard !conversations.isEmpty else {
+            return [AIConversation()]
+        }
+
+        let conversationIDToLoad = selectedConversationID.flatMap { selectedID in
+            conversations.contains(where: { $0.id == selectedID }) ? selectedID : nil
+        } ?? conversations.first?.id
+
+        if let conversationIDToLoad,
+           let loadedConversation = loadConversation(
+            id: conversationIDToLoad,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+           ) {
+            if let index = conversations.firstIndex(where: { $0.id == loadedConversation.id }) {
+                conversations[index] = loadedConversation
+            } else {
+                conversations.insert(loadedConversation, at: 0)
+            }
+        }
+
+        return conversations.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    static func loadConversationList(
+        fileManager: FileManager = .default,
+        applicationSupportURL: URL? = nil
+    ) -> [AIConversation] {
+        if let indexedConversations = loadSplitConversationList(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) {
+            UserDefaults.standard.removeObject(forKey: conversationsKey)
+            return indexedConversations
+        }
+
+        return loadConversations(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        )
+    }
+
+    static func loadConversation(
+        id: UUID,
+        fileManager: FileManager = .default,
+        applicationSupportURL: URL? = nil
+    ) -> AIConversation? {
+        if let splitConversation = loadSplitConversation(
+            id: id,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) {
+            return splitConversation
+        }
+
+        if let fileURL = conversationsFileURL(fileManager: fileManager, applicationSupportURL: applicationSupportURL),
+           let data = try? Data(contentsOf: fileURL),
+           let conversations = decodedConversations(from: data) {
+            return conversations.first { $0.id == id }
+        }
+
+        if let data = UserDefaults.standard.data(forKey: conversationsKey),
+           let conversations = decodedConversations(from: data) {
+            return conversations.first { $0.id == id }
+        }
+
+        return nil
+    }
+
+    static func loadConversations(
+        fileManager: FileManager = .default,
+        applicationSupportURL: URL? = nil
+    ) -> [AIConversation] {
+        if let splitConversations = loadSplitConversations(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) {
+            UserDefaults.standard.removeObject(forKey: conversationsKey)
+            return splitConversations
+        }
+
+        if let fileURL = conversationsFileURL(fileManager: fileManager, applicationSupportURL: applicationSupportURL),
            let data = try? Data(contentsOf: fileURL),
            let conversations = decodedConversations(from: data) {
             let migratedConversations = migratedConversationsForStorage(conversations)
-            if migratedConversations != conversations {
-                saveConversations(migratedConversations)
-            }
+            saveConversations(
+                migratedConversations,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+            )
             UserDefaults.standard.removeObject(forKey: conversationsKey)
             return migratedConversations
         }
@@ -431,7 +576,11 @@ enum ConversationStore {
         if let data = UserDefaults.standard.data(forKey: conversationsKey),
            let conversations = decodedConversations(from: data) {
             let migratedConversations = migratedConversationsForStorage(conversations)
-            saveConversations(migratedConversations)
+            saveConversations(
+                migratedConversations,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+            )
             return migratedConversations
         }
 
@@ -439,11 +588,66 @@ enum ConversationStore {
     }
 
     @discardableResult
-    static func saveConversations(_ conversations: [AIConversation], synchronize: Bool = false) -> Bool {
+    static func saveConversations(
+        _ conversations: [AIConversation],
+        synchronize: Bool = false,
+        fileManager: FileManager = .default,
+        applicationSupportURL: URL? = nil
+    ) -> Bool {
         let storageConversations = migratedConversationsForStorage(conversations)
-        guard let data = try? JSONEncoder().encode(storageConversations) else { return false }
+        guard writeSplitConversations(
+            storageConversations,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL,
+            removesStaleFiles: true
+        ) else {
+            return false
+        }
 
-        guard writeProtectedConversations(compressedStorageData(from: data)) else {
+        UserDefaults.standard.removeObject(forKey: conversationsKey)
+
+        if synchronize {
+            UserDefaults.standard.synchronize()
+        }
+        return true
+    }
+
+    @discardableResult
+    static func saveConversation(
+        _ conversation: AIConversation,
+        in conversations: [AIConversation],
+        synchronize: Bool = false,
+        fileManager: FileManager = .default,
+        applicationSupportURL: URL? = nil
+    ) -> Bool {
+        let mergedConversations = conversations.map { storedConversation in
+            storedConversation.id == conversation.id ? conversation : storedConversation
+        }
+        guard mergedConversations.contains(where: { $0.id == conversation.id }) else {
+            return saveConversations(
+                conversations + [conversation],
+                synchronize: synchronize,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+            )
+        }
+
+        let storageConversations = migratedConversationsForStorage(mergedConversations)
+        guard let storedConversation = storageConversations.first(where: { $0.id == conversation.id }) else {
+            return false
+        }
+
+        let didWriteConversationFile = storedConversation.isIndexOnly || writeSplitConversation(
+            storedConversation,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        )
+        guard didWriteConversationFile,
+              writeSplitConversationIndex(
+                storageConversations,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+              ) else {
             return false
         }
 
@@ -471,9 +675,44 @@ enum ConversationStore {
         UserDefaults.standard.removeObject(forKey: selectedConversationIDKey)
     }
 
-    private static var conversationsFileURL: URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+    private static func applicationSupportURL(
+        fileManager: FileManager,
+        override: URL?
+    ) -> URL? {
+        override ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    }
+
+    private static func conversationsFileURL(
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> URL? {
+        self.applicationSupportURL(fileManager: fileManager, override: applicationSupportURL)?
             .appendingPathComponent(conversationsFileName, isDirectory: false)
+    }
+
+    private static func conversationsDirectoryURL(
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> URL? {
+        self.applicationSupportURL(fileManager: fileManager, override: applicationSupportURL)?
+            .appendingPathComponent(conversationsDirectoryName, isDirectory: true)
+    }
+
+    private static func conversationIndexURL(
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> URL? {
+        conversationsDirectoryURL(fileManager: fileManager, applicationSupportURL: applicationSupportURL)?
+            .appendingPathComponent(conversationIndexFileName, isDirectory: false)
+    }
+
+    private static func conversationFileURL(
+        for id: UUID,
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> URL? {
+        conversationsDirectoryURL(fileManager: fileManager, applicationSupportURL: applicationSupportURL)?
+            .appendingPathComponent("\(id.uuidString).json", isDirectory: false)
     }
 
     private static func decodedConversations(from data: Data) -> [AIConversation]? {
@@ -512,21 +751,258 @@ enum ConversationStore {
         ConversationImageStore.migratedLegacyImages(in: conversations.map(\.normalized))
     }
 
-    private static func writeProtectedConversations(_ data: Data) -> Bool {
-        guard let fileURL = conversationsFileURL else { return false }
+    private static func loadSplitConversations(
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> [AIConversation]? {
+        guard let index = loadSplitIndex(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) else {
+            return nil
+        }
+
+        let conversations = index.conversations.compactMap { entry -> AIConversation? in
+            loadSplitConversation(
+                id: entry.id,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+            )
+        }
+
+        guard conversations.count == index.conversations.count else { return nil }
+        return conversations.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private static func loadSplitConversationList(
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> [AIConversation]? {
+        guard let index = loadSplitIndex(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) else {
+            return nil
+        }
+
+        return index.conversations
+            .map { indexedConversation(from: $0) }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private static func loadSplitIndex(
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> ConversationIndex? {
+        guard let indexURL = conversationIndexURL(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ),
+              let indexData = try? Data(contentsOf: indexURL),
+              let index = try? JSONDecoder().decode(ConversationIndex.self, from: indexData),
+              !index.conversations.isEmpty else {
+            return nil
+        }
+
+        return index
+    }
+
+    private static func loadSplitConversation(
+        id: UUID,
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> AIConversation? {
+        guard let fileURL = conversationFileURL(
+            for: id,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ),
+              let data = try? Data(contentsOf: fileURL) else {
+            return nil
+        }
+        let jsonData = decompressedStorageData(from: data)
+        return try? JSONDecoder().decode(AIConversation.self, from: jsonData).normalized
+    }
+
+    private static func indexedConversation(from entry: ConversationIndexEntry) -> AIConversation {
+        AIConversation(
+            id: entry.id,
+            title: entry.title,
+            messages: [],
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+            hasGeneratedTitle: entry.hasGeneratedTitle,
+            isPinned: entry.isPinned,
+            activeSkillIDs: entry.activeSkillIDs,
+            activeMCPServerIDs: entry.activeMCPServerIDs,
+            indexedMessageCount: entry.messageCount
+        )
+    }
+
+    private static func writeSplitConversations(
+        _ conversations: [AIConversation],
+        fileManager: FileManager,
+        applicationSupportURL: URL?,
+        removesStaleFiles: Bool
+    ) -> Bool {
+        guard !conversations.isEmpty,
+              let directoryURL = conversationsDirectoryURL(
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+              ) else {
+            return false
+        }
 
         do {
-            let directoryURL = fileURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(
-                at: directoryURL,
-                withIntermediateDirectories: true,
-                attributes: [.protectionKey: FileProtectionType.complete]
+            try createProtectedDirectory(directoryURL, fileManager: fileManager)
+            for conversation in conversations where !conversation.isIndexOnly {
+                try writeSplitConversationThrowing(
+                    conversation,
+                    fileManager: fileManager,
+                    applicationSupportURL: applicationSupportURL
+                )
+            }
+            try writeSplitConversationIndexThrowing(
+                conversations,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
             )
-            try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
-            try FileManager.default.setAttributes(
-                [.protectionKey: FileProtectionType.complete],
-                ofItemAtPath: fileURL.path
+            if removesStaleFiles {
+                try removeStaleConversationFiles(
+                    keeping: Set(conversations.map(\.id)),
+                    in: directoryURL,
+                    fileManager: fileManager
+                )
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func writeSplitConversation(
+        _ conversation: AIConversation,
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> Bool {
+        do {
+            try writeSplitConversationThrowing(
+                conversation,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
             )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func writeSplitConversationIndex(
+        _ conversations: [AIConversation],
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> Bool {
+        do {
+            try writeSplitConversationIndexThrowing(
+                conversations,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func writeSplitConversationThrowing(
+        _ conversation: AIConversation,
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) throws {
+        guard let fileURL = conversationFileURL(
+            for: conversation.id,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        try createProtectedDirectory(fileURL.deletingLastPathComponent(), fileManager: fileManager)
+        let data = try JSONEncoder().encode(conversation)
+        try writeProtectedData(compressedStorageData(from: data), to: fileURL, fileManager: fileManager)
+    }
+
+    private static func writeSplitConversationIndexThrowing(
+        _ conversations: [AIConversation],
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) throws {
+        guard let fileURL = conversationIndexURL(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let index = ConversationIndex(
+            version: 1,
+            conversations: conversations
+                .sorted { $0.updatedAt > $1.updatedAt }
+                .map(ConversationIndexEntry.init)
+        )
+        let data = try JSONEncoder().encode(index)
+        try writeProtectedData(data, to: fileURL, fileManager: fileManager)
+    }
+
+    private static func removeStaleConversationFiles(
+        keeping retainedIDs: Set<UUID>,
+        in directoryURL: URL,
+        fileManager: FileManager
+    ) throws {
+        guard let fileURLs = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        ) else {
+            return
+        }
+
+        for fileURL in fileURLs where fileURL.pathExtension == "json" && fileURL.lastPathComponent != conversationIndexFileName {
+            let idString = fileURL.deletingPathExtension().lastPathComponent
+            guard let id = UUID(uuidString: idString),
+                  !retainedIDs.contains(id) else {
+                continue
+            }
+            try fileManager.removeItem(at: fileURL)
+        }
+    }
+
+    private static func createProtectedDirectory(_ directoryURL: URL, fileManager: FileManager) throws {
+        try fileManager.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.complete]
+        )
+    }
+
+    private static func writeProtectedData(_ data: Data, to fileURL: URL, fileManager: FileManager) throws {
+        try createProtectedDirectory(fileURL.deletingLastPathComponent(), fileManager: fileManager)
+        try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        try fileManager.setAttributes(
+            [.protectionKey: FileProtectionType.complete],
+            ofItemAtPath: fileURL.path
+        )
+    }
+
+    private static func writeProtectedConversations(
+        _ data: Data,
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) -> Bool {
+        guard let fileURL = conversationsFileURL(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) else { return false }
+
+        do {
+            try writeProtectedData(data, to: fileURL, fileManager: fileManager)
             return true
         } catch {
             return false

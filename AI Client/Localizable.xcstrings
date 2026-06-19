@@ -3087,9 +3087,6 @@
     "Current Prompt" : {
 
     },
-    "Custom headers" : {
-
-    },
     "Custom MCP" : {
 
     },
@@ -3384,9 +3381,6 @@
 
     },
     "Image %d" : {
-
-    },
-    "Images" : {
 
     },
     "Imported %@. Third-party Skills affect model context; only enable trusted content." : {
@@ -4408,15 +4402,6 @@
     "New conversation" : {
 
     },
-    "No authentication configured" : {
-
-    },
-    "No Base URL configured" : {
-
-    },
-    "No Endpoint configured" : {
-
-    },
     "No matching conversations" : {
 
     },
@@ -4857,13 +4842,7 @@
     "Reasoning" : {
 
     },
-    "Reasoning %@" : {
-
-    },
     "Reasoning content is too long. Receiving has stopped." : {
-
-    },
-    "Reasoning off" : {
 
     },
     "Reasoning: %@" : {
@@ -5859,9 +5838,6 @@
     "Temporary chats are not saved locally" : {
 
     },
-    "Text" : {
-
-    },
     "Text only" : {
 
     },
@@ -6420,6 +6396,9 @@
         }
       }
     },
+    "保存失败" : {
+
+    },
     "修改" : {
       "localizations" : {
         "en" : {
@@ -6626,6 +6605,9 @@
           }
         }
       }
+    },
+    "最新摘要" : {
+
     },
     "创建 Skill" : {
       "localizations" : {
@@ -6898,6 +6880,9 @@
 
     },
     "启用全局记忆" : {
+
+    },
+    "告诉 AI 你想怎样更新记忆" : {
 
     },
     "图片" : {
@@ -7196,6 +7181,9 @@
         }
       }
     },
+    "应用变更" : {
+
+    },
     "开启后，发送图片给支持图片的模型时，会自动生成隐藏描述并保存在对话中；以后切换到文字模型时可用这段描述代替图片上下文。" : {
       "localizations" : {
         "en" : {
@@ -7283,6 +7271,9 @@
           }
         }
       }
+    },
+    "待应用的变更" : {
+
     },
     "恢复默认内容" : {
       "localizations" : {
@@ -7508,6 +7499,9 @@
         }
       }
     },
+    "暂无已保存的原始记忆。" : {
+
+    },
     "暂无记忆。和 AI 聊聊你自己、你的偏好或正在做的事，记忆会自动积累。" : {
 
     },
@@ -7667,6 +7661,15 @@
           }
         }
       }
+    },
+    "正在分析记忆变更…" : {
+
+    },
+    "正在用当前模型整理记忆…" : {
+
+    },
+    "正在重新生成摘要" : {
+
     },
     "每行一个请求头，格式为 Header-Name: value。Authorization、Token、API Key 等敏感请求头会存入钥匙串。" : {
       "localizations" : {
@@ -7939,6 +7942,9 @@
           }
         }
       }
+    },
+    "生成变更预览" : {
+
     },
     "用 Skill Creator 创建" : {
       "localizations" : {
@@ -8375,6 +8381,12 @@
         }
       }
     },
+    "这里的对话只用于管理记忆，不会保存到聊天历史，也不会触发自动记忆提取。" : {
+
+    },
+    "进入此页面会用当前选用的模型重新整理已有记忆。选中摘要中的一段文字后，可在长按菜单里选择“不再提到”。" : {
+
+    },
     "连接" : {
       "localizations" : {
         "en" : {
@@ -8420,6 +8432,9 @@
       }
     },
     "通知" : {
+
+    },
+    "通过对话更新" : {
 
     },
     "配置组" : {
@@ -8509,6 +8524,9 @@
           }
         }
       }
+    },
+    "重新生成摘要" : {
+
     },
     "错误详细信息" : {
       "localizations" : {

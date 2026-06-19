@@ -7,7 +7,7 @@
 import Foundation
 
 extension AIService {
-    static func makeSecureSession() -> URLSession {
+    nonisolated static func makeSecureSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = true
         configuration.httpCookieAcceptPolicy = .always
@@ -19,7 +19,7 @@ extension AIService {
         return URLSession(configuration: configuration)
     }
 
-    static func validatedRequestURL(from urlString: String) throws -> URL {
+    nonisolated static func validatedRequestURL(from urlString: String) throws -> URL {
         guard let url = URL(string: urlString),
               let scheme = url.scheme?.lowercased(),
               let host = url.host,
@@ -40,7 +40,7 @@ extension AIService {
         throw AIServiceError.insecureURL
     }
 
-    private static func isLoopbackHost(_ host: String) -> Bool {
+    private nonisolated static func isLoopbackHost(_ host: String) -> Bool {
         let normalizedHost = host
             .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
             .lowercased()
