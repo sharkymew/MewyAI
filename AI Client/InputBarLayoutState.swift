@@ -4,7 +4,7 @@ struct InputBarLayoutState: Equatable {
     var measuredHeight: CGFloat = 0
 
     func effectiveHeight(fallback: CGFloat) -> CGFloat {
-        measuredHeight > 0 ? measuredHeight : fallback
+        max(measuredHeight, fallback)
     }
 
     func bottomContentPadding(fallback: CGFloat, gap: CGFloat) -> CGFloat {

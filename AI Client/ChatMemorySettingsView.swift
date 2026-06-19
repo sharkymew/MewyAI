@@ -10,15 +10,13 @@ struct ChatMemorySettingsView: View {
     @State private var configurations = AIConfigurationStore.loadConfigurations()
     @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
     @State private var entries = ChatMemoryStore.loadEntries()
-    @State private var summarySections: [ChatMemorySummarySection] = []
-    @State private var isGeneratingSummary = false
-    @State private var summaryError: String?
+    @State private var historySummarySnapshot = ChatMemoryHistorySummaryStore.loadSnapshot()
+    @State private var isHistorySummaryUpdating = ChatMemoryHistorySummaryStore.isUpdateInProgress
     @State private var memoryManagementInput = ""
     @State private var isProposingOperations = false
     @State private var proposalMessage: String?
     @State private var pendingProposal: MemoryOperationProposal?
     @State private var isClearConfirmationPresented = false
-    @State private var summaryRequestToken = UUID()
     @State private var proposalRequestToken = UUID()
 
     private let auxiliaryAIService = ChatAuxiliaryAIService()
@@ -47,7 +45,11 @@ struct ChatMemorySettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 reloadState()
-                generateMemorySummary()
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: ChatMemoryHistorySummaryStore.didChangeNotification
+            )) { _ in
+                reloadState()
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -81,48 +83,34 @@ struct ChatMemorySettingsView: View {
 
     private var summarySection: some View {
         Section {
-            if entries.isEmpty {
-                Text("暂无记忆。和 AI 聊聊你自己、你的偏好或正在做的事，记忆会自动积累。")
+            if isHistorySummaryUpdating, historySummarySnapshot.result.sections.isEmpty {
+                ProgressView("正在后台整理历史摘要…")
+            } else if historySummarySnapshot.result.sections.isEmpty {
+                Text("历史摘要会在新对话完成后自动增量更新。摘要生成在后台进行，不依赖当前页面是否打开。")
                     .foregroundStyle(.secondary)
-            } else {
-                if isGeneratingSummary, summarySections.isEmpty {
-                    ProgressView("正在用当前模型整理记忆…")
-                }
+            }
 
-                if !summarySections.isEmpty {
-                    ForEach(summarySections) { section in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(section.title)
-                                .font(.headline)
-                            MemorySummarySelectableTextView(text: section.body) { selectedText in
-                                proposeForgettingSelectedSummary(selectedText)
-                            }
-                        }
-                        .padding(.vertical, 4)
+            if !historySummarySnapshot.result.sections.isEmpty {
+                ForEach(historySummarySnapshot.result.sections) { section in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(section.title)
+                            .font(.headline)
+                        Text(section.body)
+                            .textSelection(.enabled)
                     }
+                    .padding(.vertical, 4)
                 }
+            }
 
-                if let summaryError {
-                    Text(summaryError)
-                        .foregroundStyle(.secondary)
-                }
-
-                Button {
-                    generateMemorySummary()
-                } label: {
-                    Label(
-                        isGeneratingSummary ? "正在重新生成摘要" : "重新生成摘要",
-                        systemImage: "arrow.clockwise"
-                    )
-                }
-                .disabled(isGeneratingSummary)
+            Button {
+                reloadState()
+            } label: {
+                Label("重新载入摘要", systemImage: "arrow.clockwise")
             }
         } header: {
-            Text("最新摘要")
+            Text("历史摘要")
         } footer: {
-            if !entries.isEmpty {
-                Text("进入此页面会用当前选用的模型重新整理已有记忆。选中摘要中的一段文字后，可在长按菜单里选择“不再提到”。")
-            }
+            Text("摘要来自本地历史对话的增量整理结果，不会自动写入全局记忆；候选变更需要在预览中确认后才会保存。")
         }
     }
 
@@ -226,62 +214,19 @@ struct ChatMemorySettingsView: View {
         }
     }
 
-    private func reloadState() {
+    private func reloadState(loadHistoryProposal: Bool = true) {
         configurations = AIConfigurationStore.loadConfigurations()
         selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
         entries = ChatMemoryStore.loadEntries()
-    }
-
-    private func generateMemorySummary() {
-        reloadState()
-        pendingProposal = nil
-        summaryError = nil
-        summarySections = []
-
-        guard !entries.isEmpty else {
-            isGeneratingSummary = false
-            summaryRequestToken = UUID()
-            return
-        }
-
-        let requestContext: MemoryRequestContext
-        switch makeMemoryRequestContext() {
-        case let .success(context):
-            requestContext = context
-        case let .failure(error):
-            isGeneratingSummary = false
-            summaryError = error
-            return
-        }
-
-        let requestToken = UUID()
-        summaryRequestToken = requestToken
-        isGeneratingSummary = true
-        let snapshot = entries
-
-        auxiliaryAIService.generateMemorySummary(
-            memoryEntries: snapshot,
-            baseURL: requestContext.baseURL,
-            apiFormat: requestContext.apiFormat,
-            apiKey: requestContext.apiKey,
-            customHeaders: requestContext.customHeaders,
-            model: requestContext.model,
-            modelParameters: requestContext.modelParameters,
-            anthropicMaxTokens: requestContext.anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: requestContext.anthropicClaudeCodeImpersonationEnabled,
-            reasoningEnabled: requestContext.reasoningEnabled,
-            reasoningEffort: requestContext.reasoningEffort
-        ) { sections in
-            guard summaryRequestToken == requestToken else { return }
-            isGeneratingSummary = false
-
-            guard let sections else {
-                summaryError = "摘要生成失败。请检查当前配置、模型和网络后重试。"
-                return
-            }
-
-            summarySections = sections
-            summaryError = sections.isEmpty ? "当前记忆还不足以生成可用摘要。" : nil
+        historySummarySnapshot = ChatMemoryHistorySummaryStore.loadSnapshot()
+        isHistorySummaryUpdating = ChatMemoryHistorySummaryStore.isUpdateInProgress
+        if loadHistoryProposal,
+           !historySummarySnapshot.result.operations.isEmpty {
+            pendingProposal = MemoryOperationProposal(
+                title: "根据历史对话更新记忆",
+                operations: historySummarySnapshot.result.operations,
+                snapshotEntries: historySummarySnapshot.memorySnapshotEntries
+            )
         }
     }
 
@@ -294,27 +239,11 @@ struct ChatMemorySettingsView: View {
         )
     }
 
-    private func proposeForgettingSelectedSummary(_ selectedText: String) {
-        let trimmedText = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty else { return }
-
-        let instruction = """
-        请不再提到下面这段摘要涉及的内容。删除或改写已有记忆中支持这段内容的条目；如果它只是摘要措辞，请只移除对应含义，不要新增禁提规则。
-
-        \(trimmedText)
-        """
-
-        requestMemoryOperationProposal(
-            title: "不再提到选中的摘要内容",
-            instruction: instruction
-        )
-    }
-
     private func requestMemoryOperationProposal(
         title: String,
         instruction: String
     ) {
-        reloadState()
+        reloadState(loadHistoryProposal: false)
         pendingProposal = nil
         proposalMessage = nil
 
@@ -387,28 +316,29 @@ struct ChatMemorySettingsView: View {
         self.pendingProposal = nil
         memoryManagementInput = ""
         proposalMessage = "记忆已更新。"
-        generateMemorySummary()
+        ChatMemoryHistorySummaryStore.clearPendingOperations(memorySnapshotEntries: updatedEntries)
+        reloadState(loadHistoryProposal: false)
     }
 
     private func clearAllMemories() {
         entries = []
-        summarySections = []
-        summaryError = nil
         proposalMessage = nil
         pendingProposal = nil
         ChatMemoryStore.clearEntries()
-        summaryRequestToken = UUID()
+        ChatMemoryHistorySummaryStore.clearPendingOperations(memorySnapshotEntries: [])
         proposalRequestToken = UUID()
-        isGeneratingSummary = false
         isProposingOperations = false
+        reloadState(loadHistoryProposal: false)
     }
 
     private func deleteEntries(at offsets: IndexSet) {
         let removedIDs = Set(offsets.map { sortedEntries[$0].id })
         entries.removeAll { removedIDs.contains($0.id) }
         ChatMemoryStore.saveEntries(entries)
+        ChatMemoryHistorySummaryStore.clearPendingOperations(memorySnapshotEntries: entries)
         pendingProposal = nil
-        generateMemorySummary()
+        proposalMessage = nil
+        reloadState(loadHistoryProposal: false)
     }
 
     private func makeMemoryRequestContext() -> MemoryRequestContextLoadResult {

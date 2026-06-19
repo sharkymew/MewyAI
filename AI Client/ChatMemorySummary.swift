@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated struct ChatMemorySummarySection: Identifiable, Equatable {
+nonisolated struct ChatMemorySummarySection: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var title: String
     var body: String

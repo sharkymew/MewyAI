@@ -130,11 +130,19 @@ struct ContentView: View {
     }
 
     private var bottomScrollContentPadding: CGFloat {
-        inputBarLayout.bottomContentPadding(fallback: inputBottomFadeOverlap, gap: bottomScrollContentGap)
+        inputBarLayout.bottomContentPadding(fallback: inputBarFallbackHeight, gap: bottomScrollContentGap)
     }
 
     private var scrollToBottomButtonBottomPadding: CGFloat {
-        inputBarLayout.scrollButtonBottomPadding(fallback: inputBottomFadeOverlap)
+        inputBarLayout.scrollButtonBottomPadding(fallback: inputBarFallbackHeight)
+    }
+
+    private var inputBarFallbackHeight: CGFloat {
+        inputBottomFadeOverlap + activeAgentCapsuleFallbackHeight
+    }
+
+    private var activeAgentCapsuleFallbackHeight: CGFloat {
+        activeAgentCapsules.isEmpty ? 0 : ActiveAgentCapsuleRow.fallbackHeight + 8
     }
 
     private func topChrome(topSafeAreaInset: CGFloat, showsSidebarToggleExclusion: Bool) -> some View {
@@ -362,6 +370,7 @@ struct ContentView: View {
             guard !hasLoadedInitialConversation else { return }
             hasLoadedInitialConversation = true
             loadSelectedConversation()
+            updateMissingHistorySummariesIfNeeded(configuration: currentConfiguration)
             if isHapticFeedbackEnabled {
                 conversationActionHaptics.prepare()
             }
@@ -407,6 +416,11 @@ struct ContentView: View {
                 streamingOutputHaptics.prepareForStreaming()
             } else {
                 streamingOutputHaptics.reset()
+            }
+        }
+        .onChange(of: isGlobalMemoryEnabled) { _, isEnabled in
+            if isEnabled {
+                updateMissingHistorySummariesIfNeeded(configuration: currentConfiguration)
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -471,14 +485,14 @@ struct ContentView: View {
         )
     }
 
-    private func chatScrollView(topPadding: CGFloat) -> some View {
+    private func chatScrollView(topPadding: CGFloat, bottomPadding: CGFloat) -> some View {
         ChatMessageScrollView(
             messages: messageBindings,
             messageInteraction: $messageInteraction,
             scrollController: chatScrollController,
             isGenerating: isGenerating,
             topPadding: topPadding,
-            bottomPadding: bottomScrollContentPadding,
+            bottomPadding: bottomPadding,
             visibleAssistantDisplayState: { messageID in
                 chatSession.visibleAssistantDisplayState(for: messageID)
             },
@@ -654,17 +668,9 @@ struct ContentView: View {
     }
 
     private var activeAgentCapsuleRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(activeAgentCapsules) { capsule in
-                    ActiveAgentCapsuleView(capsule: capsule) {
-                        deactivateAgentCapsule(capsule)
-                    }
-                }
-            }
-            .padding(.horizontal, 6)
+        ActiveAgentCapsuleRow(capsules: activeAgentCapsules) { capsule in
+            deactivateAgentCapsule(capsule)
         }
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var modelMenu: some View {
@@ -1214,6 +1220,7 @@ struct ContentView: View {
         persistConversation(conversationID, refreshesUpdatedAt: true)
         generateTitleIfNeeded(for: conversationID, configuration: configuration)
         extractMemoriesIfNeeded(for: conversationID, configuration: configuration)
+        updateHistorySummaryIfNeeded(for: conversationID, configuration: configuration)
     }
 
     private func attachAssistantUsage(
@@ -2544,7 +2551,8 @@ struct ContentView: View {
     private func updateBackgroundRequestKeeper() {
         backgroundRequestKeeper.update(
             activeRequestCount: chatSession.activeConversationGenerationCount
-                + backgroundCompletionNotificationCoordinator.pendingNotificationCount,
+                + backgroundCompletionNotificationCoordinator.pendingNotificationCount
+                + chatSessionPostProcessor.activeHistorySummaryUpdateCount,
             isSceneBackgrounded: UIApplication.shared.applicationState != .active
         ) {
             persistApplicationStateForLifecycle()
@@ -2692,6 +2700,30 @@ struct ContentView: View {
             isMemoryEnabled: { isGlobalMemoryEnabled },
             privateConversationID: privateConversationID
         )
+    }
+
+    private func updateHistorySummaryIfNeeded(for conversationID: UUID, configuration: AIConfiguration) {
+        guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return }
+
+        chatSessionPostProcessor.updateHistorySummaryIfNeeded(
+            for: conversation,
+            configuration: configuration,
+            isMemoryEnabled: { isGlobalMemoryEnabled },
+            privateConversationID: privateConversationID
+        ) {
+            updateBackgroundRequestKeeper()
+        }
+    }
+
+    private func updateMissingHistorySummariesIfNeeded(configuration: AIConfiguration) {
+        chatSessionPostProcessor.updateMissingHistorySummariesIfNeeded(
+            for: storedConversations,
+            configuration: configuration,
+            isMemoryEnabled: { isGlobalMemoryEnabled },
+            privateConversationID: privateConversationID
+        ) {
+            updateBackgroundRequestKeeper()
+        }
     }
 
 }

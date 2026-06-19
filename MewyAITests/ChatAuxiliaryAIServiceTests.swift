@@ -78,10 +78,115 @@ final class ChatAuxiliaryAIServiceTests: XCTestCase {
         XCTAssertEqual(MockAuxiliaryURLProtocol.capturedRequestCount, 1)
     }
 
+    func testSummarizeMemoryHistoryBatchUsesHistoryPromptAndParsesResponse() async throws {
+        MockAuxiliaryURLProtocol.setResponses([
+            .json(#"{"choices":[{"message":{"content":"{\"summary\":\"Batch mentions SwiftUI.\",\"facts\":[\"User prefers SwiftUI-native UI fixes.\"]}"}}]}"#)
+        ])
+
+        let service = ChatAuxiliaryAIService(session: makeMockSession())
+        let completed = expectation(description: "history batch summarized")
+        var summary: ChatMemoryHistoryBatchSummary?
+        let batch = ChatMemoryHistoryBatch(
+            index: 1,
+            text: """
+            <conversation title="Planning">
+            user: I prefer SwiftUI-native UI fixes.
+            assistant: Noted.
+            </conversation>
+            """,
+            conversationCount: 1,
+            segmentCount: 1
+        )
+
+        service.summarizeMemoryHistoryBatch(
+            memoryEntries: [ChatMemoryEntry(content: "User works on iOS apps")],
+            batch: batch,
+            batchCount: 2,
+            baseURL: AIAPIFormat.openAIChatCompletions.defaultBaseURL,
+            apiFormat: .openAIChatCompletions,
+            apiKey: "test-key",
+            customHeaders: "",
+            model: "gpt-test",
+            modelParameters: nil,
+            anthropicMaxTokens: 4096,
+            reasoningEnabled: nil,
+            reasoningEffort: nil
+        ) { batchSummary in
+            summary = batchSummary
+            completed.fulfill()
+        }
+
+        await fulfillment(of: [completed], timeout: 5)
+
+        XCTAssertEqual(summary, ChatMemoryHistoryBatchSummary(
+            batchIndex: 1,
+            summary: "Batch mentions SwiftUI.",
+            facts: ["User prefers SwiftUI-native UI fixes."]
+        ))
+        let body = try XCTUnwrap(lastRequestBodyString())
+        XCTAssertTrue(body.contains("I prefer SwiftUI-native UI fixes."))
+        XCTAssertTrue(body.contains("User works on iOS apps"))
+        XCTAssertEqual(MockAuxiliaryURLProtocol.capturedRequestCount, 1)
+    }
+
+    func testMergeMemoryHistorySummariesUsesBatchSummariesAndParsesResult() async throws {
+        MockAuxiliaryURLProtocol.setResponses([
+            .json(#"{"choices":[{"message":{"content":"{\"sections\":[{\"title\":\"Preferences\",\"body\":\"User prefers SwiftUI-native fixes.\"}],\"operations\":[{\"action\":\"add\",\"content\":\"User prefers SwiftUI-native UI fixes.\"}]}"}}]}"#)
+        ])
+
+        let service = ChatAuxiliaryAIService(session: makeMockSession())
+        let completed = expectation(description: "history summaries merged")
+        var result: ChatMemoryHistorySummaryResult?
+
+        service.mergeMemoryHistorySummaries(
+            memoryEntries: [ChatMemoryEntry(content: "User works on iOS apps")],
+            batchSummaries: [
+                ChatMemoryHistoryBatchSummary(
+                    batchIndex: 1,
+                    summary: "Batch mentions SwiftUI.",
+                    facts: ["User prefers SwiftUI-native UI fixes."]
+                )
+            ],
+            baseURL: AIAPIFormat.openAIChatCompletions.defaultBaseURL,
+            apiFormat: .openAIChatCompletions,
+            apiKey: "test-key",
+            customHeaders: "",
+            model: "gpt-test",
+            modelParameters: nil,
+            anthropicMaxTokens: 4096,
+            reasoningEnabled: nil,
+            reasoningEffort: nil
+        ) { mergedResult in
+            result = mergedResult
+            completed.fulfill()
+        }
+
+        await fulfillment(of: [completed], timeout: 5)
+
+        XCTAssertEqual(result?.sections, [
+            ChatMemorySummarySection(title: "Preferences", body: "User prefers SwiftUI-native fixes.")
+        ])
+        XCTAssertEqual(result?.operations, [
+            ChatMemoryOperation(action: .add, index: nil, content: "User prefers SwiftUI-native UI fixes.")
+        ])
+        let body = try XCTUnwrap(lastRequestBodyString())
+        XCTAssertTrue(body.contains("Batch mentions SwiftUI."))
+        XCTAssertTrue(body.contains("User works on iOS apps"))
+        XCTAssertEqual(MockAuxiliaryURLProtocol.capturedRequestCount, 1)
+    }
+
     private func makeMockSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockAuxiliaryURLProtocol.self]
         return URLSession(configuration: configuration)
+    }
+
+    private func lastRequestBodyString() -> String? {
+        guard let data = MockAuxiliaryURLProtocol.lastRequestBody else {
+            return nil
+        }
+
+        return String(data: data, encoding: .utf8)
     }
 }
 
@@ -101,6 +206,7 @@ private final class MockAuxiliaryURLProtocol: URLProtocol {
     private static let lock = NSLock()
     private static var responses = [Response]()
     private static var capturedRequests = [URLRequest]()
+    private static var capturedRequestBodies = [Data?]()
 
     static var capturedRequestCount: Int {
         lock.lock()
@@ -114,10 +220,17 @@ private final class MockAuxiliaryURLProtocol: URLProtocol {
         return capturedRequests.last
     }
 
+    static var lastRequestBody: Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturedRequestBodies.last ?? nil
+    }
+
     static func setResponses(_ newResponses: [Response]) {
         lock.lock()
         responses = newResponses
         capturedRequests = []
+        capturedRequestBodies = []
         lock.unlock()
     }
 
@@ -125,6 +238,7 @@ private final class MockAuxiliaryURLProtocol: URLProtocol {
         lock.lock()
         responses = []
         capturedRequests = []
+        capturedRequestBodies = []
         lock.unlock()
     }
 
@@ -137,8 +251,11 @@ private final class MockAuxiliaryURLProtocol: URLProtocol {
     }
 
     override func startLoading() {
+        let requestBody = Self.bodyData(from: request)
+
         Self.lock.lock()
         Self.capturedRequests.append(request)
+        Self.capturedRequestBodies.append(requestBody)
         let response = Self.responses.isEmpty ? nil : Self.responses.removeFirst()
         Self.lock.unlock()
 
@@ -159,4 +276,27 @@ private final class MockAuxiliaryURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    private static func bodyData(from request: URLRequest) -> Data? {
+        if let httpBody = request.httpBody {
+            return httpBody
+        }
+
+        guard let stream = request.httpBodyStream else {
+            return nil
+        }
+
+        stream.open()
+        defer { stream.close() }
+
+        var data = Data()
+        let bufferSize = 4096
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        while stream.hasBytesAvailable {
+            let readCount = stream.read(&buffer, maxLength: bufferSize)
+            guard readCount > 0 else { break }
+            data.append(buffer, count: readCount)
+        }
+        return data
+    }
 }

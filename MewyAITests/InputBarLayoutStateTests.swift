@@ -19,6 +19,16 @@ final class InputBarLayoutStateTests: XCTestCase {
         XCTAssertEqual(state.bottomContentPadding(fallback: 118, gap: 10), 152)
     }
 
+    func testFallbackIsMinimumAvoidanceHeight() {
+        var state = InputBarLayoutState()
+
+        XCTAssertTrue(state.updateMeasuredHeight(142))
+
+        XCTAssertEqual(state.effectiveHeight(fallback: 172), 172)
+        XCTAssertEqual(state.bottomContentPadding(fallback: 172, gap: 10), 182)
+        XCTAssertEqual(state.scrollButtonBottomPadding(fallback: 172), 184)
+    }
+
     func testIgnoresTinyMeasurementChanges() {
         var state = InputBarLayoutState(measuredHeight: 142)
 

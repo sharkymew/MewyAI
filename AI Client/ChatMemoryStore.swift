@@ -39,13 +39,13 @@ nonisolated struct ChatMemoryEntry: Identifiable, Codable, Equatable {
     }
 }
 
-nonisolated enum ChatMemoryOperationAction: String, Equatable {
+nonisolated enum ChatMemoryOperationAction: String, Codable, Equatable {
     case add
     case update
     case delete
 }
 
-nonisolated struct ChatMemoryOperation: Equatable {
+nonisolated struct ChatMemoryOperation: Codable, Equatable {
     var action: ChatMemoryOperationAction
     var index: Int?
     var content: String?
