@@ -58,17 +58,6 @@ struct ChatMemorySettingsView: View {
                     }
                 }
             }
-            .confirmationDialog(
-                "清空所有记忆？",
-                isPresented: $isClearConfirmationPresented,
-                titleVisibility: .visible
-            ) {
-                Button("清空所有记忆", role: .destructive) {
-                    clearAllMemories()
-                }
-            } message: {
-                Text("已保存的记忆会全部删除，且无法恢复。")
-            }
         }
     }
 
@@ -203,6 +192,17 @@ struct ChatMemorySettingsView: View {
                     isClearConfirmationPresented = true
                 } label: {
                     Label("清空所有记忆", systemImage: "trash")
+                }
+                .confirmationDialog(
+                    "清空所有记忆？",
+                    isPresented: $isClearConfirmationPresented,
+                    titleVisibility: .visible
+                ) {
+                    Button("清空所有记忆", role: .destructive) {
+                        clearAllMemories()
+                    }
+                } message: {
+                    Text("已保存的记忆会全部删除，且无法恢复。")
                 }
             }
         } header: {

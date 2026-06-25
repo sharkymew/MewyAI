@@ -9,12 +9,13 @@ final class ChatScrollController: ObservableObject {
 
     private var isUserDragging = false
     private var hasUserPausedAutoScroll = false
-    private var hasLeftBottomAfterUserPause = false
+    private var reachedBottomDuringUserInteraction = false
     private var isAutoScrollScheduled = false
     private var isBottomDistanceUpdateScheduled = false
     private var pendingDistanceFromBottom: CGFloat?
     private var lastDistanceFromBottom: CGFloat = 0
     private var autoScrollTask: Task<Void, Never>?
+    private var userInteractionResumeTask: Task<Void, Never>?
     private var conversationRestoreTask: Task<Void, Never>?
     private var scrollAction: ((Bool) -> Void)?
 
@@ -24,6 +25,7 @@ final class ChatScrollController: ObservableObject {
 
     deinit {
         autoScrollTask?.cancel()
+        userInteractionResumeTask?.cancel()
         conversationRestoreTask?.cancel()
     }
 
@@ -36,21 +38,18 @@ final class ChatScrollController: ObservableObject {
     }
 
     func beginUserScrollInteraction() {
+        userInteractionResumeTask?.cancel()
+        userInteractionResumeTask = nil
+        if !isUserDragging {
+            reachedBottomDuringUserInteraction = false
+        }
         isUserDragging = true
         pauseAutoScrollForUser()
     }
 
     func endUserScrollInteraction() {
         isUserDragging = false
-
-        if resumeAutoScrollIfUserReturnedToBottom() {
-            return
-        }
-
-        Task { @MainActor [weak self] in
-            await Task.yield()
-            self?.resumeAutoScrollIfUserReturnedToBottom()
-        }
+        scheduleUserInteractionResumeAudit()
     }
 
     func scheduleBottomDistanceUpdate(_ distanceFromBottom: CGFloat) {
@@ -80,8 +79,12 @@ final class ChatScrollController: ObservableObject {
         }
 
         if isAtBottom {
+            if isUserDragging {
+                reachedBottomDuringUserInteraction = true
+            }
+
             if hasUserPausedAutoScroll {
-                if hasLeftBottomAfterUserPause, !isUserDragging {
+                if !isUserDragging {
                     resumeAutoScroll()
                 }
             } else {
@@ -89,8 +92,6 @@ final class ChatScrollController: ObservableObject {
             }
         } else if isUserDragging {
             pauseAutoScrollForUser()
-        } else if hasUserPausedAutoScroll {
-            hasLeftBottomAfterUserPause = true
         }
     }
 
@@ -101,9 +102,11 @@ final class ChatScrollController: ObservableObject {
 
     func resetForConversationChange() {
         cancelScheduledAutoScroll()
+        userInteractionResumeTask?.cancel()
+        userInteractionResumeTask = nil
         isUserDragging = false
         hasUserPausedAutoScroll = false
-        hasLeftBottomAfterUserPause = false
+        reachedBottomDuringUserInteraction = false
         isBottomDistanceUpdateScheduled = false
         pendingDistanceFromBottom = nil
         lastDistanceFromBottom = 0
@@ -171,22 +174,39 @@ final class ChatScrollController: ObservableObject {
 
     private func pauseAutoScrollForUser() {
         hasUserPausedAutoScroll = true
-        hasLeftBottomAfterUserPause = hasLeftBottomAfterUserPause || !isScrolledToBottom
         setShouldAutoScroll(false)
         cancelScheduledAutoScroll()
     }
 
     private func resumeAutoScroll() {
+        userInteractionResumeTask?.cancel()
+        userInteractionResumeTask = nil
         hasUserPausedAutoScroll = false
-        hasLeftBottomAfterUserPause = false
+        reachedBottomDuringUserInteraction = false
         setShouldAutoScroll(true)
     }
 
     @discardableResult
     private func resumeAutoScrollIfUserReturnedToBottom() -> Bool {
-        guard hasUserPausedAutoScroll, hasLeftBottomAfterUserPause else { return false }
-        guard isScrolledToBottom || lastDistanceFromBottom <= ChatScrollMetrics.bottomThreshold else { return false }
+        guard hasUserPausedAutoScroll else { return false }
+        let isAtBottom = isScrolledToBottom || lastDistanceFromBottom <= ChatScrollMetrics.bottomThreshold
+        let reachedBottomRecently = reachedBottomDuringUserInteraction
+            && lastDistanceFromBottom <= ChatScrollMetrics.bottomResumeCarryDistance
+        guard isAtBottom || reachedBottomRecently else { return false }
         resumeAutoScroll()
         return true
+    }
+
+    private func scheduleUserInteractionResumeAudit() {
+        userInteractionResumeTask?.cancel()
+
+        userInteractionResumeTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(80))
+            guard let self, !Task.isCancelled else { return }
+
+            resumeAutoScrollIfUserReturnedToBottom()
+            userInteractionResumeTask = nil
+        }
     }
 }

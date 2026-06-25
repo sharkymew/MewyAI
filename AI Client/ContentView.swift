@@ -1835,7 +1835,7 @@ struct ContentView: View {
               !resetsText,
               chunks.contains(where: { !$0.isEmpty }) else { return }
 
-        streamingOutputHaptics.impactForOutputRefresh()
+        streamingOutputHaptics.impactForOutputRefresh(chunks: chunks)
     }
 
     private func prepareStreamingOutputHapticsIfNeeded() {

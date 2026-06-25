@@ -5,6 +5,7 @@ import UIKit
 enum ChatScrollMetrics {
     static let coordinateSpaceName = "ChatScrollCoordinateSpace"
     static let bottomThreshold: CGFloat = 12
+    static let bottomResumeCarryDistance: CGFloat = 160
     static let dragIntentMinimumDistance: CGFloat = 3
     static let scrollToBottomButtonHitOutset: CGFloat = 8
     static let scrollToBottomButtonHitSize: CGFloat = 52
