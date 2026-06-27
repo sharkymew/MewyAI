@@ -1025,7 +1025,6 @@ struct ContentView: View {
                 model: serviceRequest.model,
                 modelParameters: serviceRequest.modelParameters,
                 anthropicMaxTokens: serviceRequest.anthropicMaxTokens,
-                anthropicClaudeCodeImpersonationEnabled: serviceRequest.anthropicClaudeCodeImpersonationEnabled,
                 reasoningEnabled: serviceRequest.reasoningEnabled,
                 reasoningEffort: serviceRequest.reasoningEffort
             ) { description in

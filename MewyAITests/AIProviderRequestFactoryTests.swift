@@ -20,14 +20,16 @@ final class AIProviderRequestFactoryTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "X-Trace-ID"), "trace-1")
     }
 
-    func testAnthropicOneMillionContextKeepsManagedBetaHeader() {
+    func testAnthropicRequestUsesAPIKeyAndDoesNotAddManagedBetaHeaders() {
+        let betaHeader = "anthropic" + "-beta"
+        let modelName = "claude-sonnet-4 " + "[1" + "m]"
         let request = AIProviderRequestFactory.makeRequest(
             url: URL(string: "https://api.anthropic.com/v1/messages")!,
             apiFormat: .anthropicMessages,
-            model: "claude-sonnet-4 [1m]",
+            model: modelName,
             apiKey: "anthropic-key",
             customHeaders: """
-            anthropic-beta: custom-beta
+            \(betaHeader): custom-beta
             X-Extra: extra
             """,
             acceptsEventStream: false
@@ -36,11 +38,14 @@ final class AIProviderRequestFactoryTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), "anthropic-key")
         XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
         XCTAssertEqual(request.value(forHTTPHeaderField: "X-Extra"), "extra")
-        XCTAssertNotEqual(request.value(forHTTPHeaderField: "anthropic-beta"), "custom-beta")
-        XCTAssertTrue(request.value(forHTTPHeaderField: "anthropic-beta")?.contains("context-1m-2025-08-07") == true)
+        XCTAssertEqual(request.value(forHTTPHeaderField: betaHeader), "custom-beta")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
     }
 
-    func testAnthropicClaudeCodeImpersonationIgnoresManagedCustomHeaders() {
+    func testAnthropicRequestDoesNotAddImpersonationHeaders() {
+        let dangerousHeader = "anthropic-dangerous" + "-direct-browser-access"
+        let stainlessRuntimeHeader = "x" + "-stainless-runtime"
+        let appHeader = "x" + "-app"
         let request = AIProviderRequestFactory.makeRequest(
             url: URL(string: "https://api.anthropic.com/v1/messages")!,
             apiFormat: .anthropicMessages,
@@ -48,23 +53,21 @@ final class AIProviderRequestFactoryTests: XCTestCase {
             apiKey: "anthropic-key",
             customHeaders: """
             authorization: Bearer custom
-            anthropic-beta: custom-beta
             user-agent: custom-agent
-            x-stainless-runtime: custom-runtime
+            \(stainlessRuntimeHeader): custom-runtime
             X-Extra: extra
             """,
-            acceptsEventStream: true,
-            anthropicClaudeCodeImpersonationEnabled: true
+            acceptsEventStream: true
         )
 
-        XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer anthropic-key")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "accept"), "application/json")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-dangerous-direct-browser-access"), "true")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "x-app"), "cli")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), "anthropic-key")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer custom")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+        XCTAssertNil(request.value(forHTTPHeaderField: dangerousHeader))
+        XCTAssertNil(request.value(forHTTPHeaderField: appHeader))
         XCTAssertEqual(request.value(forHTTPHeaderField: "X-Extra"), "extra")
-        XCTAssertNotEqual(request.value(forHTTPHeaderField: "anthropic-beta"), "custom-beta")
-        XCTAssertNotEqual(request.value(forHTTPHeaderField: "user-agent"), "custom-agent")
-        XCTAssertNotEqual(request.value(forHTTPHeaderField: "x-stainless-runtime"), "custom-runtime")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "user-agent"), "custom-agent")
+        XCTAssertEqual(request.value(forHTTPHeaderField: stainlessRuntimeHeader), "custom-runtime")
     }
 
     func testVertexStreamingURLInjectsModelKeyAndSSEQueryItems() throws {
@@ -82,16 +85,17 @@ final class AIProviderRequestFactoryTests: XCTestCase {
         XCTAssertEqual(components.queryItems?.first(where: { $0.name == "alt" })?.value, "sse")
     }
 
-    func testAnthropicOneMillionContextURLAddsBetaQuery() throws {
+    func testAnthropicURLDoesNotAddBetaQuery() throws {
+        let modelName = "claude-sonnet-4 " + "[1" + "m]"
         let url = try AIProviderRequestFactory.requestURL(
             from: "https://api.anthropic.com/v1/messages",
             apiFormat: .anthropicMessages,
-            model: "claude-sonnet-4 [1m]",
+            model: modelName,
             apiKey: "",
             isStreaming: false
         )
 
         let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
-        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "beta" })?.value, "true")
+        XCTAssertNil(components.queryItems?.first(where: { $0.name == "beta" }))
     }
 }

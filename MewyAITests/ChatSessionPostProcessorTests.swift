@@ -433,7 +433,6 @@ final class ChatSessionPostProcessorTests: XCTestCase {
             model: "model-a",
             modelParameters: nil,
             anthropicMaxTokens: 1234,
-            anthropicClaudeCodeImpersonationEnabled: false,
             reasoningEnabled: true,
             reasoningEffort: .high
         ) { description in
@@ -465,7 +464,6 @@ final class ChatSessionPostProcessorTests: XCTestCase {
             model: "model-a",
             modelParameters: nil,
             anthropicMaxTokens: 1234,
-            anthropicClaudeCodeImpersonationEnabled: false,
             reasoningEnabled: true,
             reasoningEffort: .high
         ) { _ in
@@ -551,7 +549,6 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
@@ -577,7 +574,6 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping ([ChatMemoryOperation]?) -> Void
@@ -608,7 +604,6 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (ChatMemoryHistoryBatchSummary?) -> Void
@@ -639,7 +634,6 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (ChatMemoryHistorySummaryResult?) -> Void
@@ -668,7 +662,6 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void

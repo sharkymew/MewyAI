@@ -14,7 +14,6 @@ final class ChatAuxiliaryAIService {
     }
 
     private let session: URLSession
-    private let anthropicClaudeCodeMetadata = AnthropicClaudeCodeMetadata()
 
     init(session: URLSession = AIService.makeSecureSession()) {
         self.session = session
@@ -29,7 +28,6 @@ final class ChatAuxiliaryAIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
@@ -65,7 +63,6 @@ final class ChatAuxiliaryAIService {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { responseText in
@@ -86,7 +83,6 @@ final class ChatAuxiliaryAIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping ([ChatMemoryOperation]?) -> Void
@@ -105,7 +101,6 @@ final class ChatAuxiliaryAIService {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { responseText in
@@ -127,7 +122,6 @@ final class ChatAuxiliaryAIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping ([ChatMemorySummarySection]?) -> Void
@@ -147,7 +141,6 @@ final class ChatAuxiliaryAIService {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { responseText in
@@ -171,7 +164,6 @@ final class ChatAuxiliaryAIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (ChatMemoryHistoryBatchSummary?) -> Void
@@ -190,7 +182,6 @@ final class ChatAuxiliaryAIService {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { responseText in
@@ -214,7 +205,6 @@ final class ChatAuxiliaryAIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (ChatMemoryHistorySummaryResult?) -> Void
@@ -237,7 +227,6 @@ final class ChatAuxiliaryAIService {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { responseText in
@@ -260,7 +249,6 @@ final class ChatAuxiliaryAIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping ([ChatMemoryOperation]?) -> Void
@@ -284,7 +272,6 @@ final class ChatAuxiliaryAIService {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { responseText in
@@ -306,7 +293,6 @@ final class ChatAuxiliaryAIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
@@ -344,7 +330,6 @@ final class ChatAuxiliaryAIService {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { responseText in
@@ -362,7 +347,6 @@ final class ChatAuxiliaryAIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
@@ -381,7 +365,6 @@ final class ChatAuxiliaryAIService {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             completion: completion
@@ -397,7 +380,6 @@ final class ChatAuxiliaryAIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
@@ -409,8 +391,7 @@ final class ChatAuxiliaryAIService {
                 apiFormat: apiFormat,
                 model: model,
                 apiKey: apiKey,
-                isStreaming: false,
-                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+                isStreaming: false
             )
         } catch {
             completion(nil)
@@ -427,9 +408,7 @@ final class ChatAuxiliaryAIService {
                 reasoningEnabled: reasoningEnabled,
                 reasoningEffort: reasoningEffort,
                 modelParameters: modelParameters,
-                anthropicMaxTokens: anthropicMaxTokens,
-                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
-                anthropicClaudeCodeMetadata: anthropicClaudeCodeMetadata
+                anthropicMaxTokens: anthropicMaxTokens
             )
         } catch {
             completion(nil)
@@ -442,9 +421,7 @@ final class ChatAuxiliaryAIService {
             model: model,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            acceptsEventStream: false,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
-            anthropicClaudeCodeMetadata: anthropicClaudeCodeMetadata
+            acceptsEventStream: false
         )
         request.httpBody = jsonData
 

@@ -7,30 +7,13 @@
 import Foundation
 
 enum AIProviderRequestFactory {
-    private static let anthropicClaudeCodeBetaHeader = "context-1m-2025-08-07,claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24"
-    private static let anthropicOneMillionContextBetaHeader = "context-1m-2025-08-07,context-management-2025-06-27"
-    private static let anthropicClaudeCodeManagedHeaders: Set<String> = [
-        "accept",
-        "authorization",
-        "content-type",
-        "x-api-key",
-        "anthropic-version",
-        "anthropic-beta",
-        "anthropic-dangerous-direct-browser-access",
-        "user-agent",
-        "x-app",
-        "x-claude-code-session-id"
-    ]
-
     static func makeRequest(
         url: URL,
         apiFormat: AIAPIFormat,
         model: String = "",
         apiKey: String,
         customHeaders: String,
-        acceptsEventStream: Bool,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
-        anthropicClaudeCodeMetadata: AnthropicClaudeCodeMetadata? = nil
+        acceptsEventStream: Bool
     ) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -41,26 +24,12 @@ enum AIProviderRequestFactory {
         }
 
         let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let usesAnthropicClaudeCodeImpersonation = apiFormat == .anthropicMessages
-            && anthropicClaudeCodeImpersonationEnabled
-        let usesAnthropicOneMillionContext = apiFormat == .anthropicMessages
-            && (anthropicClaudeCodeImpersonationEnabled
-                || AIRequestBodyBuilder.anthropicModelSelection(from: model).usesOneMillionContext)
-
-        if usesAnthropicClaudeCodeImpersonation {
-            request.setValue("application/json", forHTTPHeaderField: "accept")
-        }
-
         if !trimmedAPIKey.isEmpty {
             switch apiFormat {
             case .openAIChatCompletions, .openAIResponses:
                 request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "Authorization")
             case .anthropicMessages:
-                if usesAnthropicClaudeCodeImpersonation {
-                    request.setValue("Bearer \(trimmedAPIKey)", forHTTPHeaderField: "authorization")
-                } else {
-                    request.setValue(trimmedAPIKey, forHTTPHeaderField: "x-api-key")
-                }
+                request.setValue(trimmedAPIKey, forHTTPHeaderField: "x-api-key")
             case .vertexAIExpress:
                 break
             }
@@ -70,32 +39,7 @@ enum AIProviderRequestFactory {
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         }
 
-        if usesAnthropicClaudeCodeImpersonation {
-            request.setValue(anthropicClaudeCodeBetaHeader, forHTTPHeaderField: "anthropic-beta")
-            request.setValue("true", forHTTPHeaderField: "anthropic-dangerous-direct-browser-access")
-            request.setValue("claude-cli/2.1.156 (external, sdk-cli)", forHTTPHeaderField: "user-agent")
-            request.setValue("cli", forHTTPHeaderField: "x-app")
-            if let anthropicClaudeCodeMetadata {
-                request.setValue(anthropicClaudeCodeMetadata.sessionID, forHTTPHeaderField: "x-claude-code-session-id")
-            }
-            request.setValue("arm64", forHTTPHeaderField: "x-stainless-arch")
-            request.setValue("js", forHTTPHeaderField: "x-stainless-lang")
-            request.setValue("MacOS", forHTTPHeaderField: "x-stainless-os")
-            request.setValue("0.94.0", forHTTPHeaderField: "x-stainless-package-version")
-            request.setValue("0", forHTTPHeaderField: "x-stainless-retry-count")
-            request.setValue("node", forHTTPHeaderField: "x-stainless-runtime")
-            request.setValue("v24.3.0", forHTTPHeaderField: "x-stainless-runtime-version")
-            request.setValue("600", forHTTPHeaderField: "x-stainless-timeout")
-        } else if usesAnthropicOneMillionContext {
-            request.setValue(anthropicOneMillionContextBetaHeader, forHTTPHeaderField: "anthropic-beta")
-        }
-
         for header in CustomHeaderSecurity.requestHeaders(from: customHeaders) {
-            let headerName = header.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if (usesAnthropicClaudeCodeImpersonation && isAnthropicClaudeCodeManagedHeader(headerName))
-                || (usesAnthropicOneMillionContext && headerName == "anthropic-beta") {
-                continue
-            }
             request.setValue(header.value, forHTTPHeaderField: header.name)
         }
 
@@ -107,8 +51,7 @@ enum AIProviderRequestFactory {
         apiFormat: AIAPIFormat,
         model: String,
         apiKey: String,
-        isStreaming: Bool,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false
+        isStreaming: Bool
     ) throws -> URL {
         var resolvedURLString = urlString
         if apiFormat == .vertexAIExpress {
@@ -137,15 +80,6 @@ enum AIProviderRequestFactory {
                 queryItems.append(URLQueryItem(name: "alt", value: "sse"))
             }
             components.queryItems = queryItems.isEmpty ? nil : queryItems
-        }
-
-        let usesAnthropicOneMillionContext = anthropicClaudeCodeImpersonationEnabled
-            || AIRequestBodyBuilder.anthropicModelSelection(from: model).usesOneMillionContext
-        if apiFormat == .anthropicMessages, usesAnthropicOneMillionContext {
-            var queryItems = components.queryItems ?? []
-            queryItems.removeAll { $0.name == "beta" }
-            queryItems.append(URLQueryItem(name: "beta", value: "true"))
-            components.queryItems = queryItems
         }
 
         guard let requestURL = components.url else {
@@ -211,9 +145,4 @@ enum AIProviderRequestFactory {
         return modelsURL
     }
 
-    private static func isAnthropicClaudeCodeManagedHeader(_ name: String) -> Bool {
-        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return anthropicClaudeCodeManagedHeaders.contains(normalizedName)
-            || normalizedName.hasPrefix("x-stainless-")
-    }
 }

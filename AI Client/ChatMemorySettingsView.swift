@@ -271,7 +271,6 @@ struct ChatMemorySettingsView: View {
             model: requestContext.model,
             modelParameters: requestContext.modelParameters,
             anthropicMaxTokens: requestContext.anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: requestContext.anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: requestContext.reasoningEnabled,
             reasoningEffort: requestContext.reasoningEffort
         ) { operations in
@@ -365,7 +364,6 @@ struct ChatMemorySettingsView: View {
             model: model,
             modelParameters: configuration.selectedModelConfiguration,
             anthropicMaxTokens: configuration.anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: configuration.anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEnabled == true ? configuration.reasoningEffort : nil
         ))
@@ -427,7 +425,6 @@ private struct MemoryRequestContext {
     let model: String
     let modelParameters: AIModelConfiguration?
     let anthropicMaxTokens: Int
-    let anthropicClaudeCodeImpersonationEnabled: Bool
     let reasoningEnabled: Bool?
     let reasoningEffort: ReasoningEffort?
 }

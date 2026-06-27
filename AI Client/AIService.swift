@@ -17,7 +17,6 @@ class AIService {
     }
 
     nonisolated private let session: URLSession
-    private let anthropicClaudeCodeMetadata = AnthropicClaudeCodeMetadata()
     private var conversationHistory = AIService.initialConversationHistory(
         systemPrompt: AIConfiguration.defaultSystemPrompt
     )
@@ -168,7 +167,6 @@ class AIService {
         reasoningEffort: ReasoningEffort?,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         tools: [AgentToolDefinition] = []
     ) throws -> Data {
         try AIRequestBodyBuilder.requestBodyData(
@@ -180,8 +178,6 @@ class AIService {
             reasoningEffort: reasoningEffort,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
-            anthropicClaudeCodeMetadata: anthropicClaudeCodeMetadata,
             tools: tools
         )
     }
@@ -191,7 +187,6 @@ class AIService {
         apiFormat: AIAPIFormat,
         apiKey: String,
         customHeaders: String,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         completion: @escaping (Result<[AIModelConfiguration], AIServiceError>) -> Void
     ) {
         guard apiFormat != .vertexAIExpress else {
@@ -218,8 +213,7 @@ class AIService {
             apiFormat: apiFormat,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            acceptsEventStream: false,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+            acceptsEventStream: false
         )
         request.httpMethod = "GET"
         request.httpBody = nil
@@ -446,7 +440,6 @@ class AIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         usesImageAttachments: Bool = true,
@@ -459,8 +452,7 @@ class AIService {
                 apiFormat: apiFormat,
                 model: model,
                 apiKey: apiKey,
-                isStreaming: false,
-                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+                isStreaming: false
             )
         } catch let error as AIServiceError {
             completion(error.localizedDescription)
@@ -489,8 +481,7 @@ class AIService {
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             modelParameters: modelParameters,
-            anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+            anthropicMaxTokens: anthropicMaxTokens
         ) else {
             completion(AppLocalizations.string("aiService.error.encodingFailed", defaultValue: "Failed to encode request body"))
             return
@@ -502,8 +493,7 @@ class AIService {
             model: model,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            acceptsEventStream: false,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+            acceptsEventStream: false
         )
         request.httpBody = jsonData
         let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
@@ -572,7 +562,6 @@ class AIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         usesImageAttachments: Bool,
@@ -601,7 +590,6 @@ class AIService {
                 model: model,
                 modelParameters: modelParameters,
                 anthropicMaxTokens: anthropicMaxTokens,
-                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
                 reasoningEnabled: reasoningEnabled,
                 reasoningEffort: reasoningEffort,
                 usesImageAttachments: usesImageAttachments,
@@ -625,8 +613,7 @@ class AIService {
                 apiFormat: apiFormat,
                 model: model,
                 apiKey: apiKey,
-                isStreaming: true,
-                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+                isStreaming: true
             )
         } catch let error as AIServiceError {
             onError(error.localizedDescription)
@@ -655,8 +642,7 @@ class AIService {
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             modelParameters: modelParameters,
-            anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+            anthropicMaxTokens: anthropicMaxTokens
         ) else {
             onError(AppLocalizations.string("aiService.error.encodingFailed", defaultValue: "Failed to encode request body"))
             return
@@ -668,8 +654,7 @@ class AIService {
             model: model,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            acceptsEventStream: true,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+            acceptsEventStream: true
         )
         request.httpBody = jsonData
         let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
@@ -754,7 +739,6 @@ class AIService {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         usesImageAttachments: Bool,
@@ -783,8 +767,7 @@ class AIService {
                 apiFormat: apiFormat,
                 model: model,
                 apiKey: apiKey,
-                isStreaming: true,
-                anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+                isStreaming: true
             )
         } catch let error as AIServiceError {
             onError(error.localizedDescription)
@@ -839,8 +822,7 @@ class AIService {
                         reasoningEnabled: reasoningEnabled,
                         reasoningEffort: reasoningEffort,
                         modelParameters: modelParameters,
-                        anthropicMaxTokens: anthropicMaxTokens,
-                        anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+                        anthropicMaxTokens: anthropicMaxTokens
                     )
                 } catch {
                     await MainActor.run {
@@ -856,8 +838,7 @@ class AIService {
                     model: model,
                     apiKey: apiKey,
                     customHeaders: customHeaders,
-                    acceptsEventStream: true,
-                    anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+                    acceptsEventStream: true
                 )
                 finalRequest.httpBody = finalJSONData
 
@@ -905,7 +886,6 @@ class AIService {
                         reasoningEffort: reasoningEffort,
                         modelParameters: modelParameters,
                         anthropicMaxTokens: anthropicMaxTokens,
-                        anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
                         tools: agentTools
                     )
                 } catch {
@@ -922,8 +902,7 @@ class AIService {
                     model: model,
                     apiKey: apiKey,
                     customHeaders: customHeaders,
-                    acceptsEventStream: true,
-                    anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+                    acceptsEventStream: true
                 )
                 request.httpBody = jsonData
 
@@ -1074,8 +1053,7 @@ class AIService {
         model: String = "",
         apiKey: String,
         customHeaders: String,
-        acceptsEventStream: Bool,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false
+        acceptsEventStream: Bool
     ) -> URLRequest {
         AIProviderRequestFactory.makeRequest(
             url: url,
@@ -1083,9 +1061,7 @@ class AIService {
             model: model,
             apiKey: apiKey,
             customHeaders: customHeaders,
-            acceptsEventStream: acceptsEventStream,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
-            anthropicClaudeCodeMetadata: anthropicClaudeCodeMetadata
+            acceptsEventStream: acceptsEventStream
         )
     }
 
@@ -1094,16 +1070,14 @@ class AIService {
         apiFormat: AIAPIFormat,
         model: String,
         apiKey: String,
-        isStreaming: Bool,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false
+        isStreaming: Bool
     ) throws -> URL {
         try AIProviderRequestFactory.requestURL(
             from: urlString,
             apiFormat: apiFormat,
             model: model,
             apiKey: apiKey,
-            isStreaming: isStreaming,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled
+            isStreaming: isStreaming
         )
     }
 

@@ -299,7 +299,6 @@ struct AIConfigurationView: View {
                     .keyboardType(.numberPad)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Toggle("伪装为 Claude Code", isOn: anthropicClaudeCodeImpersonationBinding)
             }
         } header: {
             Text("请求地址")
@@ -779,17 +778,6 @@ struct AIConfigurationView: View {
         )
     }
 
-    private var anthropicClaudeCodeImpersonationBinding: Binding<Bool> {
-        Binding(
-            get: { selectedConfiguration?.anthropicClaudeCodeImpersonationEnabled == true },
-            set: { newValue in
-                updateSelectedConfiguration { configuration in
-                    configuration.anthropicClaudeCodeImpersonationEnabled = newValue
-                }
-            }
-        )
-    }
-    
     private var selectedAPIKeyBinding: Binding<String> {
         Binding(
             get: { selectedConfiguration?.apiKey ?? "" },
@@ -813,12 +801,6 @@ struct AIConfigurationView: View {
                 defaultValue: "When an API Key is provided, Authorization: Bearer <API Key> is sent automatically. The API Key is stored in Keychain."
             )
         case .anthropicMessages:
-            if selectedConfiguration?.anthropicClaudeCodeImpersonationEnabled == true {
-                return AppLocalizations.string(
-                    "configuration.authFooter.anthropicClaudeCode",
-                    defaultValue: "When Claude Code impersonation is enabled, every model sends the API Key as Authorization: Bearer <API Key> and injects 1M context plus the Claude Code contract. The API Key is stored in Keychain."
-                )
-            }
             return AppLocalizations.string(
                 "configuration.authFooter.anthropic",
                 defaultValue: "Anthropic Messages sends the API Key as x-api-key and automatically adds anthropic-version. The API Key is stored in Keychain."
@@ -1254,8 +1236,7 @@ struct AIConfigurationView: View {
             baseURL: configuration.requestURLString,
             apiFormat: configuration.apiFormat,
             apiKey: configuration.apiKey,
-            customHeaders: configuration.customHeaders,
-            anthropicClaudeCodeImpersonationEnabled: configuration.anthropicClaudeCodeImpersonationEnabled
+            customHeaders: configuration.customHeaders
         ) { result in
             isFetchingModels = false
             

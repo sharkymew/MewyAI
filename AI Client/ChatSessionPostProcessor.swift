@@ -11,7 +11,6 @@ protocol ChatSessionAuxiliaryAIServicing: AnyObject {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
@@ -28,7 +27,6 @@ protocol ChatSessionAuxiliaryAIServicing: AnyObject {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping ([ChatMemoryOperation]?) -> Void
@@ -45,7 +43,6 @@ protocol ChatSessionAuxiliaryAIServicing: AnyObject {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (ChatMemoryHistoryBatchSummary?) -> Void
@@ -61,7 +58,6 @@ protocol ChatSessionAuxiliaryAIServicing: AnyObject {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (ChatMemoryHistorySummaryResult?) -> Void
@@ -76,7 +72,6 @@ protocol ChatSessionAuxiliaryAIServicing: AnyObject {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
@@ -130,7 +125,6 @@ nonisolated final class ChatSessionPostProcessor {
         let model: String
         let modelParameters: AIModelConfiguration?
         let anthropicMaxTokens: Int
-        let anthropicClaudeCodeImpersonationEnabled: Bool
         let reasoningEnabled: Bool?
         let reasoningEffort: ReasoningEffort?
 
@@ -146,7 +140,6 @@ nonisolated final class ChatSessionPostProcessor {
             self.model = model
             modelParameters = configuration.selectedModelConfiguration
             anthropicMaxTokens = configuration.anthropicMaxTokens
-            anthropicClaudeCodeImpersonationEnabled = configuration.anthropicClaudeCodeImpersonationEnabled
             reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
             reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
         }
@@ -208,7 +201,6 @@ nonisolated final class ChatSessionPostProcessor {
         model: String,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool,
         reasoningEnabled: Bool?,
         reasoningEffort: ReasoningEffort?,
         onDescriptionGenerated: @escaping @MainActor (String) -> Void
@@ -224,7 +216,6 @@ nonisolated final class ChatSessionPostProcessor {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort
         ) { [weak self] description in
@@ -359,7 +350,6 @@ nonisolated final class ChatSessionPostProcessor {
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
             anthropicMaxTokens: requestConfiguration.anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: requestConfiguration.anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: requestConfiguration.reasoningEnabled,
             reasoningEffort: requestConfiguration.reasoningEffort
         ) { [weak self] title in
@@ -409,7 +399,6 @@ nonisolated final class ChatSessionPostProcessor {
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
             anthropicMaxTokens: requestConfiguration.anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: requestConfiguration.anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: requestConfiguration.reasoningEnabled,
             reasoningEffort: requestConfiguration.reasoningEffort
         ) { [weak self] operations in
@@ -582,7 +571,6 @@ nonisolated final class ChatSessionPostProcessor {
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
             anthropicMaxTokens: requestConfiguration.anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: requestConfiguration.anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: requestConfiguration.reasoningEnabled,
             reasoningEffort: requestConfiguration.reasoningEffort
         ) { [weak self] summary in
@@ -638,7 +626,6 @@ nonisolated final class ChatSessionPostProcessor {
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
             anthropicMaxTokens: requestConfiguration.anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: requestConfiguration.anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: requestConfiguration.reasoningEnabled,
             reasoningEffort: requestConfiguration.reasoningEffort
         ) { [weak self] result in
@@ -694,7 +681,6 @@ nonisolated final class ChatSessionPostProcessor {
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
             anthropicMaxTokens: requestConfiguration.anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: requestConfiguration.anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: requestConfiguration.reasoningEnabled,
             reasoningEffort: requestConfiguration.reasoningEffort
         ) { [weak self] summary in
@@ -752,7 +738,6 @@ nonisolated final class ChatSessionPostProcessor {
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
             anthropicMaxTokens: requestConfiguration.anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: requestConfiguration.anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: requestConfiguration.reasoningEnabled,
             reasoningEffort: requestConfiguration.reasoningEffort
         ) { [weak self] result in

@@ -178,92 +178,6 @@ struct AnthropicSystemPart: Encodable {
     }
 }
 
-struct AnthropicClaudeCodeMetadata: Encodable {
-    let sessionID: String
-    let userID: String
-
-    init() {
-        sessionID = Self.persistedSessionID()
-        let accountUUID = Self.persistedAccountUUID()
-        let deviceID = Self.persistedDeviceID()
-        userID = "{\"session_id\":\"\(sessionID)\",\"account_uuid\":\"\(accountUUID)\",\"device_id\":\"\(deviceID)\"}"
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case userID = "user_id"
-    }
-
-    private static func uuidString() -> String {
-        UUID().uuidString.lowercased()
-    }
-
-    private static func uuidHex() -> String {
-        UUID().uuidString
-            .replacingOccurrences(of: "-", with: "")
-            .lowercased()
-    }
-
-    private static func persistedSessionID() -> String {
-        let storedSessionID = KeychainService.readAnthropicClaudeCodeSessionID()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        if isValidUUIDString(storedSessionID) {
-            return storedSessionID
-        }
-
-        let sessionID = uuidString()
-        KeychainService.saveAnthropicClaudeCodeSessionID(sessionID)
-        return sessionID
-    }
-
-    private static func persistedAccountUUID() -> String {
-        let storedAccountUUID = KeychainService.readAnthropicClaudeCodeAccountUUID()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        if isValidUUIDString(storedAccountUUID) {
-            return storedAccountUUID
-        }
-
-        let accountUUID = uuidString()
-        KeychainService.saveAnthropicClaudeCodeAccountUUID(accountUUID)
-        return accountUUID
-    }
-
-    private static func persistedDeviceID() -> String {
-        let storedDeviceID = KeychainService.readAnthropicClaudeCodeDeviceID()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        if isValidDeviceID(storedDeviceID) {
-            return storedDeviceID
-        }
-
-        // FC relay 的可工作样例使用两个 UUID hex 拼成 64 位 device_id。
-        let deviceID = uuidHex() + uuidHex()
-        KeychainService.saveAnthropicClaudeCodeDeviceID(deviceID)
-        return deviceID
-    }
-
-    private static func isValidUUIDString(_ value: String) -> Bool {
-        UUID(uuidString: value) != nil
-    }
-
-    private static func isValidDeviceID(_ value: String) -> Bool {
-        value.count == 64 && value.allSatisfy(\.isHexDigit)
-    }
-}
-
-struct AnthropicContextManagement: Encodable {
-    static let claudeCodeDefault = AnthropicContextManagement(edits: [
-        Edit(type: "clear_tool_uses_20250919")
-    ])
-
-    let edits: [Edit]
-
-    struct Edit: Encodable {
-        let type: String
-    }
-}
-
 struct AnthropicMessagesRequest: Encodable {
     let model: String
     let maxTokens: Int
@@ -273,8 +187,6 @@ struct AnthropicMessagesRequest: Encodable {
     let tools: [AnthropicToolDefinition]?
     let temperature: Double?
     let topP: Double?
-    let metadata: AnthropicClaudeCodeMetadata?
-    let contextManagement: AnthropicContextManagement?
 
     enum CodingKeys: String, CodingKey {
         case model
@@ -285,8 +197,6 @@ struct AnthropicMessagesRequest: Encodable {
         case tools
         case temperature
         case topP = "top_p"
-        case metadata
-        case contextManagement = "context_management"
     }
 }
 

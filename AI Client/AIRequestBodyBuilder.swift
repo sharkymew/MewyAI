@@ -7,13 +7,6 @@
 import Foundation
 
 enum AIRequestBodyBuilder {
-    nonisolated struct AnthropicModelSelection {
-        let requestModel: String
-        let usesOneMillionContext: Bool
-    }
-
-    private static let anthropicClaudeCodeSystemPrompt = "You are Claude Code, Anthropic's official CLI for Claude."
-
     private struct RequestContext {
         let model: String
         let messages: [ChatRequestMessage]
@@ -22,8 +15,6 @@ enum AIRequestBodyBuilder {
         let reasoningEffort: ReasoningEffort?
         let modelParameters: AIModelConfiguration?
         let anthropicMaxTokens: Int
-        let anthropicClaudeCodeImpersonationEnabled: Bool
-        let anthropicClaudeCodeMetadata: AnthropicClaudeCodeMetadata?
         let tools: [AgentToolDefinition]
     }
 
@@ -67,24 +58,16 @@ enum AIRequestBodyBuilder {
 
     private struct AnthropicMessagesRequestAdapter: ProviderRequestAdapter {
         func requestBodyData(context: RequestContext, encoder: JSONEncoder) throws -> Data {
-            let anthropicModel = anthropicModelSelection(from: context.model)
-            let usesOneMillionContext = context.anthropicClaudeCodeImpersonationEnabled
-                || anthropicModel.usesOneMillionContext
-            let anthropicMessages = anthropicMessages(
-                from: context.messages,
-                usesClaudeCodeImpersonation: context.anthropicClaudeCodeImpersonationEnabled
-            )
+            let anthropicMessages = anthropicMessages(from: context.messages)
             return try encoder.encode(AnthropicMessagesRequest(
-                model: anthropicModel.requestModel,
-                maxTokens: usesOneMillionContext ? 64_000 : max(1, context.anthropicMaxTokens),
+                model: context.model,
+                maxTokens: max(1, context.anthropicMaxTokens),
                 messages: anthropicMessages.messages,
                 system: anthropicMessages.system,
                 stream: context.stream,
                 tools: anthropicTools(from: context.tools),
                 temperature: context.modelParameters?.temperature,
-                topP: context.modelParameters?.topP,
-                metadata: context.anthropicClaudeCodeImpersonationEnabled ? context.anthropicClaudeCodeMetadata : nil,
-                contextManagement: usesOneMillionContext ? .claudeCodeDefault : nil
+                topP: context.modelParameters?.topP
             ))
         }
     }
@@ -108,8 +91,6 @@ enum AIRequestBodyBuilder {
         reasoningEffort: ReasoningEffort?,
         modelParameters: AIModelConfiguration?,
         anthropicMaxTokens: Int,
-        anthropicClaudeCodeImpersonationEnabled: Bool = false,
-        anthropicClaudeCodeMetadata: AnthropicClaudeCodeMetadata? = nil,
         tools: [AgentToolDefinition] = []
     ) throws -> Data {
         let context = RequestContext(
@@ -120,8 +101,6 @@ enum AIRequestBodyBuilder {
             reasoningEffort: reasoningEffort,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
-            anthropicClaudeCodeMetadata: anthropicClaudeCodeMetadata,
             tools: tools
         )
         return try adapter(for: apiFormat).requestBodyData(context: context, encoder: JSONEncoder())
@@ -138,23 +117,6 @@ enum AIRequestBodyBuilder {
         case .vertexAIExpress:
             VertexAIExpressRequestAdapter()
         }
-    }
-
-    nonisolated static func anthropicModelSelection(from model: String) -> AnthropicModelSelection {
-        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let suffix = "[1m]"
-        guard trimmedModel.lowercased().hasSuffix(suffix) else {
-            return AnthropicModelSelection(requestModel: trimmedModel, usesOneMillionContext: false)
-        }
-
-        let suffixStartIndex = trimmedModel.index(trimmedModel.endIndex, offsetBy: -suffix.count)
-        let baseModel = trimmedModel[..<suffixStartIndex]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !baseModel.isEmpty else {
-            return AnthropicModelSelection(requestModel: trimmedModel, usesOneMillionContext: false)
-        }
-
-        return AnthropicModelSelection(requestModel: baseModel, usesOneMillionContext: true)
     }
 
     private static func openAIResponsesMessages(
@@ -205,8 +167,7 @@ enum AIRequestBodyBuilder {
     }
 
     private static func anthropicMessages(
-        from messages: [ChatRequestMessage],
-        usesClaudeCodeImpersonation: Bool
+        from messages: [ChatRequestMessage]
     ) -> (system: AnthropicSystemContent?, messages: [AnthropicMessage]) {
         var systemMessages = [String]()
         var requestMessages = [AnthropicMessage]()
@@ -258,33 +219,15 @@ enum AIRequestBodyBuilder {
             ))
         }
 
-        if usesClaudeCodeImpersonation,
-           let lastMessage = requestMessages.popLast() {
-            requestMessages.append(lastMessage.applyingEphemeralCacheControlToLastContentPart())
-        }
-
         return (
-            anthropicSystemContent(
-                from: systemMessages,
-                usesClaudeCodeImpersonation: usesClaudeCodeImpersonation
-            ),
+            anthropicSystemContent(from: systemMessages),
             requestMessages
         )
     }
 
     private static func anthropicSystemContent(
-        from systemMessages: [String],
-        usesClaudeCodeImpersonation: Bool
+        from systemMessages: [String]
     ) -> AnthropicSystemContent? {
-        if usesClaudeCodeImpersonation {
-            return .parts([
-                AnthropicSystemPart(
-                    text: anthropicClaudeCodeSystemPrompt,
-                    cacheControl: .ephemeral
-                )
-            ])
-        }
-
         guard !systemMessages.isEmpty else { return nil }
         return .text(systemMessages.joined(separator: "\n\n"))
     }

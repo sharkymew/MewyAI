@@ -120,7 +120,6 @@ final class ChatSessionViewModel {
         let model: String
         let modelParameters: AIModelConfiguration?
         let anthropicMaxTokens: Int
-        let anthropicClaudeCodeImpersonationEnabled: Bool
         let reasoningEnabled: Bool?
         let reasoningEffort: ReasoningEffort?
         let usesImageAttachments: Bool
@@ -274,7 +273,6 @@ final class ChatSessionViewModel {
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelParameters = configuration.selectedModelConfiguration
         let anthropicMaxTokens = configuration.anthropicMaxTokens
-        let anthropicClaudeCodeImpersonationEnabled = configuration.anthropicClaudeCodeImpersonationEnabled
         let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
         let usesImageAttachments = configuration.selectedModelSupportsImages
@@ -361,7 +359,6 @@ final class ChatSessionViewModel {
             model: model,
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: reasoningEnabled,
             reasoningEffort: reasoningEffort,
             usesImageAttachments: usesImageAttachments,
@@ -397,7 +394,6 @@ final class ChatSessionViewModel {
             model: request.model,
             modelParameters: request.modelParameters,
             anthropicMaxTokens: request.anthropicMaxTokens,
-            anthropicClaudeCodeImpersonationEnabled: request.anthropicClaudeCodeImpersonationEnabled,
             reasoningEnabled: request.reasoningEnabled,
             reasoningEffort: request.reasoningEffort,
             usesImageAttachments: request.usesImageAttachments,

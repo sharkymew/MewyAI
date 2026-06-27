@@ -17,7 +17,7 @@ struct AI_ClientApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            AppRootView()
         }
     }
 }

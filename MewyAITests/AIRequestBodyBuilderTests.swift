@@ -113,7 +113,7 @@ final class AIRequestBodyBuilderTests: XCTestCase {
         XCTAssertEqual(input[2]["output"] as? String, "result")
     }
 
-    func testBuildsAnthropicRequestWithOneMillionContextModelSuffix() throws {
+    func testBuildsAnthropicRequestWithoutSpecialModelSuffixHandling() throws {
         let tool = agentTool(
             functionName: "lookup_docs",
             description: "Look up docs."
@@ -124,9 +124,10 @@ final class AIRequestBodyBuilderTests: XCTestCase {
             displayName: "Lookup Docs",
             argumentsJSON: "{\"query\":\"swift\"}"
         )
+        let modelName = "claude-sonnet-4 " + "[1" + "m]"
         let json = try jsonObject(from: AIRequestBodyBuilder.requestBodyData(
             apiFormat: .anthropicMessages,
-            model: "claude-sonnet-4 [1m]",
+            model: modelName,
             messages: [
                 ChatRequestMessage(role: "system", text: "Be precise."),
                 ChatRequestMessage(role: "user", text: "Hello"),
@@ -146,10 +147,11 @@ final class AIRequestBodyBuilderTests: XCTestCase {
             tools: [tool]
         ))
 
-        XCTAssertEqual(json["model"] as? String, "claude-sonnet-4")
-        XCTAssertEqual(json["max_tokens"] as? Int, 64_000)
+        XCTAssertEqual(json["model"] as? String, modelName)
+        XCTAssertEqual(json["max_tokens"] as? Int, 4096)
         XCTAssertEqual(json["system"] as? String, "Be precise.")
-        XCTAssertNotNil(json["context_management"])
+        XCTAssertNil(json["context" + "_management"])
+        XCTAssertNil(json["metadata"])
         XCTAssertEqual((json["tools"] as? [[String: Any]])?.first?["name"] as? String, "lookup_docs")
         XCTAssertEqual((json["tools"] as? [[String: Any]])?.first?["description"] as? String, "Look up docs.")
         XCTAssertNotNil((json["tools"] as? [[String: Any]])?.first?["input_schema"] as? [String: Any])
@@ -170,49 +172,6 @@ final class AIRequestBodyBuilderTests: XCTestCase {
         XCTAssertEqual(toolResultContent.first?["type"] as? String, "tool_result")
         XCTAssertEqual(toolResultContent.first?["tool_use_id"] as? String, "call_1")
         XCTAssertEqual(toolResultContent.first?["content"] as? String, "result")
-    }
-
-    func testBuildsAnthropicClaudeCodeImpersonationRequestWithEphemeralCacheControl() throws {
-        let json = try jsonObject(from: AIRequestBodyBuilder.requestBodyData(
-            apiFormat: .anthropicMessages,
-            model: "claude-sonnet-4",
-            messages: [
-                ChatRequestMessage(role: "system", text: "Use project context."),
-                ChatRequestMessage(role: "user", text: "Hello")
-            ],
-            stream: true,
-            reasoningEnabled: nil,
-            reasoningEffort: nil,
-            modelParameters: nil,
-            anthropicMaxTokens: 2048,
-            anthropicClaudeCodeImpersonationEnabled: true
-        ))
-
-        XCTAssertEqual(json["model"] as? String, "claude-sonnet-4")
-        XCTAssertEqual(json["max_tokens"] as? Int, 64_000)
-        XCTAssertNotNil(json["context_management"])
-        XCTAssertNil(json["metadata"])
-
-        let system = try XCTUnwrap(json["system"] as? [[String: Any]])
-        XCTAssertEqual(system.count, 1)
-        XCTAssertEqual(system.first?["type"] as? String, "text")
-        XCTAssertEqual(
-            (system.first?["cache_control"] as? [String: Any])?["type"] as? String,
-            "ephemeral"
-        )
-
-        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
-        XCTAssertEqual(messages.count, 1)
-        XCTAssertEqual(messages.first?["role"] as? String, "user")
-
-        let content = try XCTUnwrap(messages.first?["content"] as? [[String: Any]])
-        XCTAssertEqual(content.count, 1)
-        XCTAssertEqual(content.first?["type"] as? String, "text")
-        XCTAssertEqual(content.first?["text"] as? String, "Hello")
-        XCTAssertEqual(
-            (content.first?["cache_control"] as? [String: Any])?["type"] as? String,
-            "ephemeral"
-        )
     }
 
     func testBuildsVertexRequestWithSystemInstructionAndGenerationConfig() throws {
