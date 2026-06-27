@@ -16,6 +16,7 @@ struct MessageBubble: View {
     let onReasoningExpansionChanged: (Bool) -> Void
     let onRegenerate: () -> Void
     let onEdit: () -> Void
+    let onClearGeneratedContent: () -> Void
     let onSelectPreviousRevision: () -> Void
     let onSelectNextRevision: () -> Void
     @Environment(\.colorScheme) private var colorScheme
@@ -37,15 +38,18 @@ struct MessageBubble: View {
     }
 
     private var displayContent: String {
-        message.content
+        guard !message.isContentCleared else { return "" }
+        return message.content
     }
 
     private var displayReasoningContent: String {
-        message.reasoningContent
+        guard !message.isContentCleared else { return "" }
+        return message.reasoningContent
     }
 
     private var displayReasoningChunks: [String] {
-        message.reasoningChunks
+        guard !message.isContentCleared else { return [] }
+        return message.reasoningChunks
     }
 
     private var hasReasoningContent: Bool {
@@ -110,6 +114,18 @@ struct MessageBubble: View {
             } else {
                 assistantMessageStack
                 Spacer(minLength: 48)
+            }
+        }
+        .contextMenu {
+            if shouldOfferClearGeneratedContentAction {
+                Button(role: .destructive) {
+                    onClearGeneratedContent()
+                } label: {
+                    Label(
+                        AppLocalizations.string("chat.message.clearAction", defaultValue: "清除"),
+                        systemImage: "trash"
+                    )
+                }
             }
         }
     }
@@ -192,19 +208,21 @@ struct MessageBubble: View {
 
     private var assistantMessageStack: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !message.toolExchanges.isEmpty {
+            if !message.isContentCleared, !message.toolExchanges.isEmpty {
                 toolActivityBlock
             }
 
-            if hasReasoningContent {
+            if !message.isContentCleared, hasReasoningContent {
                 reasoningBlock
             }
 
-            if shouldShowMessageContentBubble {
+            if message.isContentCleared {
+                clearedContentBubble
+            } else if shouldShowMessageContentBubble {
                 messageContentBubble
             }
 
-            if !isStreaming, let usageDisplayText {
+            if !message.isContentCleared, !isStreaming, let usageDisplayText {
                 Text(usageDisplayText)
                     .font(.caption2)
                     .monospacedDigit()
@@ -212,15 +230,34 @@ struct MessageBubble: View {
                     .padding(.leading, 6)
             }
 
-            if showsActions, !displayContent.isEmpty {
-                Button {
-                    onRegenerate()
-                } label: {
-                    Label("重新生成", systemImage: "arrow.clockwise")
-                        .font(.caption)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            if showsActions, shouldShowAssistantActions {
+                HStack(spacing: 8) {
+                    if !displayContent.isEmpty {
+                        Button {
+                            onRegenerate()
+                        } label: {
+                            Label("重新生成", systemImage: "arrow.clockwise")
+                                .font(.caption)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                        }
+                    }
+
+                    if shouldOfferClearGeneratedContentAction {
+                        Button(role: .destructive) {
+                            onClearGeneratedContent()
+                        } label: {
+                            Label(
+                                AppLocalizations.string("chat.message.clearAction", defaultValue: "清除"),
+                                systemImage: "trash"
+                            )
+                                .font(.caption)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(Color.red.opacity(0.12)))
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
                 .transition(.opacity)
@@ -228,6 +265,29 @@ struct MessageBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(.easeOut(duration: 0.16), value: showsActions)
+    }
+
+    private var shouldOfferClearGeneratedContentAction: Bool {
+        !isUser && !isStreaming && !message.isContentCleared
+    }
+
+    private var shouldShowAssistantActions: Bool {
+        !message.isContentCleared && (!displayContent.isEmpty || shouldOfferClearGeneratedContentAction)
+    }
+
+    private var clearedContentBubble: some View {
+        Text(AppLocalizations.string(
+            "chat.message.contentCleared",
+            defaultValue: "此 AI 内容已在本机清除。"
+        ))
+        .font(.body)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(assistantBubbleColor)
+        )
     }
 
     private var toolActivityTitleIsActive: Bool {

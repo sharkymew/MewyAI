@@ -8,6 +8,7 @@ struct ChatRootPresentations: ViewModifier {
     @Binding var conversationRenameDraft: ConversationRenameDraft
     @Binding var conversationExportDraft: ConversationExportDraft
     @Binding var conversationSaveErrorMessage: String?
+    @Binding var pendingClearGeneratedContentMessageID: UUID?
     @Binding var attachmentDraft: ChatAttachmentDraft
 
     let promptConfigurationID: UUID
@@ -15,6 +16,7 @@ struct ChatRootPresentations: ViewModifier {
     let toolApprovalMessage: String
     let onResetRenamingConversation: () -> Void
     let onCommitRenamingConversation: () -> Void
+    let onConfirmClearGeneratedContent: () -> Void
     let onResolveToolApproval: (Bool) -> Void
     let onLoadSelectedFiles: (Result<[URL], Error>) -> Void
     let onConfigurationDismissed: () -> Void
@@ -54,6 +56,24 @@ struct ChatRootPresentations: ViewModifier {
                 }
             } message: {
                 Text(conversationSaveErrorMessage ?? "")
+            }
+            .alert(
+                AppLocalizations.string("chat.message.clearConfirmationTitle", defaultValue: "清除 AI 内容？"),
+                isPresented: clearGeneratedContentPresented
+            ) {
+                Button(AppLocalizations.string("取消", defaultValue: "取消"), role: .cancel) {
+                    pendingClearGeneratedContentMessageID = nil
+                }
+                Button(
+                    AppLocalizations.string("chat.message.clearConfirm", defaultValue: "清除内容"),
+                    role: .destructive,
+                    action: onConfirmClearGeneratedContent
+                )
+            } message: {
+                Text(AppLocalizations.string(
+                    "chat.message.clearConfirmationMessage",
+                    defaultValue: "这会在本机清除该条 AI 生成内容，不会上传聊天内容或清除记录。"
+                ))
             }
             .alert(
                 "允许工具调用？",
@@ -129,6 +149,16 @@ struct ChatRootPresentations: ViewModifier {
         }
     }
 
+    private var clearGeneratedContentPresented: Binding<Bool> {
+        Binding {
+            pendingClearGeneratedContentMessageID != nil
+        } set: { isPresented in
+            if !isPresented {
+                pendingClearGeneratedContentMessageID = nil
+            }
+        }
+    }
+
     private var toolApprovalPresented: Binding<Bool> {
         Binding {
             pendingToolApproval != nil
@@ -148,12 +178,14 @@ extension View {
         conversationRenameDraft: Binding<ConversationRenameDraft>,
         conversationExportDraft: Binding<ConversationExportDraft>,
         conversationSaveErrorMessage: Binding<String?>,
+        pendingClearGeneratedContentMessageID: Binding<UUID?>,
         attachmentDraft: Binding<ChatAttachmentDraft>,
         promptConfigurationID: UUID,
         pendingToolApproval: PendingToolApproval?,
         toolApprovalMessage: String,
         onResetRenamingConversation: @escaping () -> Void,
         onCommitRenamingConversation: @escaping () -> Void,
+        onConfirmClearGeneratedContent: @escaping () -> Void,
         onResolveToolApproval: @escaping (Bool) -> Void,
         onLoadSelectedFiles: @escaping (Result<[URL], Error>) -> Void,
         onConfigurationDismissed: @escaping () -> Void,
@@ -168,12 +200,14 @@ extension View {
             conversationRenameDraft: conversationRenameDraft,
             conversationExportDraft: conversationExportDraft,
             conversationSaveErrorMessage: conversationSaveErrorMessage,
+            pendingClearGeneratedContentMessageID: pendingClearGeneratedContentMessageID,
             attachmentDraft: attachmentDraft,
             promptConfigurationID: promptConfigurationID,
             pendingToolApproval: pendingToolApproval,
             toolApprovalMessage: toolApprovalMessage,
             onResetRenamingConversation: onResetRenamingConversation,
             onCommitRenamingConversation: onCommitRenamingConversation,
+            onConfirmClearGeneratedContent: onConfirmClearGeneratedContent,
             onResolveToolApproval: onResolveToolApproval,
             onLoadSelectedFiles: onLoadSelectedFiles,
             onConfigurationDismissed: onConfigurationDismissed,

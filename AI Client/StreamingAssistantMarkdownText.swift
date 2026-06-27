@@ -11,6 +11,11 @@ struct StreamingAssistantMarkdownText: View {
     @State private var renderedSegments: [StreamingChatMarkdownSegment]
     @State private var renderCache = PreparedMarkdownBlockCache()
     @State private var renderTask: Task<Void, Never>?
+    @State private var renderTaskID: UUID?
+    @State private var detachedRenderTask: Task<StreamingMarkdownRenderResult?, Never>?
+    // Monotonic render invalidation token. Comparing this is O(1), so long
+    // streaming responses do not force MainActor to scan entire strings.
+    @State private var renderVersion: Int = 0
     @State private var needsRenderAfterCurrentTask = false
     @State private var streamingObserverID: UUID?
 
@@ -59,10 +64,12 @@ struct StreamingAssistantMarkdownText: View {
         }
         .onChange(of: content) { _, newContent in
             guard streamingChannel == nil else { return }
+            renderVersion += 1
             renderedContent = newContent
             scheduleRender()
         }
         .onChange(of: colorScheme) { _, _ in
+            renderVersion += 1
             renderCache = PreparedMarkdownBlockCache()
             scheduleRender(delay: .zero)
         }
@@ -88,34 +95,83 @@ struct StreamingAssistantMarkdownText: View {
             return
         }
 
+        let taskID = UUID()
+        renderTaskID = taskID
         renderTask = Task { @MainActor in
             try? await Task.sleep(for: delay)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                // A cancelled task must release the render lock before it exits;
+                // otherwise renderTask stays non-nil and future tokens cannot
+                // schedule another render. The task ID prevents an old cancelled
+                // task from clearing a newer render task that replaced it.
+                clearRenderTaskIfCurrent(taskID)
+                return
+            }
+
             applyPendingChunks()
             let contentSnapshot = renderedContent
+            // Capture the version immediately before the detached render. Doing
+            // this after applyPendingChunks preserves the 50ms batch window while
+            // still letting us reject stale detached results with an O(1) check.
+            let versionSnapshot = renderVersion
             let style = renderStyle
             let cacheSnapshot = renderCache
-            let result = await Task.detached(priority: .userInitiated) {
+            let detachedTask = Task.detached(priority: .userInitiated) {
                 await Self.renderSegments(
                     for: contentSnapshot,
                     style: style,
                     cache: cacheSnapshot
                 )
-            }.value
-            guard !Task.isCancelled else { return }
-            if renderedContent == contentSnapshot {
+            }
+            detachedRenderTask = detachedTask
+            let result = await detachedTask.value
+
+            guard !Task.isCancelled else {
+                // Same lock-release rule applies after the detached renderer
+                // returns: every cancellation exit must unblock the state machine.
+                clearRenderTaskIfCurrent(taskID)
+                return
+            }
+
+            guard let result else {
+                // nil is the renderer's explicit cancellation sentinel. It means
+                // the detached task cooperatively stopped before producing a full
+                // render, so MainActor must not treat it as a valid empty result
+                // or apply it over the currently displayed content.
+                clearRenderTaskIfCurrent(taskID)
+                let shouldRenderAgain = needsRenderAfterCurrentTask || !pendingAppendChunks.isEmpty
+                needsRenderAfterCurrentTask = false
+                if shouldRenderAgain {
+                    scheduleRender()
+                }
+                return
+            }
+
+            // Version guard replaces renderedContent == contentSnapshot. That
+            // avoids repeatedly scanning large streamed transcripts on MainActor.
+            if renderVersion == versionSnapshot {
                 renderedSegments = result.segments
                 renderCache = result.cache
             } else {
                 needsRenderAfterCurrentTask = true
             }
-            renderTask = nil
+            // Clear before tail-scheduling; otherwise scheduleRender() would see
+            // the current task and set needsRenderAfterCurrentTask instead of
+            // starting the next render.
+            clearRenderTaskIfCurrent(taskID)
             let shouldRenderAgain = needsRenderAfterCurrentTask || !pendingAppendChunks.isEmpty
             needsRenderAfterCurrentTask = false
             if shouldRenderAgain {
                 scheduleRender()
             }
         }
+    }
+
+    private func clearRenderTaskIfCurrent(_ taskID: UUID) {
+        guard renderTaskID == taskID else { return }
+        renderTask = nil
+        renderTaskID = nil
+        detachedRenderTask = nil
     }
 
     private func renderImmediately() {
@@ -135,6 +191,7 @@ struct StreamingAssistantMarkdownText: View {
             cancelRenderTask()
             pendingAppendChunks.removeAll(keepingCapacity: true)
             needsRenderAfterCurrentTask = false
+            renderVersion += 1
             renderedContent = update.chunks.joined()
             renderCache = PreparedMarkdownBlockCache()
             renderedSegments = Self.fallbackSegments(for: renderedContent)
@@ -145,6 +202,7 @@ struct StreamingAssistantMarkdownText: View {
         }
 
         guard !update.chunks.isEmpty else { return }
+        renderVersion += 1
         pendingAppendChunks.append(contentsOf: update.chunks)
         if renderedContent.isEmpty {
             renderImmediately()
@@ -171,7 +229,10 @@ struct StreamingAssistantMarkdownText: View {
 
     private func cancelRenderTask() {
         renderTask?.cancel()
+        detachedRenderTask?.cancel()
         renderTask = nil
+        renderTaskID = nil
+        detachedRenderTask = nil
         needsRenderAfterCurrentTask = false
     }
 
@@ -192,12 +253,26 @@ struct StreamingAssistantMarkdownText: View {
         for content: String,
         style: MarkdownRenderStyle,
         cache: PreparedMarkdownBlockCache
-    ) async -> StreamingMarkdownRenderResult {
+    ) async -> StreamingMarkdownRenderResult? {
         let previousBlockCache = cache
         var nextBlockCache = PreparedMarkdownBlockCache()
         var segments: [StreamingChatMarkdownSegment] = []
 
         for segment in ChatMarkdownBlockSegment.split(content) {
+            guard !Task.isCancelled else {
+                // Task.detached does not inherit the outer renderTask's
+                // cancellation automatically, so cancelRenderTask() explicitly
+                // cancels the detached task handle. This checkpoint is the
+                // renderer's cooperative stop sign: once cancellation is visible
+                // here, return immediately instead of spending CPU/battery on
+                // Markdown parsing, layout preparation, code blocks, or formulas
+                // for content that MainActor will discard anyway. nil is used
+                // deliberately here to distinguish "cancelled before completion"
+                // from a successful render whose content legitimately produced
+                // an empty segment array.
+                return nil
+            }
+
             switch segment.kind {
             case let .text(text):
                 let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -208,6 +283,16 @@ struct StreamingAssistantMarkdownText: View {
                     ))
                 } else {
                     for (groupIndex, group) in splitStreamingTextGroups(trimmedText).enumerated() {
+                        guard !Task.isCancelled else {
+                            // A single Markdown text segment can still contain
+                            // many streaming paragraph/table/list groups. Check
+                            // again at this finer boundary so a cancelled long
+                            // reply stops between expensive renderBlocks calls.
+                            // nil carries the same cancellation semantic at this
+                            // finer boundary: this is not a valid empty render.
+                            return nil
+                        }
+
                         let textSignature = textSegmentSignature(for: group, style: style)
                         if let blocks = previousBlockCache.blocks(forTextSignature: textSignature) {
                             nextBlockCache.store(blocks, forTextSignature: textSignature)
@@ -224,6 +309,15 @@ struct StreamingAssistantMarkdownText: View {
                             style: style,
                             cache: previousBlockCache
                         )
+                        guard !Task.isCancelled else {
+                            // If cancellation arrived while renderBlocks was
+                            // preparing UIKit/Markdown output, do not merge or
+                            // publish work that is already obsolete.
+                            // nil prevents partially obsolete renderBlocks output
+                            // from being confused with a completed empty result.
+                            return nil
+                        }
+
                         nextBlockCache.merge(result.cache)
                         nextBlockCache.store(result.blocks, forTextSignature: textSignature)
                         segments.append(StreamingChatMarkdownSegment(

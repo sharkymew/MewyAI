@@ -30,6 +30,54 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertEqual(message.reasoningContent, "kept reasoning")
         XCTAssertTrue(message.reasoningChunks.isEmpty)
         XCTAssertTrue(message.toolExchanges.isEmpty)
+        XCTAssertFalse(message.isContentCleared)
+    }
+
+    func testClearedGeneratedContentRoundTripsWithoutStoredContent() throws {
+        let usage = ChatUsage(
+            inputTokens: 12,
+            outputTokens: 8,
+            totalTokens: 20,
+            cacheReadInputTokens: 0,
+            modelName: "test-model",
+            configurationID: UUID()
+        )
+        var message = ChatMessage(
+            role: "assistant",
+            content: "answer",
+            contentChunks: ["chunk"],
+            reasoningContent: "reasoning",
+            reasoningChunks: ["reason"],
+            toolExchanges: [
+                ChatToolExchange(
+                    toolCalls: [
+                        ChatToolCall(
+                            id: "call-1",
+                            name: "search",
+                            displayName: "Search",
+                            argumentsJSON: "{}"
+                        )
+                    ]
+                )
+            ],
+            usage: usage,
+            isReasoningExpanded: true
+        )
+
+        message.clearGeneratedContent()
+        let decoded = try JSONDecoder().decode(
+            ChatMessage.self,
+            from: JSONEncoder().encode(message)
+        )
+
+        XCTAssertTrue(decoded.isContentCleared)
+        XCTAssertEqual(decoded.content, "")
+        XCTAssertEqual(decoded.contentChunks, [])
+        XCTAssertEqual(decoded.reasoningContent, "")
+        XCTAssertEqual(decoded.reasoningChunks, [])
+        XCTAssertEqual(decoded.toolExchanges, [])
+        XCTAssertNil(decoded.usage)
+        XCTAssertFalse(decoded.isReasoningExpanded)
     }
 
     func testConversationNormalizeFiltersInvalidRevisionGroups() {

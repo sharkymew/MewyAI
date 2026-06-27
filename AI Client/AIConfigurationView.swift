@@ -155,6 +155,7 @@ struct AIConfigurationView: View {
                 interactionSection
                 notificationSection
                 imageContextSection
+                acknowledgementsSection
             }
             .background(
                 KeyboardDismissTapLayer {
@@ -420,6 +421,28 @@ struct AIConfigurationView: View {
             Text("图片描述")
         } footer: {
             Text("开启后，发送图片给支持图片的模型时，会自动生成隐藏描述并保存在对话中；以后切换到文字模型时可用这段描述代替图片上下文。")
+        }
+    }
+
+    private var acknowledgementsSection: some View {
+        Section {
+            NavigationLink {
+                ThirdPartyAcknowledgementsView()
+            } label: {
+                Label {
+                    Text(AppLocalizations.string(
+                        "acknowledgements.settings.title",
+                        defaultValue: "Open Source Acknowledgements"
+                    ))
+                } icon: {
+                    Image(systemName: "heart.text.square")
+                }
+            }
+        } footer: {
+            Text(AppLocalizations.string(
+                "acknowledgements.settings.footer",
+                defaultValue: "Lists the third-party open source projects and license information used by this app."
+            ))
         }
     }
 

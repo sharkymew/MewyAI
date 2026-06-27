@@ -916,6 +916,93 @@ final class ChatSessionViewModelTests: XCTestCase {
         XCTAssertTrue(generation.tokenBuffer.hasPendingContentText)
         XCTAssertFalse(viewModel.activeAssistantHasContent)
     }
+
+    func testClearGeneratedContentClearsAssistantMessage() {
+        let viewModel = ChatSessionViewModel()
+        let assistantMessageID = UUID()
+        viewModel.messages = [
+            ChatMessage(role: "user", content: "prompt"),
+            ChatMessage(
+                id: assistantMessageID,
+                role: "assistant",
+                content: "answer",
+                reasoningContent: "reasoning",
+                toolExchanges: [
+                    ChatToolExchange(
+                        toolCalls: [
+                            ChatToolCall(
+                                id: "call-1",
+                                name: "search",
+                                displayName: "Search",
+                                argumentsJSON: "{}"
+                            )
+                        ]
+                    )
+                ],
+                usage: ChatUsage(
+                    inputTokens: 1,
+                    outputTokens: 2,
+                    totalTokens: 3,
+                    cacheReadInputTokens: 0,
+                    modelName: "test-model",
+                    configurationID: UUID()
+                ),
+                isReasoningExpanded: true
+            )
+        ]
+
+        XCTAssertTrue(viewModel.clearGeneratedContent(for: assistantMessageID))
+
+        let message = viewModel.messages[1]
+        XCTAssertTrue(message.isContentCleared)
+        XCTAssertEqual(message.content, "")
+        XCTAssertEqual(message.reasoningContent, "")
+        XCTAssertEqual(message.toolExchanges, [])
+        XCTAssertNil(message.usage)
+        XCTAssertFalse(message.isReasoningExpanded)
+    }
+
+    func testClearGeneratedContentRejectsUserMessage() {
+        let viewModel = ChatSessionViewModel()
+        let userMessageID = UUID()
+        let message = ChatMessage(id: userMessageID, role: "user", content: "prompt")
+        viewModel.messages = [message]
+
+        XCTAssertFalse(viewModel.clearGeneratedContent(for: userMessageID))
+        XCTAssertEqual(viewModel.messages, [message])
+    }
+
+    func testClearGeneratedContentRejectsMissingMessage() {
+        let viewModel = ChatSessionViewModel()
+        viewModel.messages = [ChatMessage(role: "assistant", content: "answer")]
+        let originalMessages = viewModel.messages
+
+        XCTAssertFalse(viewModel.clearGeneratedContent(for: UUID()))
+        XCTAssertEqual(viewModel.messages, originalMessages)
+    }
+
+    func testClearGeneratedContentClearsVisibleLiveDisplayState() {
+        let viewModel = ChatSessionViewModel()
+        let conversationID = UUID()
+        let assistantMessageID = UUID()
+        viewModel.messages = [
+            ChatMessage(id: assistantMessageID, role: "assistant", content: "partial")
+        ]
+        let generation = ActiveConversationGeneration(
+            conversationID: conversationID,
+            assistantMessageID: assistantMessageID,
+            service: AIService()
+        )
+        viewModel.beginVisibleGeneration(generation)
+        viewModel.activeAssistantHasContent = true
+
+        XCTAssertTrue(viewModel.clearGeneratedContent(for: assistantMessageID))
+
+        XCTAssertNil(viewModel.activeAssistantMessageID)
+        XCTAssertFalse(viewModel.isGenerating)
+        XCTAssertFalse(viewModel.visibleAssistantDisplayState(for: assistantMessageID).isStreaming)
+        XCTAssertTrue(viewModel.liveAssistantDisplays.isEmpty)
+    }
 }
 
 private extension Result where Success == ChatSessionViewModel.StreamingTurnStartResult,

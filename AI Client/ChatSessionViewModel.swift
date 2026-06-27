@@ -573,6 +573,20 @@ final class ChatSessionViewModel {
         )
     }
 
+    @discardableResult
+    func clearGeneratedContent(for messageID: UUID) -> Bool {
+        guard let index = messages.firstIndex(where: { $0.id == messageID && $0.role == "assistant" }) else {
+            return false
+        }
+
+        messages[index].clearGeneratedContent()
+        liveAssistantDisplays[messageID] = nil
+        if activeAssistantMessageID == messageID {
+            resetVisibleGenerationStateAndMarkIdle()
+        }
+        return true
+    }
+
     func visibleAssistantDisplayState(for assistantMessageID: UUID) -> VisibleAssistantDisplayState {
         let isStreaming = activeAssistantMessageID == assistantMessageID
         guard isStreaming else {

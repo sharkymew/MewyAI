@@ -15,6 +15,7 @@ struct ChatMessageScrollView: View {
     let onReasoningExpansionChanged: (UUID, Bool) -> Void
     let onRegenerate: (UUID) -> Void
     let onEdit: (UUID) -> Void
+    let onClearGeneratedContent: (UUID) -> Void
     let onSelectPreviousRevision: (UUID) -> Void
     let onSelectNextRevision: (UUID) -> Void
     let onHideKeyboard: () -> Void
@@ -50,6 +51,9 @@ struct ChatMessageScrollView: View {
                                 },
                                 onEdit: {
                                     onEdit(message.id)
+                                },
+                                onClearGeneratedContent: {
+                                    onClearGeneratedContent(message.id)
                                 },
                                 onSelectPreviousRevision: {
                                     onSelectPreviousRevision(message.id)

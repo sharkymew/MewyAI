@@ -30,6 +30,7 @@ struct ContentView: View {
     @State private var conversationRenameDraft = ConversationRenameDraft()
     @State private var conversationExportDraft = ConversationExportDraft()
     @State private var conversationSaveErrorMessage: String?
+    @State private var pendingClearGeneratedContentMessageID: UUID?
     @State private var showConfiguration = false
     @State private var showPromptSettings = false
     @State private var showAgentCapabilities = false
@@ -382,12 +383,14 @@ struct ContentView: View {
             conversationRenameDraft: $conversationRenameDraft,
             conversationExportDraft: $conversationExportDraft,
             conversationSaveErrorMessage: $conversationSaveErrorMessage,
+            pendingClearGeneratedContentMessageID: $pendingClearGeneratedContentMessageID,
             attachmentDraft: $attachmentDraft,
             promptConfigurationID: currentConfiguration.id,
             pendingToolApproval: pendingToolApproval,
             toolApprovalMessage: toolApprovalMessage,
             onResetRenamingConversation: resetRenamingConversationState,
             onCommitRenamingConversation: commitRenamingConversation,
+            onConfirmClearGeneratedContent: confirmClearGeneratedContent,
             onResolveToolApproval: resolveToolApproval,
             onLoadSelectedFiles: loadSelectedFiles,
             onConfigurationDismissed: {
@@ -506,6 +509,7 @@ struct ContentView: View {
             },
             onRegenerate: regenerateAssistantResponse,
             onEdit: startEditingUserMessage,
+            onClearGeneratedContent: requestClearGeneratedContent,
             onSelectPreviousRevision: { messageID in
                 selectMessageRevision(messageID, offset: -1)
             },
@@ -1627,6 +1631,35 @@ struct ContentView: View {
             appendsUserMessage: false,
             existingUserMessageID: request.userMessageID
         )
+    }
+
+    private func requestClearGeneratedContent(_ id: UUID) {
+        messageInteraction.didTapBubble = true
+        pendingClearGeneratedContentMessageID = id
+    }
+
+    private func confirmClearGeneratedContent() {
+        guard let messageID = pendingClearGeneratedContentMessageID else { return }
+        pendingClearGeneratedContentMessageID = nil
+        clearGeneratedContent(messageID)
+    }
+
+    private func clearGeneratedContent(_ messageID: UUID) {
+        if let selectedConversationID,
+           activeGeneration(for: messageID, in: selectedConversationID) != nil {
+            cancelActiveGeneration(
+                in: selectedConversationID,
+                marksStopped: false
+            )
+        }
+
+        guard chatSession.clearGeneratedContent(for: messageID) else { return }
+
+        markdownRenderCache.invalidate(for: messageID)
+        withAnimation(.easeOut(duration: 0.16)) {
+            messageInteraction.activeActionID = nil
+        }
+        persistCurrentConversation()
     }
 
     func scheduleTokenFlush(for messageID: UUID) {

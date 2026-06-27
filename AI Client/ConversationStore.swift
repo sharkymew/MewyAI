@@ -202,6 +202,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var usage: ChatUsage?
     var isReasoningExpanded: Bool = false
     var isStopped: Bool = false
+    var isContentCleared: Bool = false
 
     init(
         id: UUID = UUID(),
@@ -216,7 +217,8 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         toolExchanges: [ChatToolExchange] = [],
         usage: ChatUsage? = nil,
         isReasoningExpanded: Bool = false,
-        isStopped: Bool = false
+        isStopped: Bool = false,
+        isContentCleared: Bool = false
     ) {
         self.id = id
         self.role = role
@@ -231,6 +233,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         self.usage = usage
         self.isReasoningExpanded = isReasoningExpanded
         self.isStopped = isStopped
+        self.isContentCleared = isContentCleared
     }
 
     init(from decoder: Decoder) throws {
@@ -248,10 +251,19 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         usage = try container.decodeIfPresent(ChatUsage.self, forKey: .usage)
         isReasoningExpanded = try container.decodeIfPresent(Bool.self, forKey: .isReasoningExpanded) ?? false
         isStopped = try container.decodeIfPresent(Bool.self, forKey: .isStopped) ?? false
+        isContentCleared = try container.decodeIfPresent(Bool.self, forKey: .isContentCleared) ?? false
+        if isContentCleared {
+            clearGeneratedContent()
+        }
     }
 
     var normalized: ChatMessage {
         var message = self
+        if message.isContentCleared {
+            message.clearGeneratedContent()
+            return message
+        }
+
         if message.content.isEmpty, !message.contentChunks.isEmpty {
             message.content = message.contentChunks.joined()
         }
@@ -261,6 +273,17 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         message.toolExchanges = message.toolExchanges.filter { !$0.toolCalls.isEmpty || !$0.toolResults.isEmpty }
         message.contentChunks = []
         return message
+    }
+
+    mutating func clearGeneratedContent() {
+        content = ""
+        contentChunks = []
+        reasoningContent = ""
+        reasoningChunks = []
+        toolExchanges = []
+        usage = nil
+        isReasoningExpanded = false
+        isContentCleared = true
     }
 }
 
