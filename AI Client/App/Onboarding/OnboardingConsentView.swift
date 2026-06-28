@@ -2,172 +2,224 @@ import SwiftUI
 import UIKit
 
 struct OnboardingConsentView: View {
+    private enum LegalDocument: Identifiable {
+        case userAgreement
+        case privacyPolicy
+
+        var id: String {
+            switch self {
+            case .userAgreement:
+                "userAgreement"
+            case .privacyPolicy:
+                "privacyPolicy"
+            }
+        }
+    }
+
     private let onAgree: () -> Void
-    @State private var showsDisagreeAlert = false
-    @State private var showsAgreementAlert = false
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var selectedLegalDocument: LegalDocument?
 
     init(onAgree: @escaping () -> Void) {
         self.onAgree = onAgree
     }
 
     var body: some View {
-        ZStack {
-            Color(uiColor: UIColor.systemGray5)
-                .ignoresSafeArea()
+        GeometryReader { screenProxy in
+            ZStack {
+                onboardingBackground
+                backgroundScrim
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 70)
+                VStack(spacing: 0) {
+                    Spacer(minLength: 96)
 
-                VStack(spacing: 24) {
-                    GeometryReader { proxy in
-                        VStack(alignment: .leading, spacing: 24) {
-                            title
-                            agreementCard
-                                .frame(height: agreementCardHeight(for: proxy.size.height))
-                            Spacer(minLength: 0)
-                            actionButtons
-                        }
-                        .padding(.horizontal, 34)
-                        .padding(.top, 54)
-                        .padding(.bottom, 34)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    GeometryReader { cardProxy in
+                        consentCard(
+                            availableHeight: cardProxy.size.height,
+                            bottomSafeArea: screenProxy.safeAreaInsets.bottom
+                        )
                     }
+                    .frame(maxWidth: 620, maxHeight: .infinity, alignment: .top)
+                    .padding(.horizontal, cardHorizontalInset(for: screenProxy.size.width))
                 }
-                .frame(maxWidth: 620, maxHeight: .infinity, alignment: .topLeading)
-                .background(Color(uiColor: UIColor.systemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
-                .padding(.horizontal, 18)
-                .padding(.bottom, 18)
+                .ignoresSafeArea(edges: .bottom)
             }
         }
-        .alert("暂时无法继续", isPresented: $showsDisagreeAlert) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text("必须阅读并同意用户协议与隐私政策后，才能继续使用本客户端。")
-        }
-        .alert("许可与条款", isPresented: $showsAgreementAlert) {
-            Button("好") {
-                onAgree()
-            }
-        } message: {
-            Text("我已经认真阅读并认可所有协议文本。")
+        .sheet(item: $selectedLegalDocument) { document in
+            legalDocumentView(for: document)
         }
     }
 
-    private var title: some View {
-        Text("欢迎使用 MewyAI")
-            .font(.system(size: 42, weight: .heavy))
-            .lineSpacing(2)
-            .lineLimit(nil)
-            .minimumScaleFactor(0.78)
-            .fixedSize(horizontal: false, vertical: true)
+    private var onboardingBackground: some View {
+        ContentView()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
-    private var agreementCard: some View {
-        let cardBackground = Color(uiColor: UIColor.secondarySystemGroupedBackground)
+    private var backgroundScrim: some View {
+        Color.black
+            .opacity(colorScheme == .dark ? 0.34 : 0.075)
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+    }
 
-        return ZStack {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(cardBackground)
+    private func consentCard(availableHeight: CGFloat, bottomSafeArea: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color(uiColor: UIColor.tertiaryLabel).opacity(0.55))
+                .frame(width: 42, height: 5)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+                .accessibilityHidden(true)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    policyNotice
-                    legalSection(title: "MewyAI 隐私政策", text: privacyPolicyText)
-                    Divider()
-                    legalSection(title: "MewyAI 用户服务协议与最终用户许可协议 (EULA)", text: userAgreementText)
+                VStack(spacing: 28) {
+                    headerBlock
+                    privacyHighlights
                 }
-                .padding(20)
+                .padding(.horizontal, 30)
+                .padding(.top, topContentPadding(for: availableHeight))
+                .padding(.bottom, 18)
             }
-            .scrollIndicators(.visible)
+            .scrollIndicators(.hidden)
 
-            VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [cardBackground, cardBackground.opacity(0)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 24)
+            Spacer(minLength: 0)
 
-                Spacer()
-
-                LinearGradient(
-                    colors: [cardBackground.opacity(0), cardBackground],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 30)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .allowsHitTesting(false)
+            footerBlock
+                .padding(.horizontal, 30)
+                .padding(.bottom, 30 + bottomSafeArea)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial)
+        .background(Color(uiColor: UIColor.systemBackground).opacity(colorScheme == .dark ? 0.88 : 0.94))
+        .clipShape(TopRoundedRectangle(cornerRadius: 36))
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color(uiColor: UIColor.separator).opacity(0.35), lineWidth: 1)
+            TopRoundedSheetBorder(cornerRadius: 36)
+                .stroke(Color.primary.opacity(colorScheme == .dark ? 0.20 : 0.11), lineWidth: 1.2)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(alignment: .top) {
+            TopRoundedSheetBorder(cornerRadius: 36)
+                .stroke(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.82), lineWidth: 1)
+                .blendMode(.plusLighter)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(colorScheme == .dark ? 0.36 : 0.18), radius: 30, x: 0, y: -8)
     }
 
-    private func agreementCardHeight(for availableHeight: CGFloat) -> CGFloat {
-        min(440, max(280, availableHeight - 250))
+    private func cardHorizontalInset(for width: CGFloat) -> CGFloat {
+        width >= 700 ? 18 : 0
     }
 
-    private func legalSection(title: String, text: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.headline.weight(.bold))
-                .lineLimit(nil)
-                .fixedSize(horizontal: false, vertical: true)
+    private var headerBlock: some View {
+        VStack(spacing: 18) {
+            appMark
 
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(.primary)
-                .lineSpacing(4)
-                .textSelection(.enabled)
-                .lineLimit(nil)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: 8) {
+                Text("欢迎使用 MewyAI")
+                    .font(.system(size: 34, weight: .bold, design: .default))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.82)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(verbatim: "自备密钥的独立 AI 客户端")
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+        .frame(maxWidth: .infinity)
     }
 
-    private var policyNotice: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("合规使用提示")
-                .font(.subheadline.weight(.bold))
-            Text("本工具禁止用于生成、传播、存储或处理任何涉黄、涉暴、赌博、恐怖、教唆犯罪、侮辱诽谤、侵权、政治敏感或其他违法违规内容。请仅在合法、合规、尊重他人权益的场景中使用。")
-                .font(.footnote.weight(.semibold))
-                .lineSpacing(3)
-                .lineLimit(nil)
-                .fixedSize(horizontal: false, vertical: true)
+    private var appMark: some View {
+        Image("MewyAILogo")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 72, height: 72)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var privacyHighlights: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            OnboardingPrivacyRow(
+                iconName: "exclamationmark.triangle",
+                title: "合规使用提示",
+                message: "请勿用于生成或传播违法违规、侵权、色情暴力、赌博、恐怖、教唆犯罪、侮辱诽谤或政治敏感内容。"
+            )
+
+            OnboardingPrivacyRow(
+                iconName: "lock.shield",
+                title: "自备密钥与隐私",
+                message: "MewyAI 采用 BYOK 模式；API 密钥与聊天记录保存在本地设备，应用不会建立中央服务器收集您的内容。"
+            )
         }
-        .foregroundStyle(.primary)
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.red.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private var actionButtons: some View {
-        VStack(spacing: 12) {
+    private var footerBlock: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 4) {
+                Text("点击“同意并继续”即表示您已阅读并同意")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                HStack(spacing: 4) {
+                    legalLink("用户协议", document: .userAgreement)
+                    Text("与")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    legalLink("隐私政策", document: .privacyPolicy)
+                }
+            }
+            .frame(maxWidth: .infinity)
+
             Button {
-                showsAgreementAlert = true
+                onAgree()
             } label: {
                 Text("同意并继续")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
+                    .font(.headline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 52)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-
-            Button {
-                showsDisagreeAlert = true
-            } label: {
-                Text("不同意")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(Color.accentColor)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+    }
+
+    private func legalLink(_ title: String, document: LegalDocument) -> some View {
+        Button {
+            selectedLegalDocument = document
+        } label: {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func legalDocumentView(for document: LegalDocument) -> some View {
+        switch document {
+        case .userAgreement:
+            LegalDocumentReader(
+                title: "MewyAI 用户服务协议与最终用户许可协议 (EULA)",
+                text: userAgreementText,
+                externalURL: URL(string: "https://app.notion.com/p/MewyAI-EULA-38b60bf3841180c98c36c4d2880bed37")
+            )
+        case .privacyPolicy:
+            LegalDocumentReader(
+                title: "MewyAI 隐私政策",
+                text: privacyPolicyText,
+                externalURL: URL(string: "https://app.notion.com/p/MewyAI-38a60bf38411807aa8f3c35341856342")
+            )
+        }
+    }
+
+    private func topContentPadding(for availableHeight: CGFloat) -> CGFloat {
+        availableHeight < 620 ? 28 : 38
     }
 
     private let privacyPolicyText = """
@@ -292,4 +344,118 @@ MewyAI（以下简称“本应用”）是一款独立的第三方大模型 API 
 
 点击“同意并继续”，即表示您已充分阅读、理解并接受本协议的全部内容。
 """
+}
+
+private struct OnboardingPrivacyRow: View {
+    let iconName: String
+    let title: String
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: iconName)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 30, height: 30)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(verbatim: title)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(verbatim: message)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(Color(uiColor: UIColor.secondaryLabel))
+                    .lineSpacing(3)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+            }
+            .layoutPriority(1)
+        }
+    }
+}
+
+private struct TopRoundedRectangle: Shape {
+    let cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: [.topLeft, .topRight],
+            cornerRadii: CGSize(width: cornerRadius, height: cornerRadius)
+        )
+        return Path(path.cgPath)
+    }
+}
+
+private struct TopRoundedSheetBorder: Shape {
+    let cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(cornerRadius, rect.width / 2, rect.height / 2)
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + radius, y: rect.minY),
+            control: CGPoint(x: rect.minX, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY + radius),
+            control: CGPoint(x: rect.maxX, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        return path
+    }
+}
+
+private struct LegalDocumentReader: View {
+    let title: String
+    let text: String
+    let externalURL: URL?
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if let externalURL {
+                        Link(destination: externalURL) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "safari")
+                                Text("在线查看")
+                                Image(systemName: "arrow.up.forward")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .font(.subheadline.weight(.semibold))
+                        }
+                    }
+
+                    Text(text)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(6)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 18)
+            }
+            .background(Color(uiColor: UIColor.systemBackground))
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
 }

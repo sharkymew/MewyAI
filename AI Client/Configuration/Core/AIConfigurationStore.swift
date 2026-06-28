@@ -269,6 +269,9 @@ nonisolated enum CustomHeaderSecurity {
 }
 
 struct AIModelConfiguration: Identifiable, Codable, Equatable {
+    private static let defaultDeepSeekV4ProName = "deepseek-v4-pro"
+    private static let defaultDeepSeekV4ProAlias = "V4 Pro"
+
     var id: String { name }
     var name: String
     var alias: String
@@ -311,7 +314,7 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
         priceCurrencyCode: String? = nil
     ) {
         self.name = name
-        self.alias = alias
+        self.alias = Self.normalizedAlias(alias, for: name)
         self.supportsReasoning = supportsReasoning
         self.supportsImages = supportsImages
         self.supportsTools = supportsTools ?? Self.defaultToolsSupport(for: name)
@@ -342,7 +345,7 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
-        alias = try container.decodeIfPresent(String.self, forKey: .alias) ?? ""
+        alias = Self.normalizedAlias(try container.decodeIfPresent(String.self, forKey: .alias) ?? "", for: name)
         supportsReasoning = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoning) ?? false
         supportsImages = try container.decodeIfPresent(Bool.self, forKey: .supportsImages) ?? false
         supportsTools = try container.decodeIfPresent(Bool.self, forKey: .supportsTools)
@@ -377,6 +380,14 @@ struct AIModelConfiguration: Identifiable, Codable, Equatable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
             .hasPrefix("deepseek-v4-")
+    }
+
+    private static func normalizedAlias(_ alias: String, for modelName: String) -> String {
+        let trimmedAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedAlias.isEmpty else { return alias }
+
+        let normalizedModelName = modelName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedModelName == defaultDeepSeekV4ProName ? defaultDeepSeekV4ProAlias : ""
     }
 }
 
