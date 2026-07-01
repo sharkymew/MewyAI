@@ -16,6 +16,7 @@ struct MessageBubble: View {
     let onReasoningExpansionChanged: (Bool) -> Void
     let onRegenerate: () -> Void
     let onEdit: () -> Void
+    let onBranch: () -> Void
     let onClearGeneratedContent: () -> Void
     let onSelectPreviousRevision: () -> Void
     let onSelectNextRevision: () -> Void
@@ -151,17 +152,37 @@ struct MessageBubble: View {
             }
 
             if showsActions {
-                Button {
-                    onEdit()
-                } label: {
-                    Label("修改", systemImage: "pencil")
+                HStack(spacing: 8) {
+                    Button {
+                        onBranch()
+                    } label: {
+                        Label(
+                            AppLocalizations.string(
+                                "chat.message.branchAction",
+                                defaultValue: "分叉"
+                            ),
+                            systemImage: "arrow.triangle.branch"
+                        )
                         .font(.caption)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
+
+                    Button {
+                        onEdit()
+                    } label: {
+                        Label("修改", systemImage: "pencil")
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
                 }
-                .buttonStyle(.plain)
-                .transition(.opacity)
             }
         }
         .frame(maxWidth: 300, alignment: .trailing)

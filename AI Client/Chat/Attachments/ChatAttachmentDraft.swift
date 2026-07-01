@@ -8,6 +8,7 @@ struct ChatAttachmentDraft {
 
     var selectedPhotoItems: [PhotosPickerItem] = []
     var isPhotoPickerPresented = false
+    var isCameraPresented = false
     var isFileImporterPresented = false
     var pendingImageAttachments: [ChatImageAttachment] = []
     var pendingFileAttachments: [ChatFileAttachment] = []

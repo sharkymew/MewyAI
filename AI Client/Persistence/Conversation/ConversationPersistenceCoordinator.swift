@@ -38,6 +38,11 @@ enum ConversationPersistenceCoordinator {
         let contextMessages: [ChatMessage]
     }
 
+    struct BranchConversationResult: Equatable {
+        let conversation: AIConversation
+        let generationRequest: ExistingUserMessageGenerationRequest
+    }
+
     struct ConversationDeletionResult: Equatable {
         let selectedConversation: AIConversation?
         let didReplaceWithNewConversation: Bool
@@ -379,6 +384,50 @@ enum ConversationPersistenceCoordinator {
             imageContextDescription: userMessage.imageContextDescription,
             fileAttachments: userMessage.fileAttachments,
             contextMessages: Array(messages.prefix(userIndex))
+        )
+    }
+
+    static func prepareBranchFromMessage(
+        _ messageID: UUID,
+        in sourceConversation: AIConversation,
+        messages: [ChatMessage],
+        activeSkillIDs: Set<UUID>,
+        activeMCPServerIDs: Set<UUID>,
+        date: Date = Date()
+    ) -> BranchConversationResult? {
+        guard let userIndex = messages.firstIndex(where: { $0.id == messageID && $0.role == "user" }) else {
+            return nil
+        }
+
+        let userMessage = messages[userIndex]
+        let branchMessages = Array(messages.prefix(through: userIndex))
+
+        let branchedConversation = AIConversation(
+            title: AppLocalizations.string("conversation.newTitle", defaultValue: "New Chat"),
+            messages: branchMessages,
+            messageRevisionGroups: [],
+            createdAt: date,
+            updatedAt: date,
+            hasGeneratedTitle: false,
+            isPinned: false,
+            activeSkillIDs: Array(activeSkillIDs),
+            activeMCPServerIDs: Array(activeMCPServerIDs),
+            branchedFromConversationID: sourceConversation.id,
+            branchedFromMessageID: messageID
+        )
+
+        let generationRequest = ExistingUserMessageGenerationRequest(
+            userMessageID: messageID,
+            userText: userMessage.content,
+            imageAttachments: userMessage.imageAttachments,
+            imageContextDescription: userMessage.imageContextDescription,
+            fileAttachments: userMessage.fileAttachments,
+            contextMessages: Array(branchMessages.prefix(userIndex))
+        )
+
+        return BranchConversationResult(
+            conversation: branchedConversation,
+            generationRequest: generationRequest
         )
     }
 

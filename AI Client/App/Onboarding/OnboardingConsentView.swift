@@ -216,12 +216,13 @@ struct OnboardingConsentView: View {
             } label: {
                 Text("同意并继续")
                     .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
                     .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(Color.accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .background(Color.accentColor)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 

@@ -22,6 +22,8 @@ struct ContentView: View {
     private var isGlobalMemoryEnabled = ChatMemoryStore.defaultMemoryEnabled
     @AppStorage(ChatMemoryStore.historyRecallEnabledKey)
     private var isHistoryRecallEnabled = ChatMemoryStore.defaultHistoryRecallEnabled
+    @AppStorage(AIConfigurationStore.saveCapturedPhotosToLibraryKey)
+    private var isSaveCapturedPhotosToLibraryEnabled = AIConfigurationStore.defaultSaveCapturedPhotosToLibrary
     @State private var chatSessionPostProcessor = ChatSessionPostProcessor()
     @StateObject private var inputDraft = ChatInputDraft()
     @State private var conversations = ConversationStore.loadConversationsForStartup()
@@ -399,7 +401,10 @@ struct ContentView: View {
             },
             onPromptSettingsDismissed: reloadConfigurations,
             onAgentCapabilitiesDismissed: reloadAgentCapabilities,
-            onSelectedPhotoItemsChanged: loadSelectedImages
+            onSelectedPhotoItemsChanged: loadSelectedImages,
+            onCameraImageCaptured: { image in
+                handleCameraImage(image)
+            }
         )
         .onChange(of: dynamicTypeSize) { _, _ in
             markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
@@ -509,6 +514,7 @@ struct ContentView: View {
             },
             onRegenerate: regenerateAssistantResponse,
             onEdit: startEditingUserMessage,
+            onBranch: branchFromMessage,
             onClearGeneratedContent: requestClearGeneratedContent,
             onSelectPreviousRevision: { messageID in
                 selectMessageRevision(messageID, offset: -1)
@@ -527,6 +533,13 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
 
             Text("在临时聊天中，聊天不会出现在历史记录中，但是在此对话进行过程中，你的上下文记录会被发送到模型提供商。")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("即使开启了「保存拍摄的照片到相册」，在临时聊天中拍摄的照片也不会保存到相册。")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -751,12 +764,15 @@ struct ContentView: View {
             agentSkills: agentSkills,
             mcpServers: mcpServers,
             capabilitySelection: agentCapabilitySelection,
-            onOpenPhotoPicker: {
-                attachmentDraft.isPhotoPickerPresented = true
-            },
-            onOpenFileImporter: {
-                attachmentDraft.isFileImporterPresented = true
-            },
+onOpenPhotoPicker: {
+            attachmentDraft.isPhotoPickerPresented = true
+        },
+        onOpenCamera: {
+            attachmentDraft.isCameraPresented = true
+        },
+        onOpenFileImporter: {
+            attachmentDraft.isFileImporterPresented = true
+        },
             onToggleSkill: toggleSkill,
             onToggleMCPServer: toggleMCPServer,
             onManageSkills: {
@@ -1633,6 +1649,61 @@ struct ContentView: View {
         )
     }
 
+    private func branchFromMessage(_ id: UUID) {
+        messageInteraction.didTapBubble = true
+
+        guard !isGenerating,
+              let currentSelectionID = selectedConversationID,
+              let sourceConversation = conversations.first(where: { $0.id == currentSelectionID }),
+              let branch = ConversationPersistenceCoordinator.prepareBranchFromMessage(
+                id,
+                in: sourceConversation,
+                messages: messages,
+                activeSkillIDs: agentCapabilitySelection.activeSkillIDs,
+                activeMCPServerIDs: agentCapabilitySelection.activeMCPServerIDs
+              ) else {
+            return
+        }
+
+        prepareCurrentConversationForNavigation()
+
+        let newConversation = branch.conversation
+        conversations.insert(newConversation, at: 0)
+        selectedConversationID = newConversation.id
+
+        chatSession.replaceVisibleConversation(
+            messages: newConversation.messages,
+            systemPrompt: currentConfiguration.systemPrompt,
+            usesImageAttachments: currentConfiguration.selectedModelSupportsImages,
+            marksIdle: false
+        )
+        agentCapabilitySelection.restore(
+            skillIDs: newConversation.activeSkillIDs,
+            mcpServerIDs: newConversation.activeMCPServerIDs
+        )
+        markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
+        inputDraft.clearText()
+        resetSpeechInputMergeState()
+        attachmentDraft.clear()
+        messageInteraction.activeActionID = nil
+        messageInteraction.editingMessageID = nil
+        chatScrollController.restoreAfterConversationChange()
+        saveSelectedConversationIDIfStored(newConversation.id)
+        saveStoredConversations()
+        setConversationSidebarVisibility(false)
+
+        let request = branch.generationRequest
+        startStreamingResponse(
+            userText: request.userText,
+            imageAttachments: request.imageAttachments,
+            imageContextDescription: request.imageContextDescription,
+            fileAttachments: request.fileAttachments,
+            contextMessages: request.contextMessages,
+            appendsUserMessage: false,
+            existingUserMessageID: request.userMessageID
+        )
+    }
+
     private func requestClearGeneratedContent(_ id: UUID) {
         messageInteraction.didTapBubble = true
         pendingClearGeneratedContentMessageID = id
@@ -1961,6 +2032,40 @@ struct ContentView: View {
                 draft: &attachmentDraft
             )
         }
+    }
+
+    private func handleCameraImage(_ image: UIImage) {
+        attachmentDraft.isCameraPresented = false
+
+        guard currentConfiguration.selectedModelSupportsImages else {
+            attachmentDraft.rejectImagesUnsupported(message: AppLocalizations.string(
+                "attachment.image.unsupported",
+                defaultValue: "The current model does not support image input."
+            ))
+            return
+        }
+
+        if !isPrivateConversationSelected, isSaveCapturedPhotosToLibraryEnabled {
+            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+        }
+
+        guard let attachment = ChatAttachmentLoader.imageAttachment(
+            from: image,
+            storesLocally: !isPrivateConversationSelected
+        ) else {
+            attachmentDraft.appendPendingImageAttachments(
+                [],
+                source: AppLocalizations.string("attachment.source.camera", defaultValue: "camera"),
+                supportsImages: true
+            )
+            return
+        }
+
+        attachmentDraft.appendPendingImageAttachments(
+            [attachment],
+            source: AppLocalizations.string("attachment.source.camera", defaultValue: "camera"),
+            supportsImages: true
+        )
     }
 
     private func handleDroppedImages(_ providers: [NSItemProvider]) -> Bool {

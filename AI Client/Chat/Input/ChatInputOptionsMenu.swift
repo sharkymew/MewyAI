@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ChatInputOptionsMenu<MenuLabel: View>: View {
     let configuration: AIConfiguration
@@ -6,6 +7,7 @@ struct ChatInputOptionsMenu<MenuLabel: View>: View {
     let mcpServers: [MCPServerConfiguration]
     let capabilitySelection: AgentCapabilitySelection
     let onOpenPhotoPicker: () -> Void
+    let onOpenCamera: () -> Void
     let onOpenFileImporter: () -> Void
     let onToggleSkill: (UUID) -> Void
     let onToggleMCPServer: (UUID) -> Void
@@ -42,6 +44,16 @@ struct ChatInputOptionsMenu<MenuLabel: View>: View {
             )
         }
         .disabled(!configuration.selectedModelSupportsImages)
+
+        Button {
+            onOpenCamera()
+        } label: {
+            Label(
+                AppLocalizations.string("input.takePhoto", defaultValue: "Take Photo"),
+                systemImage: "camera"
+            )
+        }
+        .disabled(!configuration.selectedModelSupportsImages || !CameraCaptureViewController.isAvailable)
 
         Button {
             onOpenFileImporter()

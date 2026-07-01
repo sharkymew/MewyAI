@@ -2751,6 +2751,29 @@
         }
       }
     },
+    "attachment.source.camera" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "camera"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "相机"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "相機"
+          }
+        }
+      }
+    },
     "attachment.source.clipboard" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2973,6 +2996,9 @@
           }
         }
       }
+    },
+    "camera" : {
+
     },
     "Cancel edit" : {
       "localizations" : {
@@ -3221,6 +3247,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Vertex Express 暫不支援 MCP 工具呼叫，請關閉 MCP 膠囊或切換 API 類型。"
+          }
+        }
+      }
+    },
+    "chat.message.branchAction" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Branch"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分叉"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分叉"
           }
         }
       }
@@ -5388,6 +5437,29 @@
         }
       }
     },
+    "input.camera.cancel" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消"
+          }
+        }
+      }
+    },
     "input.imageUnsupported" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5430,6 +5502,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "輸入訊息..."
+          }
+        }
+      }
+    },
+    "input.takePhoto" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take Photo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拍照"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拍照"
           }
         }
       }
@@ -9415,6 +9510,9 @@
         }
       }
     },
+    "Take Photo" : {
+
+    },
     "Tavily API Key" : {
       "localizations" : {
         "en" : {
@@ -10939,6 +11037,28 @@
         }
       }
     },
+    "你可以之后在设置里配置 Provider，并在设置中开启全局记忆/参考历史对话。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You can configure a Provider later in Settings, and turn on Global Memory / Chat History Access there."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "你可以之后在设置里配置 Provider，并在设置中开启全局记忆/参考历史对话。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "你可以之後在設定裡設定 Provider，並在設定中開啟全域記憶／參考歷史對話。"
+          }
+        }
+      }
+    },
     "使用多模态模型为文字模型生成图片描述" : {
       "localizations" : {
         "en" : {
@@ -11048,6 +11168,9 @@
           }
         }
       }
+    },
+    "保存拍摄的照片到相册" : {
+
     },
     "修改" : {
       "localizations" : {
@@ -11314,6 +11437,7 @@
       }
     },
     "再决定是否开启记忆" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -11334,6 +11458,9 @@
           }
         }
       }
+    },
+    "再决定记忆与拍照偏好" : {
+
     },
     "最大输出 tokens（空为默认）" : {
       "localizations" : {
@@ -11356,6 +11483,9 @@
           }
         }
       }
+    },
+    "分叉" : {
+
     },
     "创建 Skill" : {
       "localizations" : {
@@ -11554,6 +11684,9 @@
           }
         }
       }
+    },
+    "即使开启了「保存拍摄的照片到相册」，在临时聊天中拍摄的照片也不会保存到相册。" : {
+
     },
     "历史摘要" : {
       "localizations" : {
@@ -11841,6 +11974,9 @@
           }
         }
       }
+    },
+    "在对话中拍摄的照片默认只用于发送，不写入系统相册。开启后会同时把原图保存到系统相册；在临时聊天中始终不会保存。" : {
+
     },
     "好" : {
       "localizations" : {
@@ -12172,6 +12308,9 @@
         }
       }
     },
+    "开启后，拍照发送时会同时把原图保存到你的系统相册；在临时聊天中始终不会保存。" : {
+
+    },
     "开启后，相关对话内容可能会在后台发送到你选择的 Provider，用于生成、更新或参考记忆。请不要在开启记忆时输入不希望被 Provider 处理的隐私内容。" : {
       "localizations" : {
         "en" : {
@@ -12348,6 +12487,12 @@
           }
         }
       }
+    },
+    "拍摄的照片默认只在对话里使用，不会写入相册。" : {
+
+    },
+    "拍照" : {
+
     },
     "拒绝" : {
       "localizations" : {
@@ -12571,6 +12716,7 @@
       }
     },
     "暂不开启" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -12886,6 +13032,52 @@
     },
     "此 AI 内容已在本机清除。" : {
 
+    },
+    "步骤 1/2：连接 DeepSeek" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Step 1 of 2: Connect DeepSeek"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "步骤 1/2：连接 DeepSeek"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "步驟 1/2：連接 DeepSeek"
+          }
+        }
+      }
+    },
+    "步骤 2/2：隐私与拍照" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Step 2 of 2: Privacy & Camera"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "步骤 2/2：隐私与拍照"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "步驟 2/2：隱私與拍照"
+          }
+        }
+      }
     },
     "每行一个请求头，格式为 Header-Name: value。Authorization、Token、API Key 等敏感请求头会存入钥匙串。" : {
       "localizations" : {
@@ -13268,6 +13460,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用途"
+          }
+        }
+      }
+    },
+    "确认跳过" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Confirm Skip"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "确认跳过"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "確認跳過"
           }
         }
       }
@@ -13714,6 +13928,50 @@
         }
       }
     },
+    "跳过" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Skip"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "跳过"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "跳過"
+          }
+        }
+      }
+    },
+    "跳过初始配置？" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Skip initial setup?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "跳过初始配置？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "跳過初始設定？"
+          }
+        }
+      }
+    },
     "输入价格 / 1M tokens（空为不计费）" : {
       "localizations" : {
         "en" : {
@@ -14113,7 +14371,11 @@
         }
       }
     },
+    "隐私与拍照" : {
+
+    },
     "隐私与记忆" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 struct DeepSeekSetupWizardView: View {
-    private enum Step {
+    private enum Step: CaseIterable {
         case connection
         case memory
     }
@@ -12,6 +12,7 @@ struct DeepSeekSetupWizardView: View {
     @State private var step: Step = .connection
     @State private var showsAPIKey = false
     @State private var saveErrorMessage: String?
+    @State private var showsSkipConfirmation = false
 
     init(onComplete: @escaping () -> Void) {
         self.onComplete = onComplete
@@ -21,6 +22,7 @@ struct DeepSeekSetupWizardView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    setupProgressIndicator
                     header
 
                     switch step {
@@ -31,20 +33,72 @@ struct DeepSeekSetupWizardView: View {
                     }
                 }
                 .padding(.horizontal, 22)
-                .padding(.top, 28)
+                .padding(.top, 20)
                 .padding(.bottom, 34)
                 .frame(maxWidth: 620, alignment: .leading)
             }
             .frame(maxWidth: .infinity)
             .background(Color(uiColor: UIColor.systemGroupedBackground))
-            .navigationTitle(step == .connection ? "连接 DeepSeek" : "隐私与记忆")
+            .navigationTitle(step == .connection ? "连接 DeepSeek" : "隐私与拍照")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if step == .connection {
+                        Button("跳过") {
+                            showsSkipConfirmation = true
+                        }
+                    }
+                }
+            }
+            .alert("跳过初始配置？", isPresented: $showsSkipConfirmation) {
+                Button("取消", role: .cancel) {}
+                Button("确认跳过", role: .destructive) {
+                    skipSetup()
+                }
+            } message: {
+                Text("你可以之后在设置里配置 Provider，并在设置中开启全局记忆/参考历史对话。")
+            }
+        }
+    }
+
+    private var setupProgressIndicator: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<2, id: \.self) { index in
+                let segmentStep = Step.allCases[index]
+                let isCompleted: Bool = {
+                    switch step {
+                    case .connection:
+                        return false
+                    case .memory:
+                        return segmentStep == .connection
+                    }
+                }()
+                let isCurrent = segmentStep == step
+                Capsule()
+                    .fill(
+                        isCompleted || isCurrent
+                        ? Color.accentColor
+                        : Color(uiColor: UIColor.tertiaryLabel).opacity(0.4)
+                    )
+                    .frame(height: 6)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(progressAccessibilityLabel))
+    }
+
+    private var progressAccessibilityLabel: String {
+        switch step {
+        case .connection:
+            return "步骤 1/2：连接 DeepSeek"
+        case .memory:
+            return "步骤 2/2：隐私与拍照"
         }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(step == .connection ? "先把模型服务接上" : "再决定是否开启记忆")
+            Text(step == .connection ? "先把模型服务接上" : "再决定记忆与拍照偏好")
                 .font(.system(size: 32, weight: .heavy))
                 .fixedSize(horizontal: false, vertical: true)
             Text(step == .connection
@@ -149,6 +203,16 @@ struct DeepSeekSetupWizardView: View {
                     }
                 }
 
+            Toggle("保存拍摄的照片到相册", isOn: $draft.enablesSaveCapturedPhotosToLibrary)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("拍摄的照片默认只在对话里使用，不会写入相册。")
+                Text("开启后，拍照发送时会同时把原图保存到你的系统相册；在临时聊天中始终不会保存。")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
             VStack(spacing: 12) {
                 Button {
                     finishSetup(enablesMemory: draft.enablesMemory)
@@ -158,16 +222,6 @@ struct DeepSeekSetupWizardView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-
-                Button {
-                    finishSetup(enablesMemory: false)
-                } label: {
-                    Text("暂不开启")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
                 .controlSize(.large)
             }
         }
@@ -195,6 +249,10 @@ struct DeepSeekSetupWizardView: View {
 
         saveErrorMessage = nil
         step = .memory
+    }
+
+    private func skipSetup() {
+        onComplete()
     }
 
     private func finishSetup(enablesMemory: Bool) {

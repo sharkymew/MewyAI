@@ -23,6 +23,7 @@ struct ChatRootPresentations: ViewModifier {
     let onPromptSettingsDismissed: () -> Void
     let onAgentCapabilitiesDismissed: () -> Void
     let onSelectedPhotoItemsChanged: ([PhotosPickerItem]) -> Void
+    let onCameraImageCaptured: @MainActor @Sendable (UIImage) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -94,6 +95,18 @@ struct ChatRootPresentations: ViewModifier {
                 maxSelectionCount: ChatAttachmentDraft.maxImageAttachmentCount,
                 matching: .images
             )
+            .fullScreenCover(isPresented: $attachmentDraft.isCameraPresented) {
+                CameraCaptureViewController(
+                    onCaptured: { image in
+                        onCameraImageCaptured(image)
+                    },
+                    onCancel: {
+                        attachmentDraft.isCameraPresented = false
+                    }
+                )
+                .presentationBackground(.black)
+                .ignoresSafeArea()
+            }
             .fileImporter(
                 isPresented: $attachmentDraft.isFileImporterPresented,
                 allowedContentTypes: ChatFileAttachmentReader.supportedDocumentTypes,
@@ -191,7 +204,8 @@ extension View {
         onConfigurationDismissed: @escaping () -> Void,
         onPromptSettingsDismissed: @escaping () -> Void,
         onAgentCapabilitiesDismissed: @escaping () -> Void,
-        onSelectedPhotoItemsChanged: @escaping ([PhotosPickerItem]) -> Void
+        onSelectedPhotoItemsChanged: @escaping ([PhotosPickerItem]) -> Void,
+        onCameraImageCaptured: @escaping @MainActor @Sendable (UIImage) -> Void
     ) -> some View {
         modifier(ChatRootPresentations(
             showConfiguration: showConfiguration,
@@ -213,7 +227,8 @@ extension View {
             onConfigurationDismissed: onConfigurationDismissed,
             onPromptSettingsDismissed: onPromptSettingsDismissed,
             onAgentCapabilitiesDismissed: onAgentCapabilitiesDismissed,
-            onSelectedPhotoItemsChanged: onSelectedPhotoItemsChanged
+            onSelectedPhotoItemsChanged: onSelectedPhotoItemsChanged,
+            onCameraImageCaptured: onCameraImageCaptured
         ))
     }
 }

@@ -595,6 +595,164 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
         XCTAssertEqual(request?.contextMessages.map(\.id), [firstUserID, firstAssistantID])
     }
 
+    func testPrepareBranchFromMessageCopiesPrefixThroughTargetUserMessage() {
+        let sourceConversationID = UUID()
+        let firstUserID = UUID()
+        let firstAssistantID = UUID()
+        let branchUserID = UUID()
+        let trailingAssistantID = UUID()
+        let imageAttachment = ChatImageAttachment(id: UUID(), dataURL: "data:image/jpeg;base64,AA==")
+        let fileAttachment = ChatFileAttachment(
+            name: "doc.txt",
+            typeIdentifier: nil,
+            byteCount: 4,
+            characterCount: 4,
+            extractedText: "data",
+            isTruncated: false
+        )
+        let messages = [
+            ChatMessage(id: firstUserID, role: "user", content: "first question"),
+            ChatMessage(id: firstAssistantID, role: "assistant", content: "first answer"),
+            ChatMessage(
+                id: branchUserID,
+                role: "user",
+                content: "branch question",
+                imageAttachments: [imageAttachment],
+                imageContextDescription: "image context",
+                fileAttachments: [fileAttachment]
+            ),
+            ChatMessage(id: trailingAssistantID, role: "assistant", content: "trailing answer")
+        ]
+        let sourceConversation = AIConversation(
+            id: sourceConversationID,
+            title: "Source",
+            messages: messages,
+            hasGeneratedTitle: true,
+            isPinned: true
+        )
+        let skillID = UUID()
+        let mcpServerID = UUID()
+
+        let fixedDate = Date(timeIntervalSince1970: 100)
+        let result = ConversationPersistenceCoordinator.prepareBranchFromMessage(
+            branchUserID,
+            in: sourceConversation,
+            messages: messages,
+            activeSkillIDs: [skillID],
+            activeMCPServerIDs: [mcpServerID],
+            date: fixedDate
+        )
+
+        XCTAssertEqual(
+            result?.conversation.messages.map(\.id),
+            [firstUserID, firstAssistantID, branchUserID]
+        )
+        XCTAssertFalse(result?.conversation.hasGeneratedTitle ?? true)
+        XCTAssertFalse(result?.conversation.isPinned ?? true)
+        XCTAssertTrue(result?.conversation.messageRevisionGroups.isEmpty ?? false)
+        XCTAssertEqual(result?.conversation.createdAt, fixedDate)
+        XCTAssertEqual(result?.conversation.updatedAt, fixedDate)
+        XCTAssertEqual(result?.conversation.activeSkillIDs, [skillID])
+        XCTAssertEqual(result?.conversation.activeMCPServerIDs, [mcpServerID])
+        XCTAssertEqual(result?.conversation.branchedFromConversationID, sourceConversationID)
+        XCTAssertEqual(result?.conversation.branchedFromMessageID, branchUserID)
+
+        XCTAssertEqual(result?.generationRequest.userMessageID, branchUserID)
+        XCTAssertEqual(result?.generationRequest.userText, "branch question")
+        XCTAssertEqual(result?.generationRequest.imageAttachments, [imageAttachment])
+        XCTAssertEqual(result?.generationRequest.imageContextDescription, "image context")
+        XCTAssertEqual(result?.generationRequest.fileAttachments, [fileAttachment])
+        XCTAssertEqual(
+            result?.generationRequest.contextMessages.map(\.id),
+            [firstUserID, firstAssistantID]
+        )
+    }
+
+    func testPrepareBranchFromMessageDoesNotMutateSourceMessages() {
+        let sourceConversationID = UUID()
+        let branchUserID = UUID()
+        let trailingAssistantID = UUID()
+        let messages = [
+            ChatMessage(id: branchUserID, role: "user", content: "question"),
+            ChatMessage(id: trailingAssistantID, role: "assistant", content: "answer")
+        ]
+        let sourceConversation = AIConversation(
+            id: sourceConversationID,
+            messages: messages
+        )
+
+        _ = ConversationPersistenceCoordinator.prepareBranchFromMessage(
+            branchUserID,
+            in: sourceConversation,
+            messages: messages,
+            activeSkillIDs: [],
+            activeMCPServerIDs: []
+        )
+
+        XCTAssertEqual(messages.map(\.id), [branchUserID, trailingAssistantID])
+    }
+
+    func testPrepareBranchFromMessageReturnsNilForAssistantMessage() {
+        let assistantID = UUID()
+        let messages = [
+            ChatMessage(role: "user", content: "question"),
+            ChatMessage(id: assistantID, role: "assistant", content: "answer")
+        ]
+        let sourceConversation = AIConversation(messages: messages)
+
+        let result = ConversationPersistenceCoordinator.prepareBranchFromMessage(
+            assistantID,
+            in: sourceConversation,
+            messages: messages,
+            activeSkillIDs: [],
+            activeMCPServerIDs: []
+        )
+
+        XCTAssertNil(result)
+    }
+
+    func testPrepareBranchFromMessageReturnsNilForMissingMessage() {
+        let missingID = UUID()
+        let messages = [
+            ChatMessage(role: "user", content: "question"),
+            ChatMessage(role: "assistant", content: "answer")
+        ]
+        let sourceConversation = AIConversation(messages: messages)
+
+        let result = ConversationPersistenceCoordinator.prepareBranchFromMessage(
+            missingID,
+            in: sourceConversation,
+            messages: messages,
+            activeSkillIDs: [],
+            activeMCPServerIDs: []
+        )
+
+        XCTAssertNil(result)
+    }
+
+    func testPrepareBranchFromMessageUsesFirstMatchForDuplicateUserIDs() {
+        let branchUserID = UUID()
+        let messages = [
+            ChatMessage(id: branchUserID, role: "user", content: "first"),
+            ChatMessage(role: "assistant", content: "answer one"),
+            ChatMessage(id: branchUserID, role: "user", content: "second"),
+            ChatMessage(role: "assistant", content: "answer two")
+        ]
+        let sourceConversation = AIConversation(messages: messages)
+
+        let result = ConversationPersistenceCoordinator.prepareBranchFromMessage(
+            branchUserID,
+            in: sourceConversation,
+            messages: messages,
+            activeSkillIDs: [],
+            activeMCPServerIDs: []
+        )
+
+        XCTAssertEqual(result?.conversation.messages.count, 1)
+        XCTAssertEqual(result?.generationRequest.userText, "first")
+        XCTAssertEqual(result?.generationRequest.contextMessages, [])
+    }
+
     func testUpdateAssistantMessageMutatesSelectedMessagesOnly() {
         let conversationID = UUID()
         let assistantMessageID = UUID()

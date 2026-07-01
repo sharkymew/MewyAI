@@ -27,6 +27,8 @@ struct AIConfigurationView: View {
     private var isGlobalMemoryEnabled = ChatMemoryStore.defaultMemoryEnabled
     @AppStorage(ChatMemoryStore.historyRecallEnabledKey)
     private var isHistoryRecallEnabled = ChatMemoryStore.defaultHistoryRecallEnabled
+    @AppStorage(AIConfigurationStore.saveCapturedPhotosToLibraryKey)
+    private var isSaveCapturedPhotosToLibraryEnabled = AIConfigurationStore.defaultSaveCapturedPhotosToLibrary
     @FocusState private var focusedField: ConfigurationField?
     
     private let aiService = AIService()
@@ -154,6 +156,7 @@ struct AIConfigurationView: View {
                 memorySection
                 interactionSection
                 notificationSection
+                photoCaptureSection
                 imageContextSection
                 acknowledgementsSection
             }
@@ -370,6 +373,16 @@ struct AIConfigurationView: View {
             Text("交互")
         } footer: {
             Text("关闭后，输出刷新、输出完成和手动停止都不会触发震动。")
+        }
+    }
+
+    private var photoCaptureSection: some View {
+        Section {
+            Toggle("保存拍摄的照片到相册", isOn: $isSaveCapturedPhotosToLibraryEnabled)
+        } header: {
+            Text("拍照")
+        } footer: {
+            Text("在对话中拍摄的照片默认只用于发送，不写入系统相册。开启后会同时把原图保存到系统相册；在临时聊天中始终不会保存。")
         }
     }
 

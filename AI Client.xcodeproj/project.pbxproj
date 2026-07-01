@@ -347,17 +347,21 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_COVERAGE_MAPPING = NO;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_CODE_COVERAGE = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = MewyAI;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSCameraUsageDescription = "用于在对话中拍摄照片并发送给 AI。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "用于将语音转换为输入文本，识别结果会先填入输入框，由你确认后发送。";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "用于将拍摄的照片保存到你的相册。";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "用于将语音转换为输入文本，识别结果会先填入输入框，由你确认后发送。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -369,7 +373,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.sharkymew.MewyAI;
 				PRODUCT_NAME = MewyAI;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -392,15 +396,19 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = MewyAI;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSCameraUsageDescription = "用于在对话中拍摄照片并发送给 AI。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "用于将语音转换为输入文本，识别结果会先填入输入框，由你确认后发送。";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "用于将拍摄的照片保存到你的相册。";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "用于将语音转换为输入文本，识别结果会先填入输入框，由你确认后发送。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -412,7 +420,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.sharkymew.MewyAI;
 				PRODUCT_NAME = MewyAI;
 				PROVISIONING_PROFILE_SPECIFIER = "";

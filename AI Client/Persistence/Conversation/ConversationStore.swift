@@ -361,6 +361,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
     var isPinned: Bool = false
     var activeSkillIDs: [UUID] = []
     var activeMCPServerIDs: [UUID] = []
+    var branchedFromConversationID: UUID?
+    var branchedFromMessageID: UUID?
     var indexedMessageCount: Int?
 
     init(
@@ -374,6 +376,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
         isPinned: Bool = false,
         activeSkillIDs: [UUID] = [],
         activeMCPServerIDs: [UUID] = [],
+        branchedFromConversationID: UUID? = nil,
+        branchedFromMessageID: UUID? = nil,
         indexedMessageCount: Int? = nil
     ) {
         self.id = id
@@ -386,6 +390,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
         self.isPinned = isPinned
         self.activeSkillIDs = activeSkillIDs
         self.activeMCPServerIDs = activeMCPServerIDs
+        self.branchedFromConversationID = branchedFromConversationID
+        self.branchedFromMessageID = branchedFromMessageID
         self.indexedMessageCount = indexedMessageCount
     }
 
@@ -402,6 +408,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         activeSkillIDs = try container.decodeIfPresent([UUID].self, forKey: .activeSkillIDs) ?? []
         activeMCPServerIDs = try container.decodeIfPresent([UUID].self, forKey: .activeMCPServerIDs) ?? []
+        branchedFromConversationID = try container.decodeIfPresent(UUID.self, forKey: .branchedFromConversationID)
+        branchedFromMessageID = try container.decodeIfPresent(UUID.self, forKey: .branchedFromMessageID)
         indexedMessageCount = nil
     }
 
@@ -443,6 +451,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
         case isPinned
         case activeSkillIDs
         case activeMCPServerIDs
+        case branchedFromConversationID
+        case branchedFromMessageID
     }
 }
 

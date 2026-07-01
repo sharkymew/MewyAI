@@ -22,6 +22,7 @@ struct DeepSeekSetupDraft: Equatable {
     var apiKey = ""
     var enablesMemory = false
     var enablesHistoryRecall = false
+    var enablesSaveCapturedPhotosToLibrary = false
 
     var resolvedBaseURL: String {
         switch baseURLChoice {
@@ -88,6 +89,10 @@ enum DeepSeekSetupCoordinator {
     ) {
         defaults.set(draft.enablesMemory, forKey: ChatMemoryStore.memoryEnabledKey)
         defaults.set(draft.enablesHistoryRecall, forKey: ChatMemoryStore.historyRecallEnabledKey)
+        defaults.set(
+            draft.enablesSaveCapturedPhotosToLibrary,
+            forKey: AIConfigurationStore.saveCapturedPhotosToLibraryKey
+        )
     }
 
     private static func selectedConfigurationIndex(

@@ -785,6 +785,8 @@ enum AIConfigurationStore {
     private static let selectedConfigurationIDKey = "selectedAIConfigurationID"
     static let hapticFeedbackEnabledKey = "hapticFeedbackEnabled"
     static let defaultHapticFeedbackEnabled = true
+    static let saveCapturedPhotosToLibraryKey = "saveCapturedPhotosToPhotoLibrary"
+    static let defaultSaveCapturedPhotosToLibrary = false
     private static var fallbackConfigurationName: String {
         AppLocalizations.string("configuration.unnamed", defaultValue: "Unnamed Configuration")
     }

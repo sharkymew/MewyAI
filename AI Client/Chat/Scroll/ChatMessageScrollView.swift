@@ -15,6 +15,7 @@ struct ChatMessageScrollView: View {
     let onReasoningExpansionChanged: (UUID, Bool) -> Void
     let onRegenerate: (UUID) -> Void
     let onEdit: (UUID) -> Void
+    let onBranch: (UUID) -> Void
     let onClearGeneratedContent: (UUID) -> Void
     let onSelectPreviousRevision: (UUID) -> Void
     let onSelectNextRevision: (UUID) -> Void
@@ -51,6 +52,9 @@ struct ChatMessageScrollView: View {
                                 },
                                 onEdit: {
                                     onEdit(message.id)
+                                },
+                                onBranch: {
+                                    onBranch(message.id)
                                 },
                                 onClearGeneratedContent: {
                                     onClearGeneratedContent(message.id)
