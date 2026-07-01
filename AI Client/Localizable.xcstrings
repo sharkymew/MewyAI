@@ -10741,6 +10741,7 @@
       }
     },
     "不同意" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -12282,6 +12283,7 @@
       }
     },
     "必须阅读并同意用户协议与隐私政策后，才能继续使用本客户端。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -12613,6 +12615,7 @@
       }
     },
     "暂时无法继续" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -12657,6 +12660,7 @@
       }
     },
     "本工具禁止用于生成任何涉黄、涉暴、侮辱性或政治敏感等违法违规内容。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -12792,6 +12796,7 @@
       }
     },
     "欢迎使用\nMewyAI" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

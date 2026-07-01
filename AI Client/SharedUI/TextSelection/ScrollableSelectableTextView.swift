@@ -9,6 +9,7 @@ struct ScrollableSelectableTextView: UIViewRepresentable {
     var textColor: UIColor
     var font: UIFont
     var textAlignment: NSTextAlignment = .left
+    var lineSpacing: CGFloat = 0
     var height: CGFloat = 340
     var scrollsToBottom = false
 
@@ -78,6 +79,7 @@ struct ScrollableSelectableTextView: UIViewRepresentable {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.alignment = textAlignment
         paragraphStyle.lineBreakMode = .byWordWrapping
+        paragraphStyle.lineSpacing = lineSpacing
         return [
             .font: font,
             .foregroundColor: textColor,

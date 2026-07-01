@@ -30,19 +30,41 @@ struct OnboardingConsentView: View {
                 onboardingBackground
                 backgroundScrim
 
-                VStack(spacing: 0) {
-                    Spacer(minLength: 96)
+                if usesFloatingCard(for: screenProxy.size) {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 64)
 
-                    GeometryReader { cardProxy in
-                        consentCard(
-                            availableHeight: cardProxy.size.height,
-                            bottomSafeArea: screenProxy.safeAreaInsets.bottom
+                        GeometryReader { cardProxy in
+                            consentCard(
+                                availableHeight: cardProxy.size.height,
+                                bottomSafeArea: 0,
+                                isFloating: true
+                            )
+                        }
+                        .frame(
+                            width: floatingCardWidth(for: screenProxy.size),
+                            height: floatingCardHeight(for: screenProxy.size, safeAreaInsets: screenProxy.safeAreaInsets),
+                            alignment: .top
                         )
+
+                        Spacer(minLength: 64)
                     }
-                    .frame(maxWidth: 620, maxHeight: .infinity, alignment: .top)
-                    .padding(.horizontal, cardHorizontalInset(for: screenProxy.size.width))
+                } else {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 96)
+
+                        GeometryReader { cardProxy in
+                            consentCard(
+                                availableHeight: cardProxy.size.height,
+                                bottomSafeArea: screenProxy.safeAreaInsets.bottom,
+                                isFloating: false
+                            )
+                        }
+                        .frame(maxWidth: 620, maxHeight: .infinity, alignment: .top)
+                        .padding(.horizontal, cardHorizontalInset(for: screenProxy.size.width))
+                    }
+                    .ignoresSafeArea(edges: .bottom)
                 }
-                .ignoresSafeArea(edges: .bottom)
             }
         }
         .sheet(item: $selectedLegalDocument) { document in
@@ -63,7 +85,7 @@ struct OnboardingConsentView: View {
             .allowsHitTesting(false)
     }
 
-    private func consentCard(availableHeight: CGFloat, bottomSafeArea: CGFloat) -> some View {
+    private func consentCard(availableHeight: CGFloat, bottomSafeArea: CGFloat, isFloating: Bool) -> some View {
         VStack(spacing: 0) {
             Capsule()
                 .fill(Color(uiColor: UIColor.tertiaryLabel).opacity(0.55))
@@ -92,13 +114,13 @@ struct OnboardingConsentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.regularMaterial)
         .background(Color(uiColor: UIColor.systemBackground).opacity(colorScheme == .dark ? 0.88 : 0.94))
-        .clipShape(TopRoundedRectangle(cornerRadius: 36))
+        .clipShape(ConsentCardShape(cornerRadius: 36, roundsBottomCorners: isFloating))
         .overlay {
-            TopRoundedSheetBorder(cornerRadius: 36)
+            ConsentCardBorder(cornerRadius: 36, roundsBottomCorners: isFloating)
                 .stroke(Color.primary.opacity(colorScheme == .dark ? 0.20 : 0.11), lineWidth: 1.2)
         }
         .overlay(alignment: .top) {
-            TopRoundedSheetBorder(cornerRadius: 36)
+            ConsentCardBorder(cornerRadius: 36, roundsBottomCorners: isFloating)
                 .stroke(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.82), lineWidth: 1)
                 .blendMode(.plusLighter)
                 .allowsHitTesting(false)
@@ -110,12 +132,25 @@ struct OnboardingConsentView: View {
         width >= 700 ? 18 : 0
     }
 
+    private func usesFloatingCard(for size: CGSize) -> Bool {
+        min(size.width, size.height) >= 700
+    }
+
+    private func floatingCardWidth(for size: CGSize) -> CGFloat {
+        min(760, size.width - 160)
+    }
+
+    private func floatingCardHeight(for size: CGSize, safeAreaInsets: EdgeInsets) -> CGFloat {
+        let availableHeight = size.height - safeAreaInsets.top - safeAreaInsets.bottom - 160
+        return min(760, max(620, availableHeight))
+    }
+
     private var headerBlock: some View {
         VStack(spacing: 18) {
             appMark
 
             VStack(spacing: 8) {
-                Text("欢迎使用 MewyAI")
+                Text(verbatim: "欢迎使用 MewyAI")
                     .font(.system(size: 34, weight: .bold, design: .default))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
@@ -161,14 +196,14 @@ struct OnboardingConsentView: View {
     private var footerBlock: some View {
         VStack(spacing: 16) {
             VStack(spacing: 4) {
-                Text("点击“同意并继续”即表示您已阅读并同意")
+                Text(verbatim: "点击“同意并继续”即表示您已阅读并同意")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
 
                 HStack(spacing: 4) {
                     legalLink("用户协议", document: .userAgreement)
-                    Text("与")
+                    Text(verbatim: "与")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     legalLink("隐私政策", document: .privacyPolicy)
@@ -378,23 +413,32 @@ private struct OnboardingPrivacyRow: View {
     }
 }
 
-private struct TopRoundedRectangle: Shape {
+private struct ConsentCardShape: Shape {
     let cornerRadius: CGFloat
+    let roundsBottomCorners: Bool
 
     func path(in rect: CGRect) -> Path {
+        let corners: UIRectCorner = roundsBottomCorners
+            ? [.topLeft, .topRight, .bottomLeft, .bottomRight]
+            : [.topLeft, .topRight]
         let path = UIBezierPath(
             roundedRect: rect,
-            byRoundingCorners: [.topLeft, .topRight],
+            byRoundingCorners: corners,
             cornerRadii: CGSize(width: cornerRadius, height: cornerRadius)
         )
         return Path(path.cgPath)
     }
 }
 
-private struct TopRoundedSheetBorder: Shape {
+private struct ConsentCardBorder: Shape {
     let cornerRadius: CGFloat
+    let roundsBottomCorners: Bool
 
     func path(in rect: CGRect) -> Path {
+        if roundsBottomCorners {
+            return ConsentCardShape(cornerRadius: cornerRadius, roundsBottomCorners: true).path(in: rect)
+        }
+
         let radius = min(cornerRadius, rect.width / 2, rect.height / 2)
         var path = Path()
         path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
@@ -422,13 +466,13 @@ private struct LegalDocumentReader: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            GeometryReader { proxy in
                 VStack(alignment: .leading, spacing: 18) {
                     if let externalURL {
                         Link(destination: externalURL) {
                             HStack(spacing: 8) {
                                 Image(systemName: "safari")
-                                Text("在线查看")
+                                Text(verbatim: "在线查看")
                                 Image(systemName: "arrow.up.forward")
                                     .font(.caption.weight(.semibold))
                             }
@@ -436,12 +480,18 @@ private struct LegalDocumentReader: View {
                         }
                     }
 
-                    Text(text)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineSpacing(6)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ScrollableSelectableTextView(
+                        text: text,
+                        textColor: .secondaryLabel,
+                        font: .preferredFont(forTextStyle: .footnote),
+                        textAlignment: .left,
+                        lineSpacing: 6,
+                        height: legalTextHeight(
+                            availableHeight: proxy.size.height,
+                            includesExternalLink: externalURL != nil
+                        )
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 18)
@@ -457,5 +507,11 @@ private struct LegalDocumentReader: View {
                 }
             }
         }
+    }
+
+    private func legalTextHeight(availableHeight: CGFloat, includesExternalLink: Bool) -> CGFloat {
+        let verticalPadding: CGFloat = 36
+        let linkReservedHeight: CGFloat = includesExternalLink ? 40 : 0
+        return max(240, availableHeight - verticalPadding - linkReservedHeight)
     }
 }
