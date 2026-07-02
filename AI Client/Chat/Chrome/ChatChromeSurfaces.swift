@@ -135,6 +135,7 @@ struct ChatTopChrome<Controls: View>: View {
     let controlSize: CGFloat
     let controlsTopPadding: CGFloat
     let controlsHorizontalPadding: CGFloat
+    let sidebarToggleExclusionLeadingOffset: CGFloat
     let glassFadeExclusionInset: CGFloat
     let showsSidebarToggleExclusion: Bool
     let controls: () -> Controls
@@ -159,18 +160,17 @@ struct ChatTopChrome<Controls: View>: View {
                 .offset(y: -topSafeAreaInset)
                 .ignoresSafeArea(edges: .top)
 
-            if showsSidebarToggleExclusion {
-                Capsule()
-                    .frame(
-                        width: max(controlSize - glassFadeExclusionInset * 2, 0),
-                        height: max(controlSize - glassFadeExclusionInset * 2, 0)
-                    )
-                    .position(
-                        x: controlsHorizontalPadding + controlSize / 2,
-                        y: controlsTopPadding + controlSize / 2
-                    )
-                    .blendMode(.destinationOut)
-            }
+            Capsule()
+                .frame(
+                    width: max(controlSize - glassFadeExclusionInset * 2, 0),
+                    height: max(controlSize - glassFadeExclusionInset * 2, 0)
+                )
+                .position(
+                    x: controlsHorizontalPadding + sidebarToggleExclusionLeadingOffset + controlSize / 2,
+                    y: controlsTopPadding + controlSize / 2
+                )
+                .opacity(showsSidebarToggleExclusion ? 1 : 0)
+                .blendMode(.destinationOut)
 
             ForEach(Array(exclusions.enumerated()), id: \.offset) { _, exclusion in
                 let rect = proxy[exclusion.bounds]

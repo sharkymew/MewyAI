@@ -1,6 +1,10 @@
 import Foundation
 
 enum ConversationPersistenceCoordinator {
+    static let didReceiveExternalConversationWriteNotification = Notification.Name(
+        "MewyAIConversationStoreDidReceiveExternalWrite"
+    )
+
     enum AssistantMessageUpdateResult: Equatable {
         case selected
         case stored(conversationIndex: Int)
@@ -769,5 +773,47 @@ enum ConversationPersistenceCoordinator {
         }
 
         ConversationStore.saveSelectedConversationID(id)
+    }
+
+    // Persists a conversation that was written from outside the main UI scene
+    // (e.g. App Intents). Loads the freshest on-disk list, merges the
+    // conversation in, saves, then posts a notification so the running app
+    // can fold the change into its in-memory state. Returning the merged
+    // conversation allows callers to surface the persisted snapshot back to
+    // intents. Returns the persisted conversation, or nil on failure.
+    @discardableResult
+    static func saveConversationFromExternalSource(
+        _ conversation: AIConversation,
+        synchronize: Bool = false,
+        fileManager: FileManager = .default,
+        applicationSupportURL: URL? = nil
+    ) -> AIConversation? {
+        let onDiskConversations = ConversationStore.loadConversationList(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        )
+        var conversations = onDiskConversations
+        if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
+            conversations[index] = conversation
+        } else if let emptyIndex = conversations.firstIndex(where: { !$0.hasInformation }) {
+            conversations[emptyIndex] = conversation
+        } else {
+            conversations.append(conversation)
+        }
+
+        guard ConversationStore.saveConversations(
+            conversations,
+            synchronize: synchronize,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) else {
+            return nil
+        }
+
+        NotificationCenter.default.post(
+            name: didReceiveExternalConversationWriteNotification,
+            object: conversation
+        )
+        return conversation
     }
 }

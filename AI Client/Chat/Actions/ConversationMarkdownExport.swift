@@ -215,8 +215,9 @@ enum ConversationMarkdownExporter {
             fileName = fileName.replacingOccurrences(of: character, with: "-")
         }
         fileName = fileName
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: "-", options: .regularExpression)
+            .replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
 
         guard fileName.count > 80 else { return fileName }
         return String(fileName.prefix(80)).trimmingCharacters(in: .whitespacesAndNewlines)

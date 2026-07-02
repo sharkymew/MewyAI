@@ -47,7 +47,6 @@ struct ContentView: View {
     @State private var inputBarLayout = InputBarLayoutState()
     @State private var isExpandedInputPresented = false
     @State private var hasLoadedInitialConversation = false
-    @StateObject private var sidebarVisibilityTransition = SidebarVisibilityTransitionCoordinator()
 
     private let maxActiveConversationGenerations = 4
     private let inputBarBottomPadding: CGFloat = 8
@@ -66,7 +65,6 @@ struct ContentView: View {
     private let topFadeBottomPadding: CGFloat = 155
     private let topScrollContentGap: CGFloat = 70
     private let sidebarTransitionDuration: Double = 0.22
-    private let sidebarTransitionDelayNanoseconds: UInt64 = 220_000_000
 
     private var pendingToolApproval: PendingToolApproval? {
         chatSession.pendingToolApproval
@@ -148,7 +146,11 @@ struct ContentView: View {
         activeAgentCapsules.isEmpty ? 0 : ActiveAgentCapsuleRow.fallbackHeight + 8
     }
 
-    private func topChrome(topSafeAreaInset: CGFloat, showsSidebarToggleExclusion: Bool) -> some View {
+    private func topChrome(
+        topSafeAreaInset: CGFloat,
+        sidebarToggleLeadingOffset: CGFloat,
+        showsSidebarToggleExclusion: Bool
+    ) -> some View {
         ChatTopChrome(
             colorScheme: colorScheme,
             tint: topFadeTint,
@@ -157,6 +159,7 @@ struct ContentView: View {
             controlSize: topControlSize,
             controlsTopPadding: topControlsTopPadding,
             controlsHorizontalPadding: topControlsHorizontalPadding,
+            sidebarToggleExclusionLeadingOffset: sidebarToggleLeadingOffset,
             glassFadeExclusionInset: topGlassFadeExclusionInset,
             showsSidebarToggleExclusion: showsSidebarToggleExclusion
         ) {
@@ -335,7 +338,6 @@ struct ContentView: View {
             conversations: storedConversations,
             conversationForSearch: conversationForSearch,
             selectedConversationID: selectedConversationID,
-            showsSidebarToggleFadeExclusion: sidebarVisibilityTransition.showsSidebarToggleFadeExclusion,
             transitionDuration: sidebarTransitionDuration,
             isExpandedInputPresented: isExpandedInputPresented,
             onOverlayClose: {
@@ -344,10 +346,6 @@ struct ContentView: View {
             onEdgeOpen: {
                 hideKeyboard()
                 setConversationSidebarVisibility(true)
-            },
-            onSidebarClose: {
-                hideKeyboard()
-                setConversationSidebarVisibility(false)
             },
             onSelectConversation: { id, closesSidebar in
                 selectConversation(id, closesSidebar: closesSidebar)
@@ -359,11 +357,15 @@ struct ContentView: View {
             onTogglePinnedConversation: toggleConversationPin,
             onExportConversation: beginExportingConversation,
             onDeleteConversation: deleteConversation,
-            mainContent: { topSafeAreaInset in
-                mainContent(topSafeAreaInset: topSafeAreaInset)
+            mainContent: { topSafeAreaInset, showsSidebarToggleExclusion, sidebarToggleLeadingOffset in
+                mainContent(
+                    topSafeAreaInset: topSafeAreaInset,
+                    sidebarToggleLeadingOffset: sidebarToggleLeadingOffset,
+                    showsSidebarToggleExclusion: showsSidebarToggleExclusion
+                )
             },
-            sidebarToggle: {
-                sidebarToggleControl
+            sidebarToggle: { sidebarToggleLeadingOffset in
+                sidebarToggleControl(leadingOffset: sidebarToggleLeadingOffset)
             },
             expandedInput: {
                 expandedInputCover
@@ -440,30 +442,26 @@ struct ContentView: View {
             persistApplicationStateForLifecycle()
             updateBackgroundRequestKeeper()
         }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: ConversationPersistenceCoordinator.didReceiveExternalConversationWriteNotification
+            )
+        ) { notification in
+            mergeExternalConversation(notification.object as? AIConversation)
+        }
     }
 
     private func setConversationSidebarVisibility(_ isVisible: Bool) {
         guard showConversationSidebar != isVisible else { return }
-
-        if isVisible {
-            sidebarVisibilityTransition.prepareForSidebarPresentation(
-                delayNanoseconds: sidebarTransitionDelayNanoseconds
-            ) {
-                showConversationSidebar
-            }
-            showConversationSidebar = true
-        } else {
-            sidebarVisibilityTransition.prepareForSidebarDismissal(
-                delayNanoseconds: sidebarTransitionDelayNanoseconds
-            ) {
-                showConversationSidebar
-            }
-            showConversationSidebar = false
-        }
+        showConversationSidebar = isVisible
     }
 
     @ViewBuilder
-    private func mainContent(topSafeAreaInset: CGFloat) -> some View {
+    private func mainContent(
+        topSafeAreaInset: CGFloat,
+        sidebarToggleLeadingOffset: CGFloat,
+        showsSidebarToggleExclusion: Bool
+    ) -> some View {
         ChatMainConversationContent(
             scrollController: chatScrollController,
             topSafeAreaInset: topSafeAreaInset,
@@ -478,7 +476,8 @@ struct ContentView: View {
             topChrome: { topSafeAreaInset in
                 topChrome(
                     topSafeAreaInset: topSafeAreaInset,
-                    showsSidebarToggleExclusion: sidebarVisibilityTransition.showsMainToggleFadeExclusion
+                    sidebarToggleLeadingOffset: sidebarToggleLeadingOffset,
+                    showsSidebarToggleExclusion: showsSidebarToggleExclusion
                 )
             },
             inputBar: {
@@ -618,11 +617,12 @@ struct ContentView: View {
         }
     }
 
-    private var sidebarToggleControl: some View {
+    private func sidebarToggleControl(leadingOffset: CGFloat) -> some View {
         ChatSidebarToggleControl(
             isSidebarVisible: showConversationSidebar,
             controlSize: topControlSize,
             horizontalPadding: topControlsHorizontalPadding,
+            leadingOffset: leadingOffset,
             topPadding: topControlsTopPadding,
             glassTint: inputGlassTint,
             glassHighlight: inputGlassHighlight,
@@ -2779,6 +2779,35 @@ onOpenPhotoPicker: {
         }
         guard let selectedConversationID else { return }
         saveConversationForStorage(selectedConversationID, synchronize: synchronize)
+    }
+
+    // Folds a conversation written by an out-of-process source (App Intents)
+    // into the in-memory `conversations` list so the running scene's next
+    // save does not overwrite or prune it. If the conversation is the
+    // currently selected one and not actively generating, the live message
+    // list is refreshed to match disk. Concurrent generation on the same
+    // conversation is an edge case where the in-flight stream will resync the
+    // selected conversation on completion; the external write stays on disk
+    // for the next launch even if the in-memory snapshot lags in that case.
+    private func mergeExternalConversation(_ conversation: AIConversation?) {
+        guard let conversation else { return }
+
+        if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
+            conversations[index] = conversation
+        } else if let emptyIndex = conversations.firstIndex(where: { !$0.hasInformation }) {
+            conversations[emptyIndex] = conversation
+        } else {
+            conversations.insert(conversation, at: 0)
+        }
+
+        conversations.sort { $0.updatedAt > $1.updatedAt }
+
+        guard selectedConversationID == conversation.id,
+              !isGenerating else {
+            return
+        }
+
+        chatSession.messages = conversation.messages
     }
 
     private func removeUnreferencedConversationImages() {

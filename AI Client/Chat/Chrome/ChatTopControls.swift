@@ -49,6 +49,7 @@ struct ChatSidebarToggleControl: View {
     let isSidebarVisible: Bool
     let controlSize: CGFloat
     let horizontalPadding: CGFloat
+    let leadingOffset: CGFloat
     let topPadding: CGFloat
     let glassTint: Color
     let glassHighlight: Color
@@ -70,6 +71,7 @@ struct ChatSidebarToggleControl: View {
                         )
                     }
                 }
+                .padding(.leading, leadingOffset)
                 .accessibilityLabel(isSidebarVisible
                     ? AppLocalizations.string("accessibility.closeConversationList", defaultValue: "Close conversation list")
                     : AppLocalizations.string("accessibility.openConversationList", defaultValue: "Open conversation list"))

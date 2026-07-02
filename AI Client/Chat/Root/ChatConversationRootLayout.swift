@@ -2,37 +2,48 @@ import SwiftUI
 
 struct ChatConversationRootLayout<MainContent: View, SidebarToggle: View, ExpandedInput: View>: View {
     @Binding var isSidebarVisible: Bool
+    @State private var windowGeometry: SidebarWindowGeometry?
 
     let conversations: [AIConversation]
     let conversationForSearch: (AIConversation) -> AIConversation
     let selectedConversationID: UUID?
-    let showsSidebarToggleFadeExclusion: Bool
     let transitionDuration: Double
     let isExpandedInputPresented: Bool
     let onOverlayClose: () -> Void
     let onEdgeOpen: () -> Void
-    let onSidebarClose: () -> Void
     let onSelectConversation: (UUID, Bool) -> Void
     let onOpenConfiguration: (Bool) -> Void
     let onRenameConversation: (UUID) -> Void
     let onTogglePinnedConversation: (UUID) -> Void
     let onExportConversation: (UUID) -> Void
     let onDeleteConversation: (UUID) -> Void
-    let mainContent: (CGFloat) -> MainContent
-    let sidebarToggle: () -> SidebarToggle
+    let mainContent: (CGFloat, Bool, CGFloat) -> MainContent
+    let sidebarToggle: (CGFloat) -> SidebarToggle
     let expandedInput: () -> ExpandedInput
 
     var body: some View {
         GeometryReader { geometry in
-            let layout = SidebarLayout.layout(for: geometry.size)
+            let layout = SidebarLayout.layout(
+                for: geometry.size,
+                safeAreaInsets: geometry.safeAreaInsets,
+                windowGeometry: windowGeometry
+            )
             let showsOverlaySidebar = isSidebarVisible && !layout.usesPersistentSidebar
-            let showsSidebar = isSidebarVisible || layout.usesPersistentSidebar
+            let showsSidebar = isSidebarVisible
+            let showsMainSidebarToggleExclusion = !isSidebarVisible
 
             ZStack(alignment: .leading) {
-                mainContent(geometry.safeAreaInsets.top)
-                    .frame(width: layout.mainContentWidth)
+                mainContent(
+                    geometry.safeAreaInsets.top,
+                    showsMainSidebarToggleExclusion,
+                    layout.sidebarToggleLeadingOffset
+                )
+                    .frame(width: layout.mainContentWidth(isSidebarVisible: isSidebarVisible))
                     .disabled(showsOverlaySidebar)
-                    .offset(x: layout.mainContentOffsetX(isOverlayVisible: showsOverlaySidebar))
+                    .offset(x: layout.mainContentOffsetX(
+                        isOverlayVisible: showsOverlaySidebar,
+                        isSidebarVisible: isSidebarVisible
+                    ))
                     .animation(.easeOut(duration: transitionDuration), value: isSidebarVisible)
 
                 if showsOverlaySidebar {
@@ -41,7 +52,7 @@ struct ChatConversationRootLayout<MainContent: View, SidebarToggle: View, Expand
                         .onTapGesture(perform: onOverlayClose)
                 }
 
-                if !isSidebarVisible && !layout.usesPersistentSidebar {
+                if !isSidebarVisible {
                     Color.clear
                         .contentShape(Rectangle())
                         .frame(width: 28)
@@ -54,12 +65,9 @@ struct ChatConversationRootLayout<MainContent: View, SidebarToggle: View, Expand
                     conversationForSearch: conversationForSearch,
                     selectedConversationID: selectedConversationID,
                     topSafeAreaInset: geometry.safeAreaInsets.top,
-                    showsSidebarToggleFadeExclusion: showsSidebarToggleFadeExclusion && !layout.usesPersistentSidebar,
-                    showsCloseButton: false,
                     onSelect: { id in
                         onSelectConversation(id, !layout.usesPersistentSidebar)
                     },
-                    onClose: onSidebarClose,
                     onOpenConfiguration: {
                         onOpenConfiguration(!layout.usesPersistentSidebar)
                     },
@@ -73,9 +81,17 @@ struct ChatConversationRootLayout<MainContent: View, SidebarToggle: View, Expand
                 .offset(x: showsSidebar ? 0 : -layout.sidebarWidth)
                 .animation(.easeOut(duration: transitionDuration), value: isSidebarVisible)
 
-                if !layout.usesPersistentSidebar {
-                    sidebarToggle()
+                sidebarToggle(layout.sidebarToggleLeadingOffset)
+                    .zIndex(10)
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
+            }
+            .background {
+                SidebarWindowGeometryReader { geometry in
+                    windowGeometry = geometry
                 }
+                .allowsHitTesting(false)
             }
             .simultaneousGesture(closeSidebarGesture)
         }

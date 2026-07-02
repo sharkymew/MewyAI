@@ -3,6 +3,13 @@ import XCTest
 
 @MainActor
 final class ConversationPersistenceCoordinatorTests: XCTestCase {
+    private func makeTemporaryStorageURL() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MewyAI-CoordinatorTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
     func testStoredConversationsFiltersPrivateConversation() {
         let privateID = UUID()
         let conversations = [
@@ -1356,5 +1363,47 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
             conversations[0].messageRevisionGroups[0].revisions[0].messages[0].imageContextDescription,
             "description"
         )
+    }
+
+    func testExternalConversationSaveMergesWithOnDiskConversationList() throws {
+        let storageURL = try makeTemporaryStorageURL()
+        let existing = AIConversation(
+            id: UUID(),
+            title: "Existing",
+            messages: [ChatMessage(role: "user", content: "keep me")],
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        XCTAssertTrue(ConversationStore.saveConversations(
+            [existing],
+            applicationSupportURL: storageURL
+        ))
+
+        let external = AIConversation(
+            id: UUID(),
+            title: "External",
+            messages: [
+                ChatMessage(role: "user", content: "shortcut"),
+                ChatMessage(role: "assistant", content: "reply")
+            ],
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        let saved = ConversationPersistenceCoordinator.saveConversationFromExternalSource(
+            external,
+            fileManager: .default,
+            applicationSupportURL: storageURL
+        )
+
+        XCTAssertEqual(saved?.id, external.id)
+        let loadedExisting = try XCTUnwrap(ConversationStore.loadConversation(
+            id: existing.id,
+            applicationSupportURL: storageURL
+        ))
+        let loadedExternal = try XCTUnwrap(ConversationStore.loadConversation(
+            id: external.id,
+            applicationSupportURL: storageURL
+        ))
+        XCTAssertEqual(loadedExisting.messages.first?.content, "keep me")
+        XCTAssertEqual(loadedExternal.messages.map(\.content), ["shortcut", "reply"])
     }
 }

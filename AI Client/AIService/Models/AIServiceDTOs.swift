@@ -1285,6 +1285,8 @@ enum AIServiceError: LocalizedError {
     case encodingFailed
     case requestFailed(String)
     case decodingFailed(String)
+    case invalidBaseURL
+    case responseTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -1297,6 +1299,13 @@ enum AIServiceError: LocalizedError {
             )
         case .encodingFailed:
             return AppLocalizations.string("aiService.error.encodingFailed", defaultValue: "Failed to encode request body")
+        case .invalidBaseURL:
+            return AppLocalizations.string("aiService.error.invalidBaseURL", defaultValue: "Invalid Base URL")
+        case .responseTooLarge:
+            return AppLocalizations.string(
+                "aiService.error.responseTooLarge",
+                defaultValue: "The response is too large and was rejected."
+            )
         case .requestFailed(let message), .decodingFailed(let message):
             return message
         }

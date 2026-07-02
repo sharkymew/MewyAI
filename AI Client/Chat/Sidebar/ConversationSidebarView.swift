@@ -57,10 +57,7 @@ struct ConversationSidebarView: View {
     let conversationForSearch: (AIConversation) -> AIConversation
     let selectedConversationID: UUID?
     let topSafeAreaInset: CGFloat
-    let showsSidebarToggleFadeExclusion: Bool
-    let showsCloseButton: Bool
     let onSelect: (UUID) -> Void
-    let onClose: () -> Void
     let onOpenConfiguration: () -> Void
     let onRename: (UUID) -> Void
     let onTogglePinned: (UUID) -> Void
@@ -281,19 +278,6 @@ struct ConversationSidebarView: View {
                 .offset(y: topFadeVerticalOffset)
                 .ignoresSafeArea(edges: .top)
 
-            if showsSidebarToggleFadeExclusion {
-                Capsule()
-                    .frame(
-                        width: max(topControlSize - topGlassFadeExclusionInset * 2, 0),
-                        height: max(topControlSize - topGlassFadeExclusionInset * 2, 0)
-                    )
-                    .position(
-                        x: topControlsHorizontalPadding + topControlSize / 2,
-                        y: topSafeAreaInset + topControlsTopPadding + topControlSize / 2
-                    )
-                    .blendMode(.destinationOut)
-            }
-
             Capsule()
                 .frame(
                     width: max(topControlSize - topGlassFadeExclusionInset * 2, 0),
@@ -311,15 +295,6 @@ struct ConversationSidebarView: View {
 
     private func topFloatingControls(topSafeAreaInset: CGFloat) -> some View {
         HStack(spacing: 8) {
-            if showsCloseButton {
-                topGlassControl {
-                    Button(action: onClose) {
-                        topIconLabel(systemName: "sidebar.left")
-                    }
-                }
-                .accessibilityLabel(AppLocalizations.string("accessibility.closeConversationList", defaultValue: "Close conversation list"))
-            }
-
             Spacer(minLength: 0)
 
             topGlassControl {

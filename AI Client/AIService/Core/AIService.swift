@@ -445,6 +445,48 @@ class AIService {
         usesImageAttachments: Bool = true,
         completion: @escaping (String) -> Void
     ) {
+        sendMessageResult(
+            message: message,
+            imageAttachments: imageAttachments,
+            imageContextDescription: imageContextDescription,
+            fileAttachments: fileAttachments,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            apiKey: apiKey,
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            usesImageAttachments: usesImageAttachments
+        ) { result in
+            switch result {
+            case .success(let text):
+                completion(text)
+            case .failure(let error):
+                completion(error.localizedDescription)
+            }
+        }
+    }
+
+    func sendMessageResult(
+        message: String,
+        imageAttachments: [ChatImageAttachment] = [],
+        imageContextDescription: String = "",
+        fileAttachments: [ChatFileAttachment] = [],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        apiKey: String,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        usesImageAttachments: Bool = true,
+        completion: @escaping (Result<String, AIServiceError>) -> Void
+    ) {
         let url: URL
         do {
             url = try requestURL(
@@ -455,10 +497,10 @@ class AIService {
                 isStreaming: false
             )
         } catch let error as AIServiceError {
-            completion(error.localizedDescription)
+            completion(.failure(error))
             return
         } catch {
-            completion(AppLocalizations.string("aiService.error.invalidBaseURL", defaultValue: "Invalid Base URL"))
+            completion(.failure(.invalidBaseURL))
             return
         }
 
@@ -483,7 +525,7 @@ class AIService {
             modelParameters: modelParameters,
             anthropicMaxTokens: anthropicMaxTokens
         ) else {
-            completion(AppLocalizations.string("aiService.error.encodingFailed", defaultValue: "Failed to encode request body"))
+            completion(.failure(.encodingFailed))
             return
         }
 
@@ -506,12 +548,12 @@ class AIService {
 
                 guard let statusCode, (200...299).contains(statusCode) else {
                     DispatchQueue.main.async {
-                        completion(Self.errorMessage(
+                        completion(.failure(.requestFailed(Self.errorMessage(
                             statusCode: statusCode,
                             body: responseText,
                             request: request,
                             redacting: redactionValues
-                        ))
+                        ))))
                     }
                     return
                 }
@@ -522,30 +564,65 @@ class AIService {
                             ? AppLocalizations.string("chat.emptyAssistantReply", defaultValue: "No reply")
                             : decodedText
                         self.conversationHistory.append(ChatRequestMessage(role: "assistant", text: text))
-                        completion(text)
+                        completion(.success(text))
                     } else {
-                        completion(AppLocalizations.format(
+                        completion(.failure(.decodingFailed(AppLocalizations.format(
                             "aiService.error.decodingFailed",
                             defaultValue: "Parsing failed\n\n%@",
                             arguments: [responseText]
-                        ))
+                        ))))
                     }
                 }
             } catch BoundedResponseDataError.responseTooLarge {
                 DispatchQueue.main.async {
-                    completion(AppLocalizations.string(
-                        "aiService.error.responseTooLarge",
-                        defaultValue: "The response is too large and was rejected."
-                    ))
+                    completion(.failure(.responseTooLarge))
                 }
             } catch {
                 DispatchQueue.main.async {
-                    completion(AppLocalizations.format(
+                    completion(.failure(.requestFailed(AppLocalizations.format(
                         "aiService.error.requestFailed",
                         defaultValue: "Request failed: %@",
                         arguments: [error.localizedDescription]
-                    ))
+                    ))))
                 }
+            }
+        }
+    }
+
+    func sendMessageAsync(
+        message: String,
+        imageAttachments: [ChatImageAttachment] = [],
+        imageContextDescription: String = "",
+        fileAttachments: [ChatFileAttachment] = [],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        apiKey: String,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        usesImageAttachments: Bool = true
+    ) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            sendMessageResult(
+                message: message,
+                imageAttachments: imageAttachments,
+                imageContextDescription: imageContextDescription,
+                fileAttachments: fileAttachments,
+                baseURL: baseURL,
+                apiFormat: apiFormat,
+                apiKey: apiKey,
+                customHeaders: customHeaders,
+                model: model,
+                modelParameters: modelParameters,
+                anthropicMaxTokens: anthropicMaxTokens,
+                reasoningEnabled: reasoningEnabled,
+                reasoningEffort: reasoningEffort,
+                usesImageAttachments: usesImageAttachments
+            ) { result in
+                continuation.resume(with: result)
             }
         }
     }

@@ -98,22 +98,22 @@ struct AIConfigurationView: View {
 
     private var notificationAuthorizationStatusText: String {
         guard let notificationAuthorizationStatus else {
-            return "检查中"
+            return String(localized: "检查中")
         }
 
         switch notificationAuthorizationStatus {
         case .notDetermined:
-            return "尚未请求"
+            return String(localized: "尚未请求")
         case .denied:
-            return "已关闭"
+            return String(localized: "已关闭")
         case .authorized:
-            return "已允许"
+            return String(localized: "已允许")
         case .provisional:
-            return "临时允许"
+            return String(localized: "临时允许")
         case .ephemeral:
-            return "本次允许"
+            return String(localized: "本次允许")
         @unknown default:
-            return "未知"
+            return String(localized: "未知")
         }
     }
 
@@ -350,46 +350,46 @@ struct AIConfigurationView: View {
 
     private var memorySection: some View {
         Section {
-            Toggle("全局记忆", isOn: $isGlobalMemoryEnabled)
-            Toggle("参考历史对话", isOn: $isHistoryRecallEnabled)
+            Toggle(String(localized: "全局记忆"), isOn: $isGlobalMemoryEnabled)
+            Toggle(String(localized: "参考历史对话"), isOn: $isHistoryRecallEnabled)
 
             Button {
                 hideKeyboard()
                 showMemorySettings = true
             } label: {
-                Label("管理记忆", systemImage: "brain")
+                Label(String(localized: "管理记忆"), systemImage: "brain")
             }
         } header: {
-            Text("记忆")
+            Text(String(localized: "记忆"))
         } footer: {
-            Text("全局记忆：每次对话完成后用当前模型在后台提取值得长期记住的信息，注入到之后的所有对话。参考历史对话：让支持工具调用的模型在需要时直接搜索和查阅全部历史对话，无需先保存记忆。临时聊天不参与两者。")
+            Text(String(localized: "全局记忆：每次对话完成后用当前模型在后台提取值得长期记住的信息，注入到之后的所有对话。参考历史对话：让支持工具调用的模型在需要时直接搜索和查阅全部历史对话，无需先保存记忆。临时聊天不参与两者。"))
         }
     }
 
     private var interactionSection: some View {
         Section {
-            Toggle("开启触感反馈", isOn: $isHapticFeedbackEnabled)
+            Toggle(String(localized: "开启触感反馈"), isOn: $isHapticFeedbackEnabled)
         } header: {
-            Text("交互")
+            Text(String(localized: "交互"))
         } footer: {
-            Text("关闭后，输出刷新、输出完成和手动停止都不会触发震动。")
+            Text(String(localized: "关闭后，输出刷新、输出完成和手动停止都不会触发震动。"))
         }
     }
 
     private var photoCaptureSection: some View {
         Section {
-            Toggle("保存拍摄的照片到相册", isOn: $isSaveCapturedPhotosToLibraryEnabled)
+            Toggle(String(localized: "保存拍摄的照片到相册"), isOn: $isSaveCapturedPhotosToLibraryEnabled)
         } header: {
-            Text("拍照")
+            Text(String(localized: "拍照"))
         } footer: {
-            Text("在对话中拍摄的照片默认只用于发送，不写入系统相册。开启后会同时把原图保存到系统相册；在临时聊天中始终不会保存。")
+            Text(String(localized: "在对话中拍摄的照片默认只用于发送，不写入系统相册。开启后会同时把原图保存到系统相册；在临时聊天中始终不会保存。"))
         }
     }
 
     private var notificationSection: some View {
         Section {
             HStack {
-                Label("后台完成通知", systemImage: "bell.badge")
+                Label(String(localized: "后台完成通知"), systemImage: "bell.badge")
                 Spacer()
                 Text(notificationAuthorizationStatusText)
                     .foregroundStyle(notificationAuthorizationStatusColor)
@@ -399,13 +399,13 @@ struct AIConfigurationView: View {
                 Button {
                     openAppNotificationSettings()
                 } label: {
-                    Label("打开系统通知设置", systemImage: "gear")
+                    Label(String(localized: "打开系统通知设置"), systemImage: "gear")
                 }
             }
         } header: {
-            Text("通知")
+            Text(String(localized: "通知"))
         } footer: {
-            Text("App 在后台或非活跃状态完成普通对话后，会发送一条本机通知。临时聊天、失败或手动停止不会通知。")
+            Text(String(localized: "App 在后台或非活跃状态完成普通对话后，会发送一条本机通知。临时聊天、失败或手动停止不会通知。"))
         }
     }
 

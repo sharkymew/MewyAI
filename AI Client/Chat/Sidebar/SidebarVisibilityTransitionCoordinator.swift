@@ -13,15 +13,8 @@ final class SidebarVisibilityTransitionCoordinator: ObservableObject {
         isSidebarVisible: @escaping @MainActor () -> Bool
     ) {
         cancelTransition()
-        showsMainToggleFadeExclusion = false
+        showsMainToggleFadeExclusion = true
         showsSidebarToggleFadeExclusion = false
-
-        transitionTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: delayNanoseconds)
-            guard let self, !Task.isCancelled, isSidebarVisible() else { return }
-            showsSidebarToggleFadeExclusion = true
-            transitionTask = nil
-        }
     }
 
     func prepareForSidebarDismissal(
@@ -29,14 +22,8 @@ final class SidebarVisibilityTransitionCoordinator: ObservableObject {
         isSidebarVisible: @escaping @MainActor () -> Bool
     ) {
         cancelTransition()
+        showsMainToggleFadeExclusion = true
         showsSidebarToggleFadeExclusion = false
-
-        transitionTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: delayNanoseconds)
-            guard let self, !Task.isCancelled, !isSidebarVisible() else { return }
-            showsMainToggleFadeExclusion = true
-            transitionTask = nil
-        }
     }
 
     private func cancelTransition() {

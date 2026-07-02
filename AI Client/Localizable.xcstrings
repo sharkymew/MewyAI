@@ -555,7 +555,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "1. Choose a service URL"
           }
         },
@@ -577,7 +577,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "2. Enter your API Key"
           }
         },
@@ -1582,6 +1582,9 @@
         }
       }
     },
+    "AI configuration not found: %@" : {
+
+    },
     "aiService.diagnostics.errorBodyReadFailed" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2458,7 +2461,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "When a regular chat finishes while the app is in the background or inactive, a local notification is sent. Temporary chats, failures, and manually stopped chats do not send notifications."
           }
         },
@@ -2475,6 +2478,248 @@
           }
         }
       }
+    },
+    "appIntent.clipboard.prompt" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪贴板内容：\n%@\n\n用户问题：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪贴板内容：\n%@\n\n用户问题：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪貼板內容：\n%@\n\n使用者問題：%@"
+          }
+        }
+      }
+    },
+    "appIntent.clipboard.promptWithoutQuestion" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪贴板内容：\n%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪贴板内容：\n%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪貼板內容：\n%@"
+          }
+        }
+      }
+    },
+    "appIntent.error.clipboardEmpty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The system clipboard is empty."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统剪贴板为空。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系統剪貼板為空。"
+          }
+        }
+      }
+    },
+    "appIntent.error.configurationNotFound" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI configuration not found: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到 AI 配置：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到 AI 設定：%@"
+          }
+        }
+      }
+    },
+    "appIntent.error.conversationNotFound" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation not found: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到对话：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到對話：%@"
+          }
+        }
+      }
+    },
+    "appIntent.error.missingAPIKey" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The selected AI configuration does not have an API key set."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前选中的 AI 配置未设置 API Key。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前選取的 AI 設定未設定 API Key。"
+          }
+        }
+      }
+    },
+    "appIntent.error.missingModel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The selected AI configuration does not have a model selected."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前选中的 AI 配置未选择模型。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前選取的 AI 設定未選擇模型。"
+          }
+        }
+      }
+    },
+    "appIntent.error.saveFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The AI reply was generated, but the conversation could not be saved."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 回复已生成，但无法保存对话。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 回覆已生成，但無法儲存對話。"
+          }
+        }
+      }
+    },
+    "appIntent.summarize.emptyInput" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "There is nothing to summarize."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有可总结的内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有可總結的內容。"
+          }
+        }
+      }
+    },
+    "appIntent.summarize.prompt" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请用中文总结以下内容：\n\n%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请用中文总结以下内容：\n\n%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請用中文總結以下內容：\n\n%@"
+          }
+        }
+      }
+    },
+    "Ask ${question} about the clipboard" : {
+
+    },
+    "Ask AI About Clipboard" : {
+
+    },
+    "Ask Clipboard" : {
+
+    },
+    "Asks the AI a question about the current contents of the system clipboard." : {
+
     },
     "Assistant" : {
       "localizations" : {
@@ -2913,7 +3158,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Base URL is the service address, and API Key is the access key you get from the provider. Fill in both first so the app knows where to send requests."
           }
         },
@@ -3776,6 +4021,9 @@
         }
       }
     },
+    "Configuration Name" : {
+
+    },
     "configuration.authFooter.anthropic" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4303,6 +4551,15 @@
         }
       }
     },
+    "Continue ${conversationID} with ${message}" : {
+
+    },
+    "Continue Chat" : {
+
+    },
+    "Continue Conversation" : {
+
+    },
     "Conversation" : {
       "localizations" : {
         "en" : {
@@ -4324,6 +4581,12 @@
           }
         }
       }
+    },
+    "Conversation ID" : {
+
+    },
+    "Conversation not found: %@" : {
+
     },
     "conversation.newTitle" : {
       "extractionState" : "stale",
@@ -6418,6 +6681,9 @@
         }
       }
     },
+    "Message" : {
+
+    },
     "Message version %@" : {
       "localizations" : {
         "en" : {
@@ -7663,6 +7929,9 @@
         }
       }
     },
+    "Question" : {
+
+    },
     "Read chat history" : {
       "localizations" : {
         "en" : {
@@ -8361,6 +8630,9 @@
         }
       }
     },
+    "Send ${message} to AI" : {
+
+    },
     "Send message" : {
       "localizations" : {
         "en" : {
@@ -8382,6 +8654,18 @@
           }
         }
       }
+    },
+    "Send Message" : {
+
+    },
+    "Send Message to AI" : {
+
+    },
+    "Sends a message to AI using the current (or named) configuration and returns the AI's reply." : {
+
+    },
+    "Sends a new message in an existing AI conversation and returns the AI's reply." : {
+
     },
     "sidebar.bucket.older" : {
       "extractionState" : "stale",
@@ -9422,6 +9706,18 @@
         }
       }
     },
+    "Summarize" : {
+
+    },
+    "Summarize ${text}" : {
+
+    },
+    "Summarize Text" : {
+
+    },
+    "Summarizes the provided long text using the current AI configuration." : {
+
+    },
     "Supports images" : {
       "localizations" : {
         "en" : {
@@ -9622,6 +9918,12 @@
           }
         }
       }
+    },
+    "Text to Summarize" : {
+
+    },
+    "The AI reply was generated, but the conversation could not be saved." : {
+
     },
     "The current model does not support image input, and an image message in the context does not have a usable hidden description yet. Try again later, or switch to an image-capable multimodal model." : {
       "localizations" : {
@@ -9997,6 +10299,15 @@
         }
       }
     },
+    "The selected AI configuration does not have a model selected." : {
+
+    },
+    "The selected AI configuration does not have an API key set." : {
+
+    },
+    "The system clipboard is empty." : {
+
+    },
     "The user denied this tool call." : {
       "localizations" : {
         "en" : {
@@ -10062,6 +10373,9 @@
           }
         }
       }
+    },
+    "There is nothing to summarize." : {
+
     },
     "Today" : {
       "localizations" : {
@@ -10843,7 +11157,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Disagree"
           }
         },
@@ -10879,6 +11193,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "臨時"
+          }
+        }
+      }
+    },
+    "临时允许" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Provisionally Allowed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "临时允许"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫時允許"
           }
         }
       }
@@ -10997,7 +11333,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Price"
           }
         },
@@ -11019,7 +11355,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Prices are maintained manually per million tokens and are only used for local cost estimates in chats. They do not affect requests."
           }
         },
@@ -11041,7 +11377,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "You can configure a Provider later in Settings, and turn on Global Memory / Chat History Access there."
           }
         },
@@ -11085,7 +11421,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "For example: https://api.deepseek.com"
           }
         },
@@ -11129,7 +11465,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Save Failed"
           }
         },
@@ -11151,7 +11487,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Save and Enter App"
           }
         },
@@ -11170,7 +11506,26 @@
       }
     },
     "保存拍摄的照片到相册" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save Captured Photos to Library"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存拍摄的照片到相册"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將拍攝的照片儲存到相簿"
+          }
+        }
+      }
     },
     "修改" : {
       "localizations" : {
@@ -11286,7 +11641,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Connect a model service first"
           }
         },
@@ -11308,7 +11663,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Global Memory"
           }
         },
@@ -11330,7 +11685,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Global Memory: after each chat finishes, the current model extracts information worth remembering long term in the background and injects it into future chats. Chat History Access: lets models that support tool calls search and read all past chats when needed, without saving memory first. Temporary chats are excluded from both."
           }
         },
@@ -11352,7 +11707,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Global Memory: after each chat finishes, the current model extracts information worth remembering long term in the background and injects it into all future chats, regardless of configuration or model.\nChat History Access: gives models that support tool calls tools to search and read all past chats. The model calls them when needed, without saving memory first. Vertex Express and models without tool support are disabled automatically.\nTemporary chats are excluded from both and cannot be retrieved."
           }
         },
@@ -11441,7 +11796,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Then decide whether to enable memory"
           }
         },
@@ -11685,14 +12040,46 @@
         }
       }
     },
-    "即使开启了「保存拍摄的照片到相册」，在临时聊天中拍摄的照片也不会保存到相册。" : {
+    "剪贴板内容：\n%@" : {
 
+    },
+    "剪贴板内容：\n%@\n\n用户问题：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪贴板内容：\n%1$@\n\n用户问题：%2$@"
+          }
+        }
+      }
+    },
+    "即使开启了「保存拍摄的照片到相册」，在临时聊天中拍摄的照片也不会保存到相册。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Even when \"Save Captured Photos to Library\" is on, photos taken in temporary chats are not saved to the photo library."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "即使开启了「保存拍摄的照片到相册」，在临时聊天中拍摄的照片也不会保存到相册。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "即使開啟「將拍攝的照片儲存到相簿」，臨時聊天中拍攝的照片也不會儲存到相簿。"
+          }
+        }
+      }
     },
     "历史摘要" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "History Summary"
           }
         },
@@ -11714,7 +12101,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "History summaries update incrementally after new chats finish. Summary generation runs in the background and does not depend on this page staying open."
           }
         },
@@ -11736,7 +12123,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Chat History Access"
           }
         },
@@ -11802,7 +12189,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Agree and Continue"
           }
         },
@@ -11846,7 +12233,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Background Completion Notifications"
           }
         },
@@ -11868,7 +12255,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Enable Global Memory"
           }
         },
@@ -11890,7 +12277,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Tell AI how you want to update memory"
           }
         },
@@ -11976,7 +12363,26 @@
       }
     },
     "在对话中拍摄的照片默认只用于发送，不写入系统相册。开启后会同时把原图保存到系统相册；在临时聊天中始终不会保存。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos taken in chats are only used for sending by default and are not written to the system photo library. When enabled, the original photo is also saved to the system photo library. Photos are never saved in temporary chats."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在对话中拍摄的照片默认只用于发送，不写入系统相册。开启后会同时把原图保存到系统相册；在临时聊天中始终不会保存。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在對話中拍攝的照片預設只用於傳送，不會寫入系統相簿。開啟後會同時將原圖儲存到系統相簿；臨時聊天中一律不會儲存。"
+          }
+        }
+      }
     },
     "好" : {
       "localizations" : {
@@ -12132,6 +12538,28 @@
         }
       }
     },
+    "尚未请求" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Requested"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未请求"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未請求"
+          }
+        }
+      }
+    },
     "工具" : {
       "localizations" : {
         "en" : {
@@ -12180,7 +12608,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Swipe left to delete a single memory."
           }
         },
@@ -12202,7 +12630,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Saved Memories"
           }
         },
@@ -12224,7 +12652,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "All saved memories will be deleted and cannot be restored."
           }
         },
@@ -12238,6 +12666,50 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "所有已儲存的記憶都會被刪除，且無法復原。"
+          }
+        }
+      }
+    },
+    "已允许" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allowed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已允许"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已允許"
+          }
+        }
+      }
+    },
+    "已关闭" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已關閉"
           }
         }
       }
@@ -12268,7 +12740,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Apply Changes"
           }
         },
@@ -12309,13 +12781,32 @@
       }
     },
     "开启后，拍照发送时会同时把原图保存到你的系统相册；在临时聊天中始终不会保存。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When enabled, the original photo is also saved to your system photo library when you take and send a photo. Photos are never saved in temporary chats."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启后，拍照发送时会同时把原图保存到你的系统相册；在临时聊天中始终不会保存。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟後，拍照傳送時會同時將原圖儲存到你的系統相簿；臨時聊天中一律不會儲存。"
+          }
+        }
+      }
     },
     "开启后，相关对话内容可能会在后台发送到你选择的 Provider，用于生成、更新或参考记忆。请不要在开启记忆时输入不希望被 Provider 处理的隐私内容。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "After this is enabled, relevant chat content may be sent in the background to your selected provider to generate, update, or reference memory. Do not enter private content you do not want the provider to process while memory is enabled."
           }
         },
@@ -12403,7 +12894,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Pending Changes"
           }
         },
@@ -12426,7 +12917,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "You must read and agree to the User Agreement and Privacy Policy before continuing to use this client."
           }
         },
@@ -12470,7 +12961,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Open System Notification Settings"
           }
         },
@@ -12489,10 +12980,48 @@
       }
     },
     "拍摄的照片默认只在对话里使用，不会写入相册。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Captured photos are only used in the chat by default and are not written to the photo library."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拍摄的照片默认只在对话里使用，不会写入相册。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拍攝的照片預設只在對話中使用，不會寫入相簿。"
+          }
+        }
+      }
     },
     "拍照" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photo Capture"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拍照"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拍照"
+          }
+        }
+      }
     },
     "拒绝" : {
       "localizations" : {
@@ -12631,7 +13160,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "The summary comes from incremental organization of local chat history and is not written to Global Memory automatically. Candidate changes are saved only after you confirm them in the preview."
           }
         },
@@ -12720,7 +13249,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Not Now"
           }
         },
@@ -12742,7 +13271,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "No saved raw memories yet."
           }
         },
@@ -12765,7 +13294,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Cannot Continue Yet"
           }
         },
@@ -12805,12 +13334,34 @@
         }
       }
     },
+    "未知" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unknown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知"
+          }
+        }
+      }
+    },
     "本工具禁止用于生成任何涉黄、涉暴、侮辱性或政治敏感等违法违规内容。" : {
       "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "This tool must not be used to generate illegal or non-compliant content, including sexual, violent, insulting, or politically sensitive content."
           }
         },
@@ -12824,6 +13375,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "本工具禁止用於產生任何涉黃、涉暴、侮辱性或政治敏感等違法違規內容。"
+          }
+        }
+      }
+    },
+    "本次允许" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allowed This Time"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本次允许"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本次允許"
           }
         }
       }
@@ -12870,6 +13443,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "標題："
+          }
+        }
+      }
+    },
+    "检查中" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查中"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "檢查中"
           }
         }
       }
@@ -12946,7 +13541,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Welcome to\nMewyAI"
           }
         },
@@ -12990,7 +13585,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Analyzing memory changes..."
           }
         },
@@ -13012,7 +13607,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Organizing history summary in the background..."
           }
         },
@@ -13038,7 +13633,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Step 1 of 2: Connect DeepSeek"
           }
         },
@@ -13061,7 +13656,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Step 2 of 2: Privacy & Camera"
           }
         },
@@ -13238,7 +13833,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Clear All Memories"
           }
         },
@@ -13260,7 +13855,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Clear all memories?"
           }
         },
@@ -13402,7 +13997,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Generate Change Preview"
           }
         },
@@ -13468,7 +14063,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Confirm Skip"
           }
         },
@@ -13600,7 +14195,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Manage Memory"
           }
         },
@@ -13622,7 +14217,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Paste your DeepSeek Key"
           }
         },
@@ -13644,7 +14239,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Continue"
           }
         },
@@ -13755,7 +14350,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Memory"
           }
         },
@@ -13777,7 +14372,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Memory lets the app reference past content, but it needs to send relevant chats to your selected provider to generate or update memory."
           }
         },
@@ -13884,6 +14479,9 @@
         }
       }
     },
+    "请用中文总结以下内容：\n\n%@" : {
+
+    },
     "请输入新的对话名称。" : {
       "localizations" : {
         "en" : {
@@ -13910,7 +14508,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Currency"
           }
         },
@@ -13932,7 +14530,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Skip"
           }
         },
@@ -13954,7 +14552,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Skip initial setup?"
           }
         },
@@ -13976,7 +14574,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Input price / 1M tokens (empty means not billed)"
           }
         },
@@ -14020,7 +14618,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Output price / 1M tokens (empty means not billed)"
           }
         },
@@ -14089,7 +14687,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "This chat is only used to manage memory. It is not saved to chat history and does not trigger automatic memory extraction."
           }
         },
@@ -14111,7 +14709,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Enter App"
           }
         },
@@ -14155,7 +14753,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Connect DeepSeek"
           }
         },
@@ -14199,7 +14797,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Notifications"
           }
         },
@@ -14221,7 +14819,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Update by Chat"
           }
         },
@@ -14331,7 +14929,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Reload Summary"
           }
         },
@@ -14379,7 +14977,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Privacy and Memory"
           }
         },
@@ -14401,7 +14999,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Privacy Risk Notice"
           }
         },

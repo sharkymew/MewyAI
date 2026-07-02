@@ -3,18 +3,18 @@ import XCTest
 
 @MainActor
 final class SidebarVisibilityTransitionCoordinatorTests: XCTestCase {
-    func testPreparingPresentationHidesBothFadeExclusions() {
+    func testPreparingPresentationKeepsMainFadeExclusion() {
         let coordinator = SidebarVisibilityTransitionCoordinator()
 
         coordinator.prepareForSidebarPresentation(delayNanoseconds: 1_000_000_000) {
             true
         }
 
-        XCTAssertFalse(coordinator.showsMainToggleFadeExclusion)
+        XCTAssertTrue(coordinator.showsMainToggleFadeExclusion)
         XCTAssertFalse(coordinator.showsSidebarToggleFadeExclusion)
     }
 
-    func testPresentationCompletionShowsSidebarFadeExclusion() async {
+    func testPresentationCompletionKeepsMainFadeExclusion() async {
         let coordinator = SidebarVisibilityTransitionCoordinator()
 
         coordinator.prepareForSidebarPresentation(delayNanoseconds: 1) {
@@ -22,20 +22,20 @@ final class SidebarVisibilityTransitionCoordinatorTests: XCTestCase {
         }
 
         try? await Task.sleep(nanoseconds: 1_000_000)
-        XCTAssertTrue(coordinator.showsSidebarToggleFadeExclusion)
+        XCTAssertTrue(coordinator.showsMainToggleFadeExclusion)
+        XCTAssertFalse(coordinator.showsSidebarToggleFadeExclusion)
     }
 
-    func testDismissalCompletionShowsMainFadeExclusion() async {
+    func testDismissalImmediatelyRestoresMainFadeExclusion() {
         let coordinator = SidebarVisibilityTransitionCoordinator()
 
-        coordinator.prepareForSidebarPresentation(delayNanoseconds: 1_000_000_000) {
+        coordinator.prepareForSidebarPresentation(delayNanoseconds: 1) {
             true
         }
-        coordinator.prepareForSidebarDismissal(delayNanoseconds: 1) {
+        coordinator.prepareForSidebarDismissal(delayNanoseconds: 1_000_000_000) {
             false
         }
 
-        try? await Task.sleep(nanoseconds: 1_000_000)
         XCTAssertTrue(coordinator.showsMainToggleFadeExclusion)
         XCTAssertFalse(coordinator.showsSidebarToggleFadeExclusion)
     }
