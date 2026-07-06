@@ -83,6 +83,15 @@ struct ContentView: View {
         }
     }
 
+    private var selectedConversationBranchDividers: [ConversationBranchDivider] {
+        guard let selectedConversationID,
+              let conversation = conversations.first(where: { $0.id == selectedConversationID }) else {
+            return []
+        }
+
+        return conversation.branchDividers
+    }
+
     private var isGenerating: Bool {
         chatSession.isGenerating
     }
@@ -495,6 +504,7 @@ struct ContentView: View {
     private func chatScrollView(topPadding: CGFloat, bottomPadding: CGFloat) -> some View {
         ChatMessageScrollView(
             messages: messageBindings,
+            branchDividers: selectedConversationBranchDividers,
             messageInteraction: $messageInteraction,
             scrollController: chatScrollController,
             isGenerating: isGenerating,
@@ -1675,7 +1685,7 @@ onOpenPhotoPicker: {
             messages: newConversation.messages,
             systemPrompt: currentConfiguration.systemPrompt,
             usesImageAttachments: currentConfiguration.selectedModelSupportsImages,
-            marksIdle: false
+            marksIdle: true
         )
         agentCapabilitySelection.restore(
             skillIDs: newConversation.activeSkillIDs,
@@ -1691,17 +1701,6 @@ onOpenPhotoPicker: {
         saveSelectedConversationIDIfStored(newConversation.id)
         saveStoredConversations()
         setConversationSidebarVisibility(false)
-
-        let request = branch.generationRequest
-        startStreamingResponse(
-            userText: request.userText,
-            imageAttachments: request.imageAttachments,
-            imageContextDescription: request.imageContextDescription,
-            fileAttachments: request.fileAttachments,
-            contextMessages: request.contextMessages,
-            appendsUserMessage: false,
-            existingUserMessageID: request.userMessageID
-        )
     }
 
     private func requestClearGeneratedContent(_ id: UUID) {

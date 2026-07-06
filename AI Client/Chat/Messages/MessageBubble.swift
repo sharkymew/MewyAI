@@ -253,6 +253,22 @@ struct MessageBubble: View {
 
             if showsActions, shouldShowAssistantActions {
                 HStack(spacing: 8) {
+                    Button {
+                        onBranch()
+                    } label: {
+                        Label(
+                            AppLocalizations.string(
+                                "chat.message.branchAction",
+                                defaultValue: "分叉"
+                            ),
+                            systemImage: "arrow.triangle.branch"
+                        )
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                    }
+
                     if !displayContent.isEmpty {
                         Button {
                             onRegenerate()
@@ -293,7 +309,7 @@ struct MessageBubble: View {
     }
 
     private var shouldShowAssistantActions: Bool {
-        !message.isContentCleared && (!displayContent.isEmpty || shouldOfferClearGeneratedContentAction)
+        !isStreaming && !message.isContentCleared
     }
 
     private var clearedContentBubble: some View {

@@ -350,6 +350,29 @@ struct ChatMessageRevisionGroup: Identifiable, Codable, Equatable {
     }
 }
 
+struct ConversationBranchDivider: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var afterMessageID: UUID
+    var sourceMessageName: String
+
+    init(
+        id: UUID = UUID(),
+        afterMessageID: UUID,
+        sourceMessageName: String
+    ) {
+        self.id = id
+        self.afterMessageID = afterMessageID
+        self.sourceMessageName = sourceMessageName
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        afterMessageID = try container.decode(UUID.self, forKey: .afterMessageID)
+        sourceMessageName = try container.decodeIfPresent(String.self, forKey: .sourceMessageName) ?? ""
+    }
+}
+
 struct AIConversation: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var title: String = AppLocalizations.string("conversation.newTitle", defaultValue: "New Chat")
@@ -363,6 +386,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
     var activeMCPServerIDs: [UUID] = []
     var branchedFromConversationID: UUID?
     var branchedFromMessageID: UUID?
+    var branchDividers: [ConversationBranchDivider] = []
     var indexedMessageCount: Int?
 
     init(
@@ -378,6 +402,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         activeMCPServerIDs: [UUID] = [],
         branchedFromConversationID: UUID? = nil,
         branchedFromMessageID: UUID? = nil,
+        branchDividers: [ConversationBranchDivider] = [],
         indexedMessageCount: Int? = nil
     ) {
         self.id = id
@@ -392,6 +417,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         self.activeMCPServerIDs = activeMCPServerIDs
         self.branchedFromConversationID = branchedFromConversationID
         self.branchedFromMessageID = branchedFromMessageID
+        self.branchDividers = branchDividers
         self.indexedMessageCount = indexedMessageCount
     }
 
@@ -410,6 +436,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         activeMCPServerIDs = try container.decodeIfPresent([UUID].self, forKey: .activeMCPServerIDs) ?? []
         branchedFromConversationID = try container.decodeIfPresent(UUID.self, forKey: .branchedFromConversationID)
         branchedFromMessageID = try container.decodeIfPresent(UUID.self, forKey: .branchedFromMessageID)
+        branchDividers = try container.decodeIfPresent([ConversationBranchDivider].self, forKey: .branchDividers) ?? []
         indexedMessageCount = nil
     }
 
@@ -419,6 +446,8 @@ struct AIConversation: Identifiable, Codable, Equatable {
         conversation.messageRevisionGroups = messageRevisionGroups
             .map(\.normalized)
             .filter { !$0.revisions.isEmpty }
+        let visibleMessageIDs = Set(conversation.messages.map(\.id))
+        conversation.branchDividers = branchDividers.filter { visibleMessageIDs.contains($0.afterMessageID) }
         return conversation
     }
 
@@ -453,6 +482,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         case activeMCPServerIDs
         case branchedFromConversationID
         case branchedFromMessageID
+        case branchDividers
     }
 }
 

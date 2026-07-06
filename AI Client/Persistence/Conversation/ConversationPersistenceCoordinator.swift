@@ -44,7 +44,6 @@ enum ConversationPersistenceCoordinator {
 
     struct BranchConversationResult: Equatable {
         let conversation: AIConversation
-        let generationRequest: ExistingUserMessageGenerationRequest
     }
 
     struct ConversationDeletionResult: Equatable {
@@ -399,12 +398,20 @@ enum ConversationPersistenceCoordinator {
         activeMCPServerIDs: Set<UUID>,
         date: Date = Date()
     ) -> BranchConversationResult? {
-        guard let userIndex = messages.firstIndex(where: { $0.id == messageID && $0.role == "user" }) else {
+        guard let messageIndex = messages.firstIndex(where: { $0.id == messageID }) else {
             return nil
         }
 
-        let userMessage = messages[userIndex]
-        let branchMessages = Array(messages.prefix(through: userIndex))
+        let branchMessage = messages[messageIndex]
+        let branchMessages = Array(messages.prefix(through: messageIndex))
+        let branchMessageIDs = Set(branchMessages.map(\.id))
+        var branchDividers = sourceConversation.branchDividers.filter { divider in
+            branchMessageIDs.contains(divider.afterMessageID)
+        }
+        branchDividers.append(ConversationBranchDivider(
+            afterMessageID: messageID,
+            sourceMessageName: branchSourceMessageName(for: branchMessage)
+        ))
 
         let branchedConversation = AIConversation(
             title: AppLocalizations.string("conversation.newTitle", defaultValue: "New Chat"),
@@ -417,22 +424,39 @@ enum ConversationPersistenceCoordinator {
             activeSkillIDs: Array(activeSkillIDs),
             activeMCPServerIDs: Array(activeMCPServerIDs),
             branchedFromConversationID: sourceConversation.id,
-            branchedFromMessageID: messageID
-        )
-
-        let generationRequest = ExistingUserMessageGenerationRequest(
-            userMessageID: messageID,
-            userText: userMessage.content,
-            imageAttachments: userMessage.imageAttachments,
-            imageContextDescription: userMessage.imageContextDescription,
-            fileAttachments: userMessage.fileAttachments,
-            contextMessages: Array(branchMessages.prefix(userIndex))
+            branchedFromMessageID: messageID,
+            branchDividers: branchDividers
         )
 
         return BranchConversationResult(
-            conversation: branchedConversation,
-            generationRequest: generationRequest
+            conversation: branchedConversation
         )
+    }
+
+    private static func branchSourceMessageName(for message: ChatMessage) -> String {
+        let sourceText = message.content
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if !sourceText.isEmpty {
+            let limit = 24
+            return sourceText.count > limit ? "\(sourceText.prefix(limit))..." : sourceText
+        }
+
+        if !message.fileAttachments.isEmpty {
+            return AppLocalizations.string("conversation.branchSource.files", defaultValue: "附件消息")
+        }
+
+        if !message.imageAttachments.isEmpty {
+            return AppLocalizations.string("conversation.branchSource.images", defaultValue: "图片消息")
+        }
+
+        return message.role == "assistant"
+            ? AppLocalizations.string("conversation.branchSource.assistant", defaultValue: "AI 回复")
+            : AppLocalizations.string("conversation.branchSource.user", defaultValue: "用户消息")
     }
 
     private static func apply(_ edit: UserMessageEdit, to message: inout ChatMessage) {

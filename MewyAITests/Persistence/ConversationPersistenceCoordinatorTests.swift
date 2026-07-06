@@ -602,7 +602,7 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
         XCTAssertEqual(request?.contextMessages.map(\.id), [firstUserID, firstAssistantID])
     }
 
-    func testPrepareBranchFromMessageCopiesPrefixThroughTargetUserMessage() {
+    func testPrepareBranchFromMessageCopiesPrefixThroughTargetMessage() {
         let sourceConversationID = UUID()
         let firstUserID = UUID()
         let firstAssistantID = UUID()
@@ -635,7 +635,11 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
             title: "Source",
             messages: messages,
             hasGeneratedTitle: true,
-            isPinned: true
+            isPinned: true,
+            branchDividers: [
+                ConversationBranchDivider(afterMessageID: firstAssistantID, sourceMessageName: "first answer"),
+                ConversationBranchDivider(afterMessageID: trailingAssistantID, sourceMessageName: "trailing answer")
+            ]
         )
         let skillID = UUID()
         let mcpServerID = UUID()
@@ -663,16 +667,11 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
         XCTAssertEqual(result?.conversation.activeMCPServerIDs, [mcpServerID])
         XCTAssertEqual(result?.conversation.branchedFromConversationID, sourceConversationID)
         XCTAssertEqual(result?.conversation.branchedFromMessageID, branchUserID)
-
-        XCTAssertEqual(result?.generationRequest.userMessageID, branchUserID)
-        XCTAssertEqual(result?.generationRequest.userText, "branch question")
-        XCTAssertEqual(result?.generationRequest.imageAttachments, [imageAttachment])
-        XCTAssertEqual(result?.generationRequest.imageContextDescription, "image context")
-        XCTAssertEqual(result?.generationRequest.fileAttachments, [fileAttachment])
-        XCTAssertEqual(
-            result?.generationRequest.contextMessages.map(\.id),
-            [firstUserID, firstAssistantID]
-        )
+        XCTAssertEqual(result?.conversation.branchDividers.count, 2)
+        XCTAssertEqual(result?.conversation.branchDividers[0].afterMessageID, firstAssistantID)
+        XCTAssertEqual(result?.conversation.branchDividers[0].sourceMessageName, "first answer")
+        XCTAssertEqual(result?.conversation.branchDividers[1].afterMessageID, branchUserID)
+        XCTAssertEqual(result?.conversation.branchDividers[1].sourceMessageName, "branch question")
     }
 
     func testPrepareBranchFromMessageDoesNotMutateSourceMessages() {
@@ -699,11 +698,14 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
         XCTAssertEqual(messages.map(\.id), [branchUserID, trailingAssistantID])
     }
 
-    func testPrepareBranchFromMessageReturnsNilForAssistantMessage() {
+    func testPrepareBranchFromMessageCopiesPrefixThroughAssistantMessage() {
+        let userID = UUID()
         let assistantID = UUID()
+        let trailingUserID = UUID()
         let messages = [
-            ChatMessage(role: "user", content: "question"),
-            ChatMessage(id: assistantID, role: "assistant", content: "answer")
+            ChatMessage(id: userID, role: "user", content: "question"),
+            ChatMessage(id: assistantID, role: "assistant", content: "answer"),
+            ChatMessage(id: trailingUserID, role: "user", content: "next question")
         ]
         let sourceConversation = AIConversation(messages: messages)
 
@@ -715,7 +717,10 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
             activeMCPServerIDs: []
         )
 
-        XCTAssertNil(result)
+        XCTAssertEqual(result?.conversation.messages.map(\.id), [userID, assistantID])
+        XCTAssertEqual(result?.conversation.branchDividers.count, 1)
+        XCTAssertEqual(result?.conversation.branchDividers.first?.afterMessageID, assistantID)
+        XCTAssertEqual(result?.conversation.branchDividers.first?.sourceMessageName, "answer")
     }
 
     func testPrepareBranchFromMessageReturnsNilForMissingMessage() {
@@ -756,8 +761,7 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
         )
 
         XCTAssertEqual(result?.conversation.messages.count, 1)
-        XCTAssertEqual(result?.generationRequest.userText, "first")
-        XCTAssertEqual(result?.generationRequest.contextMessages, [])
+        XCTAssertEqual(result?.conversation.branchDividers.first?.sourceMessageName, "first")
     }
 
     func testUpdateAssistantMessageMutatesSelectedMessagesOnly() {

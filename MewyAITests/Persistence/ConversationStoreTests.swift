@@ -33,6 +33,41 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertFalse(message.isContentCleared)
     }
 
+    func testConversationDecodeDefaultsBranchDividers() throws {
+        let data = """
+        {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "title": "Legacy",
+          "messages": []
+        }
+        """.data(using: .utf8)!
+
+        let conversation = try JSONDecoder().decode(AIConversation.self, from: data)
+
+        XCTAssertTrue(conversation.branchDividers.isEmpty)
+    }
+
+    func testConversationBranchDividersRoundTrip() throws {
+        let messageID = UUID()
+        let conversation = AIConversation(
+            messages: [
+                ChatMessage(id: messageID, role: "user", content: "branch point")
+            ],
+            branchDividers: [
+                ConversationBranchDivider(afterMessageID: messageID, sourceMessageName: "branch point")
+            ]
+        )
+
+        let decoded = try JSONDecoder().decode(
+            AIConversation.self,
+            from: JSONEncoder().encode(conversation)
+        )
+
+        XCTAssertEqual(decoded.branchDividers.count, 1)
+        XCTAssertEqual(decoded.branchDividers.first?.afterMessageID, messageID)
+        XCTAssertEqual(decoded.branchDividers.first?.sourceMessageName, "branch point")
+    }
+
     func testClearedGeneratedContentRoundTripsWithoutStoredContent() throws {
         let usage = ChatUsage(
             inputTokens: 12,
@@ -312,6 +347,38 @@ final class ConversationStoreTests: XCTestCase {
 
         XCTAssertFalse(loaded.isIndexOnly)
         XCTAssertEqual(loaded.messages.first?.content, "single body")
+    }
+
+    func testLoadConversationPreservesBranchDividers() throws {
+        let storageURL = try makeTemporaryStorageURL()
+        let messageID = UUID()
+        let conversation = AIConversation(
+            id: UUID(),
+            title: "Branched",
+            messages: [
+                ChatMessage(id: messageID, role: "assistant", content: "source answer")
+            ],
+            branchedFromConversationID: UUID(),
+            branchedFromMessageID: messageID,
+            branchDividers: [
+                ConversationBranchDivider(afterMessageID: messageID, sourceMessageName: "source answer")
+            ]
+        )
+        XCTAssertTrue(ConversationStore.saveConversations(
+            [conversation],
+            applicationSupportURL: storageURL
+        ))
+
+        let loaded = try XCTUnwrap(ConversationStore.loadConversation(
+            id: conversation.id,
+            applicationSupportURL: storageURL
+        ))
+
+        XCTAssertEqual(loaded.branchedFromConversationID, conversation.branchedFromConversationID)
+        XCTAssertEqual(loaded.branchedFromMessageID, messageID)
+        XCTAssertEqual(loaded.branchDividers.count, 1)
+        XCTAssertEqual(loaded.branchDividers.first?.afterMessageID, messageID)
+        XCTAssertEqual(loaded.branchDividers.first?.sourceMessageName, "source answer")
     }
 
     func testLoadConversationsMigratesLegacySingleFileToSplitStorage() throws {

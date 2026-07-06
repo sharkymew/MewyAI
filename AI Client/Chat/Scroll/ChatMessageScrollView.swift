@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChatMessageScrollView: View {
     @Binding var messages: [ChatMessage]
+    let branchDividers: [ConversationBranchDivider]
     @Binding var messageInteraction: MessageInteractionState
     @ObservedObject var scrollController: ChatScrollController
 
@@ -30,43 +31,49 @@ struct ChatMessageScrollView: View {
                             let streamingDisplay = visibleAssistantDisplayState(message.id)
                             let revisionNavigation = isGenerating ? nil : revisionNavigationState(message.id)
 
-                            MessageBubble(
-                                message: $message,
-                                isStreaming: streamingDisplay.isStreaming,
-                                hasStreamingReasoning: streamingDisplay.hasStreamingReasoning,
-                                hasStreamingContent: streamingDisplay.hasStreamingContent,
-                                streamingContentChannel: streamingDisplay.streamingContentChannel,
-                                streamingReasoningChannel: streamingDisplay.streamingReasoningChannel,
-                                markdownRenderCache: markdownRenderCacheEntry(message.id),
-                                usageDisplayText: usageFooterText(message),
-                                showsActions: messageInteraction.activeActionID == message.id,
-                                revisionNavigationState: revisionNavigation,
-                                onSelect: {
-                                    selectMessageAction(for: message.id)
-                                },
-                                onReasoningExpansionChanged: { isExpanded in
-                                    onReasoningExpansionChanged(message.id, isExpanded)
-                                },
-                                onRegenerate: {
-                                    onRegenerate(message.id)
-                                },
-                                onEdit: {
-                                    onEdit(message.id)
-                                },
-                                onBranch: {
-                                    onBranch(message.id)
-                                },
-                                onClearGeneratedContent: {
-                                    onClearGeneratedContent(message.id)
-                                },
-                                onSelectPreviousRevision: {
-                                    onSelectPreviousRevision(message.id)
-                                },
-                                onSelectNextRevision: {
-                                    onSelectNextRevision(message.id)
+                            VStack(spacing: 12) {
+                                MessageBubble(
+                                    message: $message,
+                                    isStreaming: streamingDisplay.isStreaming,
+                                    hasStreamingReasoning: streamingDisplay.hasStreamingReasoning,
+                                    hasStreamingContent: streamingDisplay.hasStreamingContent,
+                                    streamingContentChannel: streamingDisplay.streamingContentChannel,
+                                    streamingReasoningChannel: streamingDisplay.streamingReasoningChannel,
+                                    markdownRenderCache: markdownRenderCacheEntry(message.id),
+                                    usageDisplayText: usageFooterText(message),
+                                    showsActions: messageInteraction.activeActionID == message.id,
+                                    revisionNavigationState: revisionNavigation,
+                                    onSelect: {
+                                        selectMessageAction(for: message.id)
+                                    },
+                                    onReasoningExpansionChanged: { isExpanded in
+                                        onReasoningExpansionChanged(message.id, isExpanded)
+                                    },
+                                    onRegenerate: {
+                                        onRegenerate(message.id)
+                                    },
+                                    onEdit: {
+                                        onEdit(message.id)
+                                    },
+                                    onBranch: {
+                                        onBranch(message.id)
+                                    },
+                                    onClearGeneratedContent: {
+                                        onClearGeneratedContent(message.id)
+                                    },
+                                    onSelectPreviousRevision: {
+                                        onSelectPreviousRevision(message.id)
+                                    },
+                                    onSelectNextRevision: {
+                                        onSelectNextRevision(message.id)
+                                    }
+                                )
+                                .id(message.id)
+
+                                ForEach(branchDividersByMessageID[message.id] ?? []) { divider in
+                                    ConversationBranchDividerView(divider: divider)
                                 }
-                            )
-                            .id(message.id)
+                            }
                         }
 
                         bottomAnchor(viewportHeight: scrollGeometry.size.height)
@@ -111,6 +118,10 @@ struct ChatMessageScrollView: View {
                 }
             }
         }
+    }
+
+    private var branchDividersByMessageID: [UUID: [ConversationBranchDivider]] {
+        Dictionary(grouping: branchDividers, by: \.afterMessageID)
     }
 
     @ViewBuilder
@@ -176,5 +187,37 @@ struct ChatMessageScrollView: View {
         } else {
             proxy.scrollTo("bottomAnchor", anchor: .bottom)
         }
+    }
+}
+
+private struct ConversationBranchDividerView: View {
+    let divider: ConversationBranchDivider
+
+    var body: some View {
+        HStack(spacing: 10) {
+            line
+
+            Text(AppLocalizations.format(
+                "conversation.branchDivider.label",
+                defaultValue: "从「%@」分支",
+                arguments: [divider.sourceMessageName]
+            ))
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .fixedSize(horizontal: false, vertical: true)
+
+            line
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var line: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.18))
+            .frame(height: 1)
     }
 }
