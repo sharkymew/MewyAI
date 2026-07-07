@@ -3,6 +3,7 @@ import SwiftUI
 import Combine
 import UIKit
 
+@MainActor
 final class ConversationActionHaptics: ObservableObject {
     private let generator = UIImpactFeedbackGenerator(style: .light)
 
