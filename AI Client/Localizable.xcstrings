@@ -1585,6 +1585,9 @@
     "AI configuration not found: %@" : {
 
     },
+    "AI 回复" : {
+
+    },
     "aiService.diagnostics.errorBodyReadFailed" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -11329,6 +11332,9 @@
         }
       }
     },
+    "从「%@」分支" : {
+
+    },
     "价格" : {
       "localizations" : {
         "en" : {
@@ -12339,6 +12345,9 @@
           }
         }
       }
+    },
+    "图片消息" : {
+
     },
     "在临时聊天中，聊天不会出现在历史记录中，但是在此对话进行过程中，你的上下文记录会被发送到模型提供商。" : {
       "localizations" : {
@@ -14037,6 +14046,9 @@
         }
       }
     },
+    "用户消息" : {
+
+    },
     "用途" : {
       "localizations" : {
         "en" : {
@@ -14968,6 +14980,9 @@
           }
         }
       }
+    },
+    "附件消息" : {
+
     },
     "隐私与拍照" : {
 

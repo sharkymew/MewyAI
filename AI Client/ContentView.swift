@@ -490,7 +490,7 @@ struct ContentView: View {
                 )
             },
             inputBar: {
-                inputBar(includesLegacyFade: true)
+                inputBar
             },
             scrollButtonLabel: {
                 ChatScrollToBottomGlassIconLabel(
@@ -558,7 +558,7 @@ struct ContentView: View {
         .frame(maxWidth: 360)
     }
 
-    private func inputBar(includesLegacyFade: Bool) -> some View {
+    private var inputBar: some View {
         ChatInputBar(
             showsActiveAgentCapsules: !activeAgentCapsules.isEmpty,
             showsPendingAttachments: hasPendingInputAttachments,
@@ -571,7 +571,6 @@ struct ContentView: View {
             horizontalPadding: inputBarHorizontalPadding,
             topPadding: inputBarTopPadding,
             bottomPadding: inputBarBottomPadding,
-            includesLegacyFade: includesLegacyFade,
             isAttachmentDropTargeted: $attachmentDraft.isAttachmentDropTargeted,
             onDropAttachments: handleDroppedAttachments,
             onMeasuredHeightChanged: { height in

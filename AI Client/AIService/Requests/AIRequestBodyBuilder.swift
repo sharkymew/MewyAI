@@ -168,7 +168,7 @@ enum AIRequestBodyBuilder {
 
     private static func anthropicMessages(
         from messages: [ChatRequestMessage]
-    ) -> (system: AnthropicSystemContent?, messages: [AnthropicMessage]) {
+    ) -> (system: String?, messages: [AnthropicMessage]) {
         var systemMessages = [String]()
         var requestMessages = [AnthropicMessage]()
 
@@ -227,9 +227,9 @@ enum AIRequestBodyBuilder {
 
     private static func anthropicSystemContent(
         from systemMessages: [String]
-    ) -> AnthropicSystemContent? {
+    ) -> String? {
         guard !systemMessages.isEmpty else { return nil }
-        return .text(systemMessages.joined(separator: "\n\n"))
+        return systemMessages.joined(separator: "\n\n")
     }
 
     private static func vertexRequest(

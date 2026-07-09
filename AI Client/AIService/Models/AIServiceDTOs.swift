@@ -144,45 +144,11 @@ enum OpenAIResponsesPart: Encodable {
     }
 }
 
-struct AnthropicCacheControl: Encodable {
-    static let ephemeral = AnthropicCacheControl(type: "ephemeral")
-
-    let type: String
-}
-
-enum AnthropicSystemContent: Encodable {
-    case text(String)
-    case parts([AnthropicSystemPart])
-
-    func encode(to encoder: Encoder) throws {
-        switch self {
-        case .text(let text):
-            var container = encoder.singleValueContainer()
-            try container.encode(text)
-        case .parts(let parts):
-            var container = encoder.singleValueContainer()
-            try container.encode(parts)
-        }
-    }
-}
-
-struct AnthropicSystemPart: Encodable {
-    let type = "text"
-    let text: String
-    let cacheControl: AnthropicCacheControl?
-
-    enum CodingKeys: String, CodingKey {
-        case type
-        case text
-        case cacheControl = "cache_control"
-    }
-}
-
 struct AnthropicMessagesRequest: Encodable {
     let model: String
     let maxTokens: Int
     let messages: [AnthropicMessage]
-    let system: AnthropicSystemContent?
+    let system: String?
     let stream: Bool
     let tools: [AnthropicToolDefinition]?
     let temperature: Double?
@@ -233,13 +199,6 @@ struct AnthropicToolDefinition: Encodable {
 struct AnthropicMessage: Encodable {
     let role: String
     let content: AnthropicMessageContent
-
-    func applyingEphemeralCacheControlToLastContentPart() -> AnthropicMessage {
-        AnthropicMessage(
-            role: role,
-            content: content.applyingEphemeralCacheControlToLastPart()
-        )
-    }
 }
 
 enum AnthropicMessageContent: Encodable {
@@ -257,41 +216,13 @@ enum AnthropicMessageContent: Encodable {
         }
     }
 
-    func applyingEphemeralCacheControlToLastPart() -> AnthropicMessageContent {
-        switch self {
-        case .text(let text):
-            return .parts([.cached(.text(text))])
-        case .parts(let parts):
-            guard !parts.isEmpty else {
-                return .parts([.cached(.text(""))])
-            }
-
-            if let lastTextIndex = parts.lastIndex(where: { part in
-                if case .text = part {
-                    return true
-                }
-                return false
-            }) {
-                var cachedParts = parts
-                let textPart = cachedParts.remove(at: lastTextIndex)
-                cachedParts.append(.cached(textPart))
-                return .parts(cachedParts)
-            }
-
-            var cachedParts = parts
-            let lastPart = cachedParts.removeLast()
-            cachedParts.append(.cached(lastPart))
-            return .parts(cachedParts)
-        }
-    }
 }
 
-indirect enum AnthropicContentPart: Encodable {
+enum AnthropicContentPart: Encodable {
     case text(String)
     case image(mediaType: String, data: String)
     case toolUse(id: String, name: String, input: JSONValue)
     case toolResult(toolUseID: String, content: String, isError: Bool)
-    case cached(AnthropicContentPart)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -303,7 +234,6 @@ indirect enum AnthropicContentPart: Encodable {
         case toolUseID = "tool_use_id"
         case content
         case isError = "is_error"
-        case cacheControl = "cache_control"
     }
 
     private enum SourceCodingKeys: String, CodingKey {
@@ -313,29 +243,22 @@ indirect enum AnthropicContentPart: Encodable {
     }
 
     func encode(to encoder: Encoder) throws {
-        try encode(to: encoder, cacheControl: nil)
-    }
-
-    private func encode(to encoder: Encoder, cacheControl: AnthropicCacheControl?) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .text(let text):
             try container.encode("text", forKey: .type)
             try container.encode(text, forKey: .text)
-            try encodeCacheControl(cacheControl, to: &container)
         case .image(let mediaType, let data):
             try container.encode("image", forKey: .type)
             var sourceContainer = container.nestedContainer(keyedBy: SourceCodingKeys.self, forKey: .source)
             try sourceContainer.encode("base64", forKey: .type)
             try sourceContainer.encode(mediaType, forKey: .mediaType)
             try sourceContainer.encode(data, forKey: .data)
-            try encodeCacheControl(cacheControl, to: &container)
         case .toolUse(let id, let name, let input):
             try container.encode("tool_use", forKey: .type)
             try container.encode(id, forKey: .id)
             try container.encode(name, forKey: .name)
             try container.encode(input, forKey: .input)
-            try encodeCacheControl(cacheControl, to: &container)
         case .toolResult(let toolUseID, let content, let isError):
             try container.encode("tool_result", forKey: .type)
             try container.encode(toolUseID, forKey: .toolUseID)
@@ -343,18 +266,6 @@ indirect enum AnthropicContentPart: Encodable {
             if isError {
                 try container.encode(true, forKey: .isError)
             }
-            try encodeCacheControl(cacheControl, to: &container)
-        case .cached(let part):
-            try part.encode(to: encoder, cacheControl: cacheControl ?? .ephemeral)
-        }
-    }
-
-    private func encodeCacheControl(
-        _ cacheControl: AnthropicCacheControl?,
-        to container: inout KeyedEncodingContainer<CodingKeys>
-    ) throws {
-        if let cacheControl {
-            try container.encode(cacheControl, forKey: .cacheControl)
         }
     }
 }

@@ -13,7 +13,6 @@ struct ChatInputBar<ActiveAgentCapsules: View, PendingAttachmentPreview: View, C
     let horizontalPadding: CGFloat
     let topPadding: CGFloat
     let bottomPadding: CGFloat
-    let includesLegacyFade: Bool
     @Binding var isAttachmentDropTargeted: Bool
     let onDropAttachments: ([NSItemProvider]) -> Bool
     let onMeasuredHeightChanged: (CGFloat) -> Void
@@ -85,10 +84,8 @@ struct ChatInputBar<ActiveAgentCapsules: View, PendingAttachmentPreview: View, C
         .padding(.top, topPadding)
         .padding(.bottom, bottomPadding)
         .background(alignment: .bottom) {
-            if includesLegacyFade {
-                legacyFade()
-                    .ignoresSafeArea(.container, edges: .bottom)
-            }
+            legacyFade()
+                .ignoresSafeArea(.container, edges: .bottom)
         }
         .background {
             GeometryReader { geometry in

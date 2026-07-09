@@ -61,12 +61,6 @@ struct AgentToolCallResult: Equatable {
     var isError: Bool
 }
 
-struct AgentToolRunResult {
-    var content: String
-    var reasoningContent: String
-    var toolExchanges: [ChatToolExchange]
-}
-
 enum AgentTooling {
     static let maxToolRounds = 4
     static let maxToolCalls = 8
