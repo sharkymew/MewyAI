@@ -254,7 +254,7 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertEqual(ConversationStore.decompressedStorageData(from: stored), tiny)
     }
 
-    func testSaveConversationsWritesSplitIndexAndConversationFiles() throws {
+    func testSaveConversationsWritesSQLiteDatabase() throws {
         let storageURL = try makeTemporaryStorageURL()
         let older = AIConversation(
             id: UUID(),
@@ -276,9 +276,10 @@ final class ConversationStoreTests: XCTestCase {
             applicationSupportURL: storageURL
         ))
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: indexURL(in: storageURL).path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: conversationURL(newer.id, in: storageURL).path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: conversationURL(older.id, in: storageURL).path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: storageURL.appendingPathComponent("Conversations.sqlite").path
+        ))
+        XCTAssertTrue(ConversationSQLiteStore.isHealthy(applicationSupportURL: storageURL))
 
         let loaded = ConversationStore.loadConversations(applicationSupportURL: storageURL)
 
@@ -413,7 +414,7 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertEqual(loaded.branchDividers.first?.sourceMessageName, "source answer")
     }
 
-    func testLoadConversationsMigratesLegacySingleFileToSplitStorage() throws {
+    func testStartupMigratesLegacySingleFileToSQLiteThenCleansItOnNextLaunch() throws {
         let storageURL = try makeTemporaryStorageURL()
         let conversation = AIConversation(
             id: UUID(),
@@ -423,11 +424,28 @@ final class ConversationStoreTests: XCTestCase {
         let legacyData = try JSONEncoder().encode([conversation])
         try legacyData.write(to: storageURL.appendingPathComponent("Conversations.json"))
 
-        let loaded = ConversationStore.loadConversations(applicationSupportURL: storageURL)
+        let loaded = ConversationStore.loadConversationsForStartup(
+            selectedConversationID: conversation.id,
+            applicationSupportURL: storageURL
+        )
 
         XCTAssertEqual(loaded.map(\.id), [conversation.id])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: indexURL(in: storageURL).path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: conversationURL(conversation.id, in: storageURL).path))
+        XCTAssertEqual(loaded.first?.messages.first?.content, "legacy body")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: storageURL.appendingPathComponent("Conversations.sqlite").path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: storageURL.appendingPathComponent("Conversations.json").path
+        ))
+
+        _ = ConversationStore.loadConversationsForStartup(
+            selectedConversationID: conversation.id,
+            applicationSupportURL: storageURL
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: storageURL.appendingPathComponent("Conversations.json").path
+        ))
     }
 
     func testSaveConversationUpdatesOnlyTargetConversationFile() throws {
@@ -448,8 +466,6 @@ final class ConversationStoreTests: XCTestCase {
             [first, second],
             applicationSupportURL: storageURL
         ))
-        let secondDataBefore = try Data(contentsOf: conversationURL(second.id, in: storageURL))
-
         var updatedFirst = first
         updatedFirst.messages.append(ChatMessage(role: "assistant", content: "updated"))
         updatedFirst.updatedAt = Date(timeIntervalSince1970: 3)
@@ -460,12 +476,11 @@ final class ConversationStoreTests: XCTestCase {
             applicationSupportURL: storageURL
         ))
 
-        let secondDataAfter = try Data(contentsOf: conversationURL(second.id, in: storageURL))
         let loaded = ConversationStore.loadConversations(applicationSupportURL: storageURL)
 
-        XCTAssertEqual(secondDataAfter, secondDataBefore)
         XCTAssertEqual(loaded.first?.id, updatedFirst.id)
         XCTAssertEqual(loaded.first?.messages.last?.content, "updated")
+        XCTAssertEqual(loaded.first { $0.id == second.id }?.messages.first?.content, "second")
     }
 
     func testSavingIndexOnlyConversationsPreservesExistingConversationFiles() throws {
@@ -486,9 +501,6 @@ final class ConversationStoreTests: XCTestCase {
             [first, second],
             applicationSupportURL: storageURL
         ))
-        let firstDataBefore = try Data(contentsOf: conversationURL(first.id, in: storageURL))
-        let secondDataBefore = try Data(contentsOf: conversationURL(second.id, in: storageURL))
-
         var indexOnlyConversations = ConversationStore.loadConversationList(applicationSupportURL: storageURL)
         let secondIndex = try XCTUnwrap(indexOnlyConversations.firstIndex { $0.id == second.id })
         indexOnlyConversations[secondIndex].isPinned = true
@@ -497,9 +509,6 @@ final class ConversationStoreTests: XCTestCase {
             indexOnlyConversations,
             applicationSupportURL: storageURL
         ))
-
-        XCTAssertEqual(try Data(contentsOf: conversationURL(first.id, in: storageURL)), firstDataBefore)
-        XCTAssertEqual(try Data(contentsOf: conversationURL(second.id, in: storageURL)), secondDataBefore)
 
         let loadedSecond = try XCTUnwrap(ConversationStore.loadConversation(
             id: second.id,
@@ -522,8 +531,6 @@ final class ConversationStoreTests: XCTestCase {
             [conversation],
             applicationSupportURL: storageURL
         ))
-        let dataBefore = try Data(contentsOf: conversationURL(conversation.id, in: storageURL))
-
         var indexOnlyConversation = try XCTUnwrap(
             ConversationStore.loadConversationList(applicationSupportURL: storageURL).first
         )
@@ -534,8 +541,6 @@ final class ConversationStoreTests: XCTestCase {
             in: [indexOnlyConversation],
             applicationSupportURL: storageURL
         ))
-
-        XCTAssertEqual(try Data(contentsOf: conversationURL(conversation.id, in: storageURL)), dataBefore)
 
         let loadedConversation = try XCTUnwrap(ConversationStore.loadConversation(
             id: conversation.id,
@@ -549,7 +554,7 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertEqual(loadedIndex.title, "Renamed")
     }
 
-    func testSaveConversationsRemovesStaleSplitConversationFiles() throws {
+    func testSaveConversationsRemovesStaleSQLiteRows() throws {
         let storageURL = try makeTemporaryStorageURL()
         let retained = AIConversation(id: UUID(), title: "Retained")
         let removed = AIConversation(id: UUID(), title: "Removed")
@@ -563,8 +568,126 @@ final class ConversationStoreTests: XCTestCase {
             applicationSupportURL: storageURL
         ))
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: conversationURL(retained.id, in: storageURL).path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: conversationURL(removed.id, in: storageURL).path))
+        XCTAssertEqual(
+            ConversationStore.loadConversationList(applicationSupportURL: storageURL).map(\.id),
+            [retained.id]
+        )
+    }
+
+    func testSQLiteRoundTripPreservesNestedConversationData() throws {
+        let storageURL = try makeTemporaryStorageURL()
+        let knowledgeBaseID = UUID()
+        let messageID = UUID()
+        let citation = KnowledgeCitation(
+            knowledgeBaseID: knowledgeBaseID,
+            knowledgeBaseName: "Docs",
+            documentID: UUID(),
+            documentName: "Guide",
+            chunkID: UUID(),
+            chunkIndex: 2,
+            location: "Page 3",
+            excerpt: "relevant excerpt",
+            similarity: 0.9
+        )
+        let message = ChatMessage(
+            id: messageID,
+            role: "assistant",
+            content: "Answer",
+            fileAttachments: [
+                ChatFileAttachment(
+                    name: "notes.txt",
+                    typeIdentifier: "public.plain-text",
+                    byteCount: 42,
+                    characterCount: 12,
+                    extractedText: "file content",
+                    isTruncated: false
+                )
+            ],
+            toolExchanges: [
+                ChatToolExchange(
+                    toolCalls: [
+                        ChatToolCall(
+                            id: "call-1",
+                            name: "search",
+                            displayName: "Search",
+                            argumentsJSON: "{\"query\":\"sqlite\"}"
+                        )
+                    ],
+                    toolResults: [
+                        ChatToolResult(toolCallID: "call-1", name: "search", content: "result")
+                    ]
+                )
+            ],
+            knowledgeCitations: [citation],
+            usage: ChatUsage(inputTokens: 10, outputTokens: 20, modelName: "model", configurationID: UUID()),
+            isStopped: true
+        )
+        let conversation = AIConversation(
+            title: "Complete",
+            messages: [message],
+            activeSkillIDs: [UUID()],
+            activeMCPServerIDs: [UUID()],
+            activeKnowledgeBaseIDs: [knowledgeBaseID],
+            branchDividers: [
+                ConversationBranchDivider(afterMessageID: messageID, sourceMessageName: "Answer")
+            ]
+        )
+
+        XCTAssertTrue(ConversationStore.saveConversations(
+            [conversation],
+            applicationSupportURL: storageURL
+        ))
+
+        let loaded = try XCTUnwrap(ConversationStore.loadConversation(
+            id: conversation.id,
+            applicationSupportURL: storageURL
+        ))
+
+        XCTAssertEqual(loaded, conversation.normalized)
+    }
+
+    func testSQLiteSearchIncludesRevisionHistoryAndUsesAndTerms() throws {
+        let storageURL = try makeTemporaryStorageURL()
+        let messageID = UUID()
+        let historical = ChatMessageRevision(messages: [
+            ChatMessage(id: messageID, role: "user", content: "古典力学的推导")
+        ])
+        let target = AIConversation(
+            title: "Swift notes",
+            messages: [
+                ChatMessage(id: messageID, role: "user", content: "闭包捕获")
+            ],
+            messageRevisionGroups: [
+                ChatMessageRevisionGroup(
+                    id: messageID,
+                    selectedRevisionID: historical.id,
+                    revisions: [historical]
+                )
+            ]
+        )
+        let other = AIConversation(title: "Other", messages: [
+            ChatMessage(role: "assistant", content: "unrelated")
+        ])
+
+        XCTAssertTrue(ConversationStore.saveConversations(
+            [target, other],
+            applicationSupportURL: storageURL
+        ))
+
+        XCTAssertEqual(
+            ConversationSQLiteStore.searchConversationIDs(
+                query: "swift 闭包",
+                applicationSupportURL: storageURL
+            ),
+            Set([target.id])
+        )
+        XCTAssertEqual(
+            ConversationSQLiteStore.searchConversationIDs(
+                query: "古典力学",
+                applicationSupportURL: storageURL
+            ),
+            Set([target.id])
+        )
     }
 
     private func makeTemporaryStorageURL() throws -> URL {
@@ -572,19 +695,5 @@ final class ConversationStoreTests: XCTestCase {
             .appendingPathComponent("ConversationStoreTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
-    }
-
-    private func conversationsDirectoryURL(in storageURL: URL) -> URL {
-        storageURL.appendingPathComponent("Conversations", isDirectory: true)
-    }
-
-    private func indexURL(in storageURL: URL) -> URL {
-        conversationsDirectoryURL(in: storageURL)
-            .appendingPathComponent("Index.json", isDirectory: false)
-    }
-
-    private func conversationURL(_ id: UUID, in storageURL: URL) -> URL {
-        conversationsDirectoryURL(in: storageURL)
-            .appendingPathComponent("\(id.uuidString).json", isDirectory: false)
     }
 }

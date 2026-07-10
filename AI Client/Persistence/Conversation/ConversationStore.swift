@@ -564,6 +564,41 @@ enum ConversationStore {
         fileManager: FileManager = .default,
         applicationSupportURL: URL? = nil
     ) -> [AIConversation] {
+        if let conversations = ConversationSQLiteStore.loadConversationsForStartup(
+            selectedConversationID: selectedConversationID,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) {
+            if ConversationSQLiteStore.isHealthy(
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+            ) {
+                removeLegacyStorageAfterVerifiedSQLiteLaunch(
+                    fileManager: fileManager,
+                    applicationSupportURL: applicationSupportURL
+                )
+            }
+            return conversations
+        }
+
+        // Import the complete legacy model before returning index-only startup data.
+        // This keeps every nested message, revision, and attachment reference intact.
+        let legacyConversations = loadConversations(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        )
+        if ConversationSQLiteStore.saveConversations(
+            legacyConversations,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ), let conversations = ConversationSQLiteStore.loadConversationsForStartup(
+            selectedConversationID: selectedConversationID,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) {
+            return conversations
+        }
+
         var conversations = loadConversationList(
             fileManager: fileManager,
             applicationSupportURL: applicationSupportURL
@@ -596,11 +631,17 @@ enum ConversationStore {
         fileManager: FileManager = .default,
         applicationSupportURL: URL? = nil
     ) -> [AIConversation] {
+        if let conversations = ConversationSQLiteStore.loadConversationList(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) {
+            return conversations
+        }
+
         if let indexedConversations = loadSplitConversationList(
             fileManager: fileManager,
             applicationSupportURL: applicationSupportURL
         ) {
-            UserDefaults.standard.removeObject(forKey: conversationsKey)
             return indexedConversations
         }
 
@@ -615,6 +656,17 @@ enum ConversationStore {
         fileManager: FileManager = .default,
         applicationSupportURL: URL? = nil
     ) -> AIConversation? {
+        if ConversationSQLiteStore.databaseExists(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) {
+            return ConversationSQLiteStore.loadConversation(
+                id: id,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+            )
+        }
+
         if let splitConversation = loadSplitConversation(
             id: id,
             fileManager: fileManager,
@@ -641,11 +693,17 @@ enum ConversationStore {
         fileManager: FileManager = .default,
         applicationSupportURL: URL? = nil
     ) -> [AIConversation] {
+        if let conversations = ConversationSQLiteStore.loadConversations(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) {
+            return conversations
+        }
+
         if let splitConversations = loadSplitConversations(
             fileManager: fileManager,
             applicationSupportURL: applicationSupportURL
         ) {
-            UserDefaults.standard.removeObject(forKey: conversationsKey)
             return splitConversations
         }
 
@@ -658,7 +716,6 @@ enum ConversationStore {
                 fileManager: fileManager,
                 applicationSupportURL: applicationSupportURL
             )
-            UserDefaults.standard.removeObject(forKey: conversationsKey)
             return migratedConversations
         }
 
@@ -684,6 +741,15 @@ enum ConversationStore {
         applicationSupportURL: URL? = nil
     ) -> Bool {
         let storageConversations = migratedConversationsForStorage(conversations)
+        if ConversationSQLiteStore.saveConversations(
+            storageConversations,
+            synchronize: synchronize,
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) {
+            return true
+        }
+
         guard writeSplitConversations(
             storageConversations,
             fileManager: fileManager,
@@ -726,6 +792,29 @@ enum ConversationStore {
             return false
         }
 
+        let savedToSQLite: Bool
+        if ConversationSQLiteStore.databaseExists(
+            fileManager: fileManager,
+            applicationSupportURL: applicationSupportURL
+        ) {
+            savedToSQLite = ConversationSQLiteStore.saveConversation(
+                storedConversation,
+                synchronize: synchronize,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+            )
+        } else {
+            savedToSQLite = ConversationSQLiteStore.saveConversations(
+                storageConversations,
+                synchronize: synchronize,
+                fileManager: fileManager,
+                applicationSupportURL: applicationSupportURL
+            )
+        }
+        if savedToSQLite {
+            return true
+        }
+
         let didWriteConversationFile = storedConversation.isIndexOnly || writeSplitConversation(
             storedConversation,
             fileManager: fileManager,
@@ -764,11 +853,44 @@ enum ConversationStore {
         UserDefaults.standard.removeObject(forKey: selectedConversationIDKey)
     }
 
+    static func searchConversationIDs(query: String) -> Set<UUID>? {
+        ConversationSQLiteStore.searchConversationIDs(query: query)
+    }
+
     private static func applicationSupportURL(
         fileManager: FileManager,
         override: URL?
     ) -> URL? {
         override ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    }
+
+    private static func removeLegacyStorageAfterVerifiedSQLiteLaunch(
+        fileManager: FileManager,
+        applicationSupportURL: URL?
+    ) {
+        guard let supportURL = self.applicationSupportURL(
+            fileManager: fileManager,
+            override: applicationSupportURL
+        ) else {
+            return
+        }
+
+        let legacySingleFileURL = supportURL.appendingPathComponent(conversationsFileName, isDirectory: false)
+        try? fileManager.removeItem(at: legacySingleFileURL)
+
+        let splitDirectoryURL = supportURL.appendingPathComponent(conversationsDirectoryName, isDirectory: true)
+        guard let fileURLs = try? fileManager.contentsOfDirectory(
+            at: splitDirectoryURL,
+            includingPropertiesForKeys: nil
+        ) else {
+            UserDefaults.standard.removeObject(forKey: conversationsKey)
+            return
+        }
+
+        for fileURL in fileURLs where fileURL.pathExtension == "json" {
+            try? fileManager.removeItem(at: fileURL)
+        }
+        UserDefaults.standard.removeObject(forKey: conversationsKey)
     }
 
     private static func conversationsFileURL(

@@ -816,7 +816,7 @@ enum ConversationPersistenceCoordinator {
         fileManager: FileManager = .default,
         applicationSupportURL: URL? = nil
     ) -> AIConversation? {
-        let onDiskConversations = ConversationStore.loadConversationList(
+        let onDiskConversations = ConversationStore.loadConversations(
             fileManager: fileManager,
             applicationSupportURL: applicationSupportURL
         )
