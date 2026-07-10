@@ -68,6 +68,8 @@ enum ConversationMarkdownExporter {
                 ? AppLocalizations.string("markdown.emptyContent", defaultValue: "(Empty content)")
                 : message.content)
 
+            appendKnowledgeSources(for: message, to: &parts)
+
             if message.isStopped {
                 parts.append("")
                 parts.append(AppLocalizations.string("markdown.stoppedBlockquote", defaultValue: "> Generation stopped"))
@@ -164,6 +166,17 @@ enum ConversationMarkdownExporter {
         parts.append("")
         parts.append("</details>")
         parts.append("")
+    }
+
+    private static func appendKnowledgeSources(for message: ChatMessage, to parts: inout [String]) {
+        guard !message.knowledgeCitations.isEmpty else { return }
+        parts.append("")
+        parts.append("**知识来源**")
+        parts.append("")
+        for (index, citation) in message.knowledgeCitations.enumerated() {
+            let location = citation.location.isEmpty ? "" : " · \(citation.location)"
+            parts.append("- [KB:\(index + 1)] \(citation.knowledgeBaseName) · \(citation.documentName)\(location)")
+        }
     }
 
     private static func reasoningText(for message: ChatMessage) -> String {

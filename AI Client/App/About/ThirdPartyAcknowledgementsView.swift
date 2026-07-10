@@ -8,7 +8,7 @@ struct ThirdPartyAcknowledgementsView: View {
             Section {
                 Text(AppLocalizations.string(
                     "acknowledgements.intro",
-                    defaultValue: "MewyAI uses the following open source projects to build its Markdown, network image, and LaTeX rendering experience. Thanks to the authors and contributors of these projects."
+                    defaultValue: "MewyAI uses the following open source projects for document processing and content rendering. Thanks to their authors and contributors."
                 ))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -77,6 +77,17 @@ private struct ThirdPartyAcknowledgement: Identifiable {
             ),
             attribution: "Copyright (c) 2020 Guillermo Gonzalez",
             url: URL(string: "https://github.com/gonzalezreal/swift-markdown-ui")!
+        ),
+        ThirdPartyAcknowledgement(
+            id: "zipfoundation",
+            name: "ZIPFoundation",
+            license: "MIT",
+            description: AppLocalizations.string(
+                "acknowledgements.project.zipFoundation.description",
+                defaultValue: "Reads modern Office document containers for local text extraction."
+            ),
+            attribution: "Copyright (c) 2017-2025 Thomas Zoechling (https://www.peakstep.com)",
+            url: URL(string: "https://github.com/weichsel/ZIPFoundation")!
         ),
         ThirdPartyAcknowledgement(
             id: "networkimage",

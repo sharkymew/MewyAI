@@ -16,6 +16,9 @@ struct AIConfigurationView: View {
     @State private var selectedFetchedModelNames: Set<String> = []
     @State private var isModelImportSheetPresented = false
     @State private var isDeleteAllModelsConfirmationPresented = false
+    @State private var newEmbeddingModelName = ""
+    @State private var embeddingMessage: String?
+    @State private var isFetchingEmbeddingModels = false
     @State private var editingModelParameterName: String?
     @State private var saveErrorMessage: String?
     @State private var showAgentCapabilities = false
@@ -151,6 +154,7 @@ struct AIConfigurationView: View {
                 requestSection
                 authSection
                 modelsSection
+                embeddingSection
                 customHeadersSection
                 agentCapabilitiesSection
                 memorySection
@@ -566,6 +570,113 @@ struct AIConfigurationView: View {
         }
     }
 
+    private var embeddingSection: some View {
+        Section {
+            Toggle("启用 Embedding", isOn: embeddingEnabledBinding)
+
+            if selectedConfiguration?.embeddingConfiguration != nil {
+                Picker("Embedding API", selection: embeddingAPIFormatBinding) {
+                    ForEach(EmbeddingAPIFormat.allCases) { format in
+                        Text(format.title).tag(format)
+                    }
+                }
+
+                TextField("Embedding Base URL", text: embeddingBaseURLBinding)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Embedding Endpoint", text: embeddingEndpointBinding)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                HStack {
+                    TextField("添加 Embedding 模型", text: $newEmbeddingModelName)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button("添加", action: addEmbeddingModel)
+                        .disabled(newEmbeddingModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                Button {
+                    fetchEmbeddingModels()
+                } label: {
+                    if isFetchingEmbeddingModels {
+                        ProgressView()
+                    } else {
+                        Label("自动识别 Embedding 模型", systemImage: "arrow.clockwise")
+                    }
+                }
+                .disabled(isFetchingEmbeddingModels)
+
+                if let embeddingMessage {
+                    Text(embeddingMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(selectedConfiguration?.embeddingConfiguration?.models ?? []) { model in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(model.displayName)
+                                if let dimensions = model.validatedDimensions {
+                                    Text("已验证 · \(dimensions) 维")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Button("测试") {
+                                validateEmbeddingModel(model.name)
+                            }
+                            Button(role: .destructive) {
+                                removeEmbeddingModel(model.name)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                        }
+
+                        DisclosureGroup("模型设置") {
+                            TextField(
+                                "别名（可选）",
+                                text: embeddingModelStringBinding(
+                                    model.name,
+                                    keyPath: \.alias,
+                                    invalidatesValidation: false
+                                )
+                            )
+                            TextField(
+                                "输出维度（可选）",
+                                text: embeddingOutputDimensionsBinding(model.name)
+                            )
+                            .keyboardType(.numberPad)
+                            TextField(
+                                "Query 前缀（可选）",
+                                text: embeddingModelStringBinding(
+                                    model.name,
+                                    keyPath: \.queryPrefix,
+                                    invalidatesValidation: true
+                                )
+                            )
+                            TextField(
+                                "Document 前缀（可选）",
+                                text: embeddingModelStringBinding(
+                                    model.name,
+                                    keyPath: \.documentPrefix,
+                                    invalidatesValidation: true
+                                )
+                            )
+                        }
+                        .font(.caption)
+                    }
+                }
+            }
+        } header: {
+            Text("Embedding")
+        } footer: {
+            Text("文档分块会发送给这里配置的 Provider 生成向量。知识库可选择与聊天不同的 Provider；模型必须测试成功后才能建库。")
+        }
+    }
+
     private var modelImportSheet: some View {
         NavigationStack {
             List {
@@ -881,6 +992,132 @@ struct AIConfigurationView: View {
             set: { newValue in
                 updateSelectedConfiguration { configuration in
                     configuration.generatesImageContextDescriptions = newValue
+                }
+            }
+        )
+    }
+
+    private var embeddingEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { selectedConfiguration?.embeddingConfiguration != nil },
+            set: { isEnabled in
+                updateSelectedConfiguration { configuration in
+                    if isEnabled, configuration.embeddingConfiguration == nil {
+                        let format: EmbeddingAPIFormat = configuration.apiFormat == .vertexAIExpress
+                            ? .vertexPredict
+                            : .openAICompatible
+                        configuration.embeddingConfiguration = AIEmbeddingConfiguration(
+                            apiFormat: format,
+                            baseURL: configuration.baseURL
+                        )
+                    } else if !isEnabled {
+                        configuration.embeddingConfiguration = nil
+                    }
+                }
+            }
+        )
+    }
+
+    private var embeddingAPIFormatBinding: Binding<EmbeddingAPIFormat> {
+        Binding(
+            get: { selectedConfiguration?.embeddingConfiguration?.apiFormat ?? .openAICompatible },
+            set: { format in
+                updateSelectedConfiguration { configuration in
+                    guard var embedding = configuration.embeddingConfiguration else { return }
+                    embedding.apiFormat = format
+                    embedding.endpoint = format.defaultEndpoint
+                    embedding.models = embedding.models.map { model in
+                        var model = model
+                        model.validatedDimensions = nil
+                        model.lastValidatedAt = nil
+                        return model
+                    }
+                    configuration.embeddingConfiguration = embedding
+                }
+            }
+        )
+    }
+
+    private var embeddingBaseURLBinding: Binding<String> {
+        Binding(
+            get: { selectedConfiguration?.embeddingConfiguration?.baseURL ?? "" },
+            set: { value in
+                updateSelectedConfiguration { configuration in
+                    guard var embedding = configuration.embeddingConfiguration else { return }
+                    embedding.baseURL = value
+                    embedding.models = embedding.models.map { model in
+                        var model = model
+                        model.validatedDimensions = nil
+                        model.lastValidatedAt = nil
+                        return model
+                    }
+                    configuration.embeddingConfiguration = embedding
+                }
+            }
+        )
+    }
+
+    private var embeddingEndpointBinding: Binding<String> {
+        Binding(
+            get: { selectedConfiguration?.embeddingConfiguration?.endpoint ?? "" },
+            set: { value in
+                updateSelectedConfiguration { configuration in
+                    guard var embedding = configuration.embeddingConfiguration else { return }
+                    embedding.endpoint = value
+                    embedding.models = embedding.models.map { model in
+                        var model = model
+                        model.validatedDimensions = nil
+                        model.lastValidatedAt = nil
+                        return model
+                    }
+                    configuration.embeddingConfiguration = embedding
+                }
+            }
+        )
+    }
+
+    private func embeddingModelStringBinding(
+        _ name: String,
+        keyPath: WritableKeyPath<AIEmbeddingModelConfiguration, String>,
+        invalidatesValidation: Bool
+    ) -> Binding<String> {
+        Binding(
+            get: {
+                selectedConfiguration?.embeddingConfiguration?.models
+                    .first(where: { $0.name == name })?[keyPath: keyPath] ?? ""
+            },
+            set: { value in
+                updateSelectedConfiguration { configuration in
+                    guard let index = configuration.embeddingConfiguration?.models
+                        .firstIndex(where: { $0.name == name }) else { return }
+                    configuration.embeddingConfiguration?.models[index][keyPath: keyPath] = value
+                    if invalidatesValidation {
+                        configuration.embeddingConfiguration?.models[index].validatedDimensions = nil
+                        configuration.embeddingConfiguration?.models[index].lastValidatedAt = nil
+                    }
+                }
+            }
+        )
+    }
+
+    private func embeddingOutputDimensionsBinding(_ name: String) -> Binding<String> {
+        Binding(
+            get: {
+                selectedConfiguration?.embeddingConfiguration?.models
+                    .first(where: { $0.name == name })?
+                    .outputDimensions
+                    .map(String.init) ?? ""
+            },
+            set: { value in
+                updateSelectedConfiguration { configuration in
+                    guard let index = configuration.embeddingConfiguration?.models
+                        .firstIndex(where: { $0.name == name }) else { return }
+                    let dimensions = Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+                    configuration.embeddingConfiguration?.models[index].outputDimensions = dimensions.flatMap {
+                        $0 > 0 ? $0 : nil
+                    }
+                    configuration.embeddingConfiguration?.models[index].validatedDimensions = nil
+                    configuration.embeddingConfiguration?.models[index].lastValidatedAt = nil
                 }
             }
         )
@@ -1298,6 +1535,84 @@ struct AIConfigurationView: View {
                 isModelImportSheetPresented = true
             case .failure(let error):
                 modelFetchMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func addEmbeddingModel() {
+        let name = newEmbeddingModelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        updateSelectedConfiguration { configuration in
+            guard configuration.embeddingConfiguration?.models.contains(where: { $0.name == name }) == false else {
+                return
+            }
+            configuration.embeddingConfiguration?.models.append(AIEmbeddingModelConfiguration(name: name))
+        }
+        newEmbeddingModelName = ""
+    }
+
+    private func removeEmbeddingModel(_ name: String) {
+        updateSelectedConfiguration { configuration in
+            configuration.embeddingConfiguration?.models.removeAll { $0.name == name }
+        }
+    }
+
+    private func fetchEmbeddingModels() {
+        guard let provider = selectedConfiguration,
+              let embedding = provider.embeddingConfiguration else { return }
+        isFetchingEmbeddingModels = true
+        embeddingMessage = nil
+        Task {
+            defer { isFetchingEmbeddingModels = false }
+            do {
+                let models = try await EmbeddingModelDiscoveryService.discover(
+                    embeddingConfiguration: embedding,
+                    credentials: EmbeddingCredentials(
+                        apiKey: provider.apiKey,
+                        customHeaders: provider.customHeaders
+                    )
+                )
+                updateSelectedConfiguration { configuration in
+                    guard var currentEmbedding = configuration.embeddingConfiguration else { return }
+                    for model in models where !currentEmbedding.models.contains(where: { $0.name == model.name }) {
+                        currentEmbedding.models.append(model)
+                    }
+                    currentEmbedding.models.sort {
+                        $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                    }
+                    configuration.embeddingConfiguration = currentEmbedding
+                }
+                embeddingMessage = models.isEmpty
+                    ? "没有自动识别到 Embedding 模型，可手动添加模型 ID。"
+                    : "识别到 \(models.count) 个 Embedding 模型。使用前请点击测试。"
+            } catch {
+                embeddingMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func validateEmbeddingModel(_ name: String) {
+        guard let provider = selectedConfiguration,
+              let embedding = provider.embeddingConfiguration,
+              let model = embedding.models.first(where: { $0.name == name }) else { return }
+        embeddingMessage = "正在测试 \(name)…"
+        Task {
+            do {
+                let dimensions = try await EmbeddingModelDiscoveryService.probe(
+                    provider: provider,
+                    embeddingConfiguration: embedding,
+                    model: model
+                )
+                updateSelectedConfiguration { configuration in
+                    guard let index = configuration.embeddingConfiguration?.models.firstIndex(where: { $0.name == name }) else {
+                        return
+                    }
+                    configuration.embeddingConfiguration?.models[index].validatedDimensions = dimensions
+                    configuration.embeddingConfiguration?.models[index].lastValidatedAt = Date()
+                }
+                embeddingMessage = "\(name) 测试成功：\(dimensions) 维。"
+            } catch {
+                embeddingMessage = "\(name) 测试失败：\(error.localizedDescription)"
             }
         }
     }

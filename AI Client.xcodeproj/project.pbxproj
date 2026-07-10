@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		DF1124712FBF49A9007131D0 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = DF1124702FBF49A9007131D0 /* MarkdownUI */; };
+		DF1124742FBF49A9007131D0 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = DF1124732FBF49A9007131D0 /* ZIPFoundation */; };
+		DF90000C2FD8A000007131D0 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = DF90000D2FD8A000007131D0 /* ZIPFoundation */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +46,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				DF1124712FBF49A9007131D0 /* MarkdownUI in Frameworks */,
+				DF1124742FBF49A9007131D0 /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -51,6 +54,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF90000C2FD8A000007131D0 /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -96,6 +100,7 @@
 			name = MewyAI;
 			packageProductDependencies = (
 				DF1124702FBF49A9007131D0 /* MarkdownUI */,
+				DF1124732FBF49A9007131D0 /* ZIPFoundation */,
 			);
 			productName = "AI Client";
 			productReference = DF1124322FBD5F56007131D0 /* MewyAI.app */;
@@ -119,6 +124,7 @@
 			);
 			name = MewyAITests;
 			packageProductDependencies = (
+				DF90000D2FD8A000007131D0 /* ZIPFoundation */,
 			);
 			productName = MewyAITests;
 			productReference = DF9000012FD8A000007131D0 /* MewyAITests.xctest */;
@@ -156,6 +162,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				DF11246F2FBF49A9007131D0 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
+				DF1124722FBF49A9007131D0 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DF1124332FBD5F56007131D0 /* Products */;
@@ -533,6 +540,14 @@
 				version = 2.4.1;
 			};
 		};
+		DF1124722FBF49A9007131D0 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.9.20;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -540,6 +555,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = DF11246F2FBF49A9007131D0 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
 			productName = MarkdownUI;
+		};
+		DF1124732FBF49A9007131D0 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF1124722FBF49A9007131D0 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+		DF90000D2FD8A000007131D0 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DF1124722FBF49A9007131D0 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

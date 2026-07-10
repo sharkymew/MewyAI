@@ -123,4 +123,39 @@ final class AIConfigurationSelectionTests: XCTestCase {
         XCTAssertEqual(configurations[0].updatedAt, now)
         XCTAssertEqual(promptPresets.first?.content, AIConfiguration.defaultSystemPrompt)
     }
+
+    func testLegacyConfigurationDecodesWithoutEmbeddingConfiguration() throws {
+        let data = Data(#"{"id":"00000000-0000-0000-0000-000000000001","name":"Legacy","baseURL":"https://example.com","endpoint":"chat/completions"}"#.utf8)
+
+        let configuration = try JSONDecoder().decode(AIConfiguration.self, from: data)
+
+        XCTAssertNil(configuration.embeddingConfiguration)
+    }
+
+    func testEmbeddingConfigurationRoundTripsModelSettings() throws {
+        let embedding = AIEmbeddingConfiguration(
+            apiFormat: .geminiEmbedContent,
+            baseURL: "https://generativelanguage.googleapis.com/v1beta",
+            endpoint: "models/{model}:embedContent",
+            models: [
+                AIEmbeddingModelConfiguration(
+                    name: "gemini-embedding-001",
+                    alias: "Gemini Embed",
+                    outputDimensions: 768,
+                    queryPrefix: "query: ",
+                    documentPrefix: "document: ",
+                    validatedDimensions: 768,
+                    lastValidatedAt: Date(timeIntervalSince1970: 1)
+                )
+            ]
+        )
+        let configuration = AIConfiguration(embeddingConfiguration: embedding)
+
+        let decoded = try JSONDecoder().decode(
+            AIConfiguration.self,
+            from: JSONEncoder().encode(configuration)
+        )
+
+        XCTAssertEqual(decoded.embeddingConfiguration, embedding)
+    }
 }

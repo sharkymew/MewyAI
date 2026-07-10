@@ -70,6 +70,8 @@ struct AgentCapabilitySelection: Equatable {
             activeSkillIDs.remove(capsule.id)
         case .mcp:
             activeMCPServerIDs.remove(capsule.id)
+        case .knowledgeBase:
+            break
         }
     }
 

@@ -1268,19 +1268,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "MewyAI uses the following open source projects to build its Markdown, network image, and LaTeX rendering experience. Thanks to the authors and contributors of these projects."
+            "value" : "MewyAI uses the following open source projects for document processing and content rendering. Thanks to their authors and contributors."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "MewyAI 使用以下开源项目构建 Markdown、网络图片和 LaTeX 渲染体验。感谢这些项目的作者和贡献者。"
+            "value" : "MewyAI 使用以下开源项目处理文档和渲染内容。感谢这些项目的作者和贡献者。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "MewyAI 使用以下開源專案建構 Markdown、網路圖片和 LaTeX 算式渲染體驗。感謝這些專案的作者和貢獻者。"
+            "value" : "MewyAI 使用以下開源專案處理文件和渲染內容。感謝這些專案的作者和貢獻者。"
           }
         }
       }
@@ -1350,6 +1350,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "MarkdownUI 使用的遠端圖片載入元件。"
+          }
+        }
+      }
+    },
+    "acknowledgements.project.zipFoundation.description" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reads modern Office document containers for local text extraction."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "用于在本机读取现代 Office 文档容器并提取文本。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "用於在本機讀取現代 Office 文件容器並擷取文字。"
           }
         }
       }

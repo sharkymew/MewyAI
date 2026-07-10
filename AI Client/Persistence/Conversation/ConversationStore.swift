@@ -199,6 +199,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var reasoningContent: String = ""
     var reasoningChunks: [String] = []
     var toolExchanges: [ChatToolExchange] = []
+    var knowledgeCitations: [KnowledgeCitation] = []
     var usage: ChatUsage?
     var isReasoningExpanded: Bool = false
     var isStopped: Bool = false
@@ -215,6 +216,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         reasoningContent: String = "",
         reasoningChunks: [String] = [],
         toolExchanges: [ChatToolExchange] = [],
+        knowledgeCitations: [KnowledgeCitation] = [],
         usage: ChatUsage? = nil,
         isReasoningExpanded: Bool = false,
         isStopped: Bool = false,
@@ -230,6 +232,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         self.reasoningContent = reasoningContent
         self.reasoningChunks = reasoningChunks
         self.toolExchanges = toolExchanges
+        self.knowledgeCitations = knowledgeCitations
         self.usage = usage
         self.isReasoningExpanded = isReasoningExpanded
         self.isStopped = isStopped
@@ -248,6 +251,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent) ?? ""
         reasoningChunks = try container.decodeIfPresent([String].self, forKey: .reasoningChunks) ?? []
         toolExchanges = try container.decodeIfPresent([ChatToolExchange].self, forKey: .toolExchanges) ?? []
+        knowledgeCitations = try container.decodeIfPresent([KnowledgeCitation].self, forKey: .knowledgeCitations) ?? []
         usage = try container.decodeIfPresent(ChatUsage.self, forKey: .usage)
         isReasoningExpanded = try container.decodeIfPresent(Bool.self, forKey: .isReasoningExpanded) ?? false
         isStopped = try container.decodeIfPresent(Bool.self, forKey: .isStopped) ?? false
@@ -281,6 +285,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         reasoningContent = ""
         reasoningChunks = []
         toolExchanges = []
+        knowledgeCitations = []
         usage = nil
         isReasoningExpanded = false
         isContentCleared = true
@@ -384,6 +389,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
     var isPinned: Bool = false
     var activeSkillIDs: [UUID] = []
     var activeMCPServerIDs: [UUID] = []
+    var activeKnowledgeBaseIDs: [UUID] = []
     var branchedFromConversationID: UUID?
     var branchedFromMessageID: UUID?
     var branchDividers: [ConversationBranchDivider] = []
@@ -400,6 +406,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         isPinned: Bool = false,
         activeSkillIDs: [UUID] = [],
         activeMCPServerIDs: [UUID] = [],
+        activeKnowledgeBaseIDs: [UUID] = [],
         branchedFromConversationID: UUID? = nil,
         branchedFromMessageID: UUID? = nil,
         branchDividers: [ConversationBranchDivider] = [],
@@ -415,6 +422,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         self.isPinned = isPinned
         self.activeSkillIDs = activeSkillIDs
         self.activeMCPServerIDs = activeMCPServerIDs
+        self.activeKnowledgeBaseIDs = activeKnowledgeBaseIDs
         self.branchedFromConversationID = branchedFromConversationID
         self.branchedFromMessageID = branchedFromMessageID
         self.branchDividers = branchDividers
@@ -434,6 +442,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         activeSkillIDs = try container.decodeIfPresent([UUID].self, forKey: .activeSkillIDs) ?? []
         activeMCPServerIDs = try container.decodeIfPresent([UUID].self, forKey: .activeMCPServerIDs) ?? []
+        activeKnowledgeBaseIDs = try container.decodeIfPresent([UUID].self, forKey: .activeKnowledgeBaseIDs) ?? []
         branchedFromConversationID = try container.decodeIfPresent(UUID.self, forKey: .branchedFromConversationID)
         branchedFromMessageID = try container.decodeIfPresent(UUID.self, forKey: .branchedFromMessageID)
         branchDividers = try container.decodeIfPresent([ConversationBranchDivider].self, forKey: .branchDividers) ?? []
@@ -480,6 +489,7 @@ struct AIConversation: Identifiable, Codable, Equatable {
         case isPinned
         case activeSkillIDs
         case activeMCPServerIDs
+        case activeKnowledgeBaseIDs
         case branchedFromConversationID
         case branchedFromMessageID
         case branchDividers
@@ -507,6 +517,7 @@ enum ConversationStore {
         var isPinned: Bool
         var activeSkillIDs: [UUID]
         var activeMCPServerIDs: [UUID]
+        var activeKnowledgeBaseIDs: [UUID]
         var messageCount: Int
 
         init(_ conversation: AIConversation) {
@@ -518,7 +529,22 @@ enum ConversationStore {
             isPinned = conversation.isPinned
             activeSkillIDs = conversation.activeSkillIDs
             activeMCPServerIDs = conversation.activeMCPServerIDs
+            activeKnowledgeBaseIDs = conversation.activeKnowledgeBaseIDs
             messageCount = conversation.storedMessageCount
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(UUID.self, forKey: .id)
+            title = try container.decode(String.self, forKey: .title)
+            createdAt = try container.decode(Date.self, forKey: .createdAt)
+            updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+            hasGeneratedTitle = try container.decode(Bool.self, forKey: .hasGeneratedTitle)
+            isPinned = try container.decode(Bool.self, forKey: .isPinned)
+            activeSkillIDs = try container.decodeIfPresent([UUID].self, forKey: .activeSkillIDs) ?? []
+            activeMCPServerIDs = try container.decodeIfPresent([UUID].self, forKey: .activeMCPServerIDs) ?? []
+            activeKnowledgeBaseIDs = try container.decodeIfPresent([UUID].self, forKey: .activeKnowledgeBaseIDs) ?? []
+            messageCount = try container.decode(Int.self, forKey: .messageCount)
         }
     }
 
@@ -898,6 +924,7 @@ enum ConversationStore {
             isPinned: entry.isPinned,
             activeSkillIDs: entry.activeSkillIDs,
             activeMCPServerIDs: entry.activeMCPServerIDs,
+            activeKnowledgeBaseIDs: entry.activeKnowledgeBaseIDs,
             indexedMessageCount: entry.messageCount
         )
     }

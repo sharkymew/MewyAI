@@ -142,6 +142,49 @@ final class ChatStreamingTurnContextBuilderTests: XCTestCase {
         XCTAssertFalse(vertexModel.systemPromptAppendix.contains("<chat_history_recall>"))
     }
 
+    func testKnowledgeBaseToolsOnlyAppearForToolCapableModelsButPromptAlwaysNamesEnabledBases() {
+        let base = KnowledgeBase(
+            name: "Product Docs",
+            profile: EmbeddingProfileSnapshot(
+                providerConfigurationID: UUID(),
+                embeddingConfiguration: .init(baseURL: "https://embedding.example.com/v1"),
+                model: .init(name: "embed"),
+                vectorDimensions: 2
+            )
+        )
+
+        let toolCapable = ChatStreamingTurnContextBuilder.make(
+            configuration: configuration(supportsTools: true),
+            activeSkills: [],
+            activeMCPServers: [],
+            activeKnowledgeBases: [base],
+            storedConversations: [],
+            selectedConversationID: UUID(),
+            privateConversationID: nil,
+            isHistoryRecallEnabled: false,
+            isGlobalMemoryEnabled: false
+        )
+        let textOnly = ChatStreamingTurnContextBuilder.make(
+            configuration: configuration(supportsTools: false),
+            activeSkills: [],
+            activeMCPServers: [],
+            activeKnowledgeBases: [base],
+            storedConversations: [],
+            selectedConversationID: UUID(),
+            privateConversationID: nil,
+            isHistoryRecallEnabled: false,
+            isGlobalMemoryEnabled: false
+        )
+
+        XCTAssertEqual(toolCapable.knowledgeTools.map(\.functionName), [
+            KnowledgeBaseTool.searchFunctionName,
+            KnowledgeBaseTool.readFunctionName
+        ])
+        XCTAssertTrue(textOnly.knowledgeTools.isEmpty)
+        XCTAssertTrue(toolCapable.systemPromptAppendix.contains("Product Docs"))
+        XCTAssertTrue(textOnly.systemPromptAppendix.contains("Product Docs"))
+    }
+
     private func configuration(
         supportsTools: Bool,
         apiFormat: AIAPIFormat = .openAIChatCompletions

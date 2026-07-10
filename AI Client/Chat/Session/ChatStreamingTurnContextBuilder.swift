@@ -5,6 +5,7 @@ struct ChatStreamingTurnContext: Equatable {
     let hasActiveMCPServers: Bool
     let mcpTools: [AgentToolDefinition]
     let recallTools: [AgentToolDefinition]
+    let knowledgeTools: [AgentToolDefinition]
     let systemPromptAppendix: String
 }
 
@@ -16,6 +17,7 @@ enum ChatStreamingTurnContextBuilder {
         configuration: AIConfiguration,
         activeSkills: [AgentSkill],
         activeMCPServers: [MCPServerConfiguration],
+        activeKnowledgeBases: [KnowledgeBase] = [],
         storedConversations: [AIConversation],
         selectedConversationID: UUID?,
         privateConversationID: UUID?,
@@ -38,6 +40,12 @@ enum ChatStreamingTurnContextBuilder {
             && configuration.apiFormat != .vertexAIExpress
         let recallTools = usesHistoryRecall
             ? ConversationRecallTool.definitions(excludingFunctionNames: Set(mcpTools.map(\.functionName)))
+            : []
+        let usedFunctionNames = Set((mcpTools + recallTools).map(\.functionName))
+        let knowledgeTools = !activeKnowledgeBases.isEmpty
+                && configuration.selectedModelSupportsTools
+                && configuration.apiFormat != .vertexAIExpress
+            ? KnowledgeBaseTool.definitions(excludingFunctionNames: usedFunctionNames)
             : []
 
         var recallExcludedConversationIDs = Set<UUID>()
@@ -64,9 +72,11 @@ enum ChatStreamingTurnContextBuilder {
             hasActiveMCPServers: hasActiveMCPServers,
             mcpTools: mcpTools,
             recallTools: recallTools,
+            knowledgeTools: knowledgeTools,
             systemPromptAppendix: AgentTooling.promptAppendix(for: activeSkills)
                 + memoryPromptAppendix
                 + recallPromptAppendix
+                + KnowledgeBaseTool.promptAppendix(for: activeKnowledgeBases)
         )
     }
 }

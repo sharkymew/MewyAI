@@ -3,6 +3,8 @@ import Foundation
 enum AgentToolExecutionCoordinator {
     typealias ToolApprovalHandler = (_ toolName: String, _ arguments: String) async -> Bool
     typealias ConversationLoader = () -> [AIConversation]
+    typealias KnowledgeBaseLoader = () -> [KnowledgeBase]
+    typealias ConfigurationLoader = () -> [AIConfiguration]
     typealias RefreshedToolsSaver = (_ tools: [MCPToolDefinition], _ server: MCPServerConfiguration) -> Void
     typealias ToolCaller = (_ server: MCPServerConfiguration, _ toolName: String, _ arguments: JSONValue) async throws -> RemoteMCPToolCallResult
     typealias ToolLister = (_ server: MCPServerConfiguration) async throws -> [MCPToolDefinition]
@@ -61,6 +63,9 @@ enum AgentToolExecutionCoordinator {
         privateConversationID: UUID?,
         mcpServers: [MCPServerConfiguration],
         conversations: ConversationLoader,
+        knowledgeBases: KnowledgeBaseLoader = { [] },
+        configurations: ConfigurationLoader = { [] },
+        knowledgeBaseRetrievalService: KnowledgeBaseRetrievalService = KnowledgeBaseRetrievalService(),
         requestApproval: ToolApprovalHandler,
         saveRefreshedTools: RefreshedToolsSaver,
         callTool: @escaping ToolCaller = { server, toolName, arguments in
@@ -86,6 +91,16 @@ enum AgentToolExecutionCoordinator {
                 argumentsJSON: request.argumentsJSON,
                 conversations: conversations(),
                 excludedConversationIDs: excludedConversationIDs
+            )
+        }
+
+        if KnowledgeBaseTool.isKnowledgeBaseTool(request.tool) {
+            return await KnowledgeBaseTool.execute(
+                functionName: request.functionName,
+                argumentsJSON: request.argumentsJSON,
+                knowledgeBases: knowledgeBases(),
+                configurations: configurations(),
+                retrievalService: knowledgeBaseRetrievalService
             )
         }
 

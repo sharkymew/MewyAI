@@ -243,6 +243,10 @@ struct MessageBubble: View {
                 messageContentBubble
             }
 
+            if !message.isContentCleared, !message.knowledgeCitations.isEmpty {
+                knowledgeSourcesBlock
+            }
+
             if !message.isContentCleared, !isStreaming, let usageDisplayText {
                 Text(usageDisplayText)
                     .font(.caption2)
@@ -306,6 +310,34 @@ struct MessageBubble: View {
 
     private var shouldOfferClearGeneratedContentAction: Bool {
         !isUser && !isStreaming && !message.isContentCleared
+    }
+
+    private var knowledgeSourcesBlock: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(message.knowledgeCitations.enumerated()), id: \.element.id) { index, citation in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("[KB:\(index + 1)] \(citation.documentName)")
+                            .font(.caption.weight(.semibold))
+                        Text([citation.knowledgeBaseName, citation.location]
+                            .filter { !$0.isEmpty }
+                            .joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(citation.excerpt)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(4)
+                    }
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            Label("知识来源（\(message.knowledgeCitations.count)）", systemImage: "books.vertical")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 6)
     }
 
     private var shouldShowAssistantActions: Bool {

@@ -12,6 +12,8 @@ struct ContentView: View {
     @State private var agentSkills = AgentCapabilityStore.loadSkills()
     @State private var mcpServers = AgentCapabilityStore.loadMCPServers()
     @State private var agentCapabilitySelection = AgentCapabilitySelection()
+    @State private var knowledgeBaseManager = KnowledgeBaseManager()
+    @State private var activeKnowledgeBaseIDs = Set<UUID>()
     @State private var chatSession = ChatSessionViewModel()
     @StateObject private var speechInputController = SpeechInputController()
     @StateObject private var streamingOutputHaptics = StreamingOutputHaptics()
@@ -36,6 +38,7 @@ struct ContentView: View {
     @State private var showConfiguration = false
     @State private var showPromptSettings = false
     @State private var showAgentCapabilities = false
+    @State private var showKnowledgeBases = false
     @State private var showConversationSidebar = false
     @State private var chatScrollController = ChatScrollController()
     @State private var backgroundRequestKeeper = BackgroundRequestKeeper()
@@ -47,8 +50,10 @@ struct ContentView: View {
     @State private var inputBarLayout = InputBarLayoutState()
     @State private var isExpandedInputPresented = false
     @State private var hasLoadedInitialConversation = false
+    @State private var knowledgeRetrievalTasks: [UUID: Task<Void, Never>] = [:]
 
     private let maxActiveConversationGenerations = 4
+    private let knowledgeBaseRetrievalService = KnowledgeBaseRetrievalService()
     private let inputBarBottomPadding: CGFloat = 8
     private let inputBarTopPadding: CGFloat = 8
     private let inputBarHorizontalPadding: CGFloat = 12
@@ -383,6 +388,7 @@ struct ContentView: View {
         .onAppear {
             guard !hasLoadedInitialConversation else { return }
             hasLoadedInitialConversation = true
+            knowledgeBaseManager.markStaleProfiles(configurations: configurations)
             loadSelectedConversation()
             updateMissingHistorySummariesIfNeeded(configuration: currentConfiguration)
             if isHapticFeedbackEnabled {
@@ -417,6 +423,18 @@ struct ContentView: View {
                 handleCameraImage(image)
             }
         )
+        .sheet(isPresented: $showKnowledgeBases) {
+            KnowledgeBaseManagementView(
+                manager: knowledgeBaseManager,
+                configurations: configurations
+            )
+        }
+        .onChange(of: showKnowledgeBases) { _, isPresented in
+            guard !isPresented else { return }
+            knowledgeBaseManager.reload()
+            activeKnowledgeBaseIDs.formIntersection(Set(knowledgeBaseManager.knowledgeBases.map(\.id)))
+            persistCurrentConversation(refreshesUpdatedAt: false)
+        }
         .onChange(of: dynamicTypeSize) { _, _ in
             markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
         }
@@ -691,6 +709,14 @@ struct ContentView: View {
 
     private var activeAgentCapsules: [ActiveAgentCapsule] {
         agentCapabilitySelection.capsules(skills: agentSkills, mcpServers: mcpServers)
+            + activeKnowledgeBases.map { knowledgeBase in
+                ActiveAgentCapsule(
+                    id: knowledgeBase.id,
+                    kind: .knowledgeBase,
+                    title: knowledgeBase.name,
+                    icon: "cylinder.split.1x2"
+                )
+            }
     }
 
     private var activeAgentCapsuleRow: some View {
@@ -772,18 +798,21 @@ struct ContentView: View {
             configuration: currentConfiguration,
             agentSkills: agentSkills,
             mcpServers: mcpServers,
+            knowledgeBases: knowledgeBaseManager.knowledgeBases,
+            activeKnowledgeBaseIDs: activeKnowledgeBaseIDs,
             capabilitySelection: agentCapabilitySelection,
-onOpenPhotoPicker: {
-            attachmentDraft.isPhotoPickerPresented = true
-        },
-        onOpenCamera: {
-            attachmentDraft.isCameraPresented = true
-        },
-        onOpenFileImporter: {
-            attachmentDraft.isFileImporterPresented = true
-        },
+            onOpenPhotoPicker: {
+                attachmentDraft.isPhotoPickerPresented = true
+            },
+            onOpenCamera: {
+                attachmentDraft.isCameraPresented = true
+            },
+            onOpenFileImporter: {
+                attachmentDraft.isFileImporterPresented = true
+            },
             onToggleSkill: toggleSkill,
             onToggleMCPServer: toggleMCPServer,
+            onToggleKnowledgeBase: toggleKnowledgeBase,
             onManageSkills: {
                 hideKeyboard()
                 showAgentCapabilities = true
@@ -791,6 +820,10 @@ onOpenPhotoPicker: {
             onManageMCPServers: {
                 hideKeyboard()
                 showAgentCapabilities = true
+            },
+            onManageKnowledgeBases: {
+                hideKeyboard()
+                showKnowledgeBases = true
             },
             onSetReasoningEnabled: setReasoningEnabled,
             onSelectReasoningEffort: selectReasoningEffort
@@ -842,6 +875,29 @@ onOpenPhotoPicker: {
         agentCapabilitySelection.activeMCPServers(in: mcpServers)
     }
 
+    private var activeKnowledgeBases: [KnowledgeBase] {
+        knowledgeBaseManager.knowledgeBases.filter { activeKnowledgeBaseIDs.contains($0.id) }
+    }
+
+    private var retrievableActiveKnowledgeBases: [KnowledgeBase] {
+        activeKnowledgeBases.filter { !$0.needsReindex && $0.indexedChunkCount > 0 }
+    }
+
+    private func retrievableKnowledgeBases(for conversationID: UUID?) -> [KnowledgeBase] {
+        let ids: Set<UUID>
+        if conversationID == selectedConversationID {
+            ids = activeKnowledgeBaseIDs
+        } else if let conversationID,
+                  let conversation = conversations.first(where: { $0.id == conversationID }) {
+            ids = Set(conversation.activeKnowledgeBaseIDs)
+        } else {
+            ids = []
+        }
+        return knowledgeBaseManager.knowledgeBases.filter {
+            ids.contains($0.id) && !$0.needsReindex && $0.indexedChunkCount > 0
+        }
+    }
+
     private var toolApprovalMessage: String {
         guard let pendingToolApproval else { return "" }
         let arguments = pendingToolApproval.arguments.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -870,7 +926,36 @@ onOpenPhotoPicker: {
         persistCurrentConversation(refreshesUpdatedAt: false)
     }
 
+    private func toggleKnowledgeBase(_ id: UUID) {
+        if activeKnowledgeBaseIDs.contains(id) {
+            activeKnowledgeBaseIDs.remove(id)
+        } else if knowledgeBaseManager.knowledgeBases.contains(where: {
+            $0.id == id && !$0.needsReindex && $0.indexedChunkCount > 0
+        }) {
+            activeKnowledgeBaseIDs.insert(id)
+        }
+        persistCurrentConversation(refreshesUpdatedAt: false)
+    }
+
+    private func restoreKnowledgeBaseSelection(_ ids: [UUID]) {
+        let availableIDs = Set(knowledgeBaseManager.knowledgeBases.map(\.id))
+        let cleanedIDs = ids.filter { availableIDs.contains($0) }
+        activeKnowledgeBaseIDs = Set(cleanedIDs)
+        guard cleanedIDs != ids,
+              let selectedConversationID,
+              let index = conversations.firstIndex(where: { $0.id == selectedConversationID }) else {
+            return
+        }
+        conversations[index].activeKnowledgeBaseIDs = cleanedIDs
+        saveStoredConversations()
+    }
+
     private func deactivateAgentCapsule(_ capsule: ActiveAgentCapsule) {
+        if capsule.kind == .knowledgeBase {
+            activeKnowledgeBaseIDs.remove(capsule.id)
+            persistCurrentConversation(refreshesUpdatedAt: false)
+            return
+        }
         AgentCapabilitySelectionCoordinator.deactivate(capsule, selection: &agentCapabilitySelection)
         persistCurrentConversation(refreshesUpdatedAt: false)
     }
@@ -885,6 +970,9 @@ onOpenPhotoPicker: {
             privateConversationID: privateConversationID,
             mcpServers: mcpServers,
             conversations: fullyLoadedStoredConversations,
+            knowledgeBases: { retrievableKnowledgeBases(for: conversationID) },
+            configurations: { configurations },
+            knowledgeBaseRetrievalService: knowledgeBaseRetrievalService,
             requestApproval: { toolName, arguments in
                 await requestToolApproval(toolName: toolName, arguments: arguments)
             },
@@ -929,10 +1017,15 @@ onOpenPhotoPicker: {
         appendsUserMessage: Bool,
         existingUserMessageID: UUID? = nil
     ) -> Bool {
+        let knowledgeBasesForTurn = retrievableActiveKnowledgeBases
+        let knowledgeAvailabilityWarning = !activeKnowledgeBases.isEmpty && knowledgeBasesForTurn.isEmpty
+            ? "已启用的知识库没有可用索引，请先完成导入或重建。"
+            : nil
         let turnContext = ChatStreamingTurnContextBuilder.make(
             configuration: currentConfiguration,
             activeSkills: activeSkills,
             activeMCPServers: activeMCPServers,
+            activeKnowledgeBases: knowledgeBasesForTurn,
             storedConversations: storedConversations,
             selectedConversationID: selectedConversationID,
             privateConversationID: privateConversationID,
@@ -954,6 +1047,7 @@ onOpenPhotoPicker: {
             hasActiveMCPServers: turnContext.hasActiveMCPServers,
             mcpTools: turnContext.mcpTools,
             recallTools: turnContext.recallTools,
+            knowledgeTools: turnContext.knowledgeTools,
             maxActiveConversationGenerations: maxActiveConversationGenerations
         )
         let preparation: ChatSessionViewModel.StreamingTurnPreparation
@@ -972,6 +1066,9 @@ onOpenPhotoPicker: {
         let userMessageIDForImageContext = startResult.userMessageIDForImageContext
 
         clearInputState()
+        if let knowledgeAvailabilityWarning {
+            imageSelectionError = knowledgeAvailabilityWarning
+        }
         prepareStreamingOutputHapticsIfNeeded()
         chatScrollController.returnToBottom()
         messageInteraction.activeActionID = nil
@@ -984,89 +1081,149 @@ onOpenPhotoPicker: {
             backgroundCompletionNotificationCoordinator.requestAuthorizationIfNeeded()
         }
 
-        chatSession.sendStreamingRequest(
-            serviceRequest,
-            using: startResult,
-            handlers: ChatSessionViewModel.StreamingEventHandlers(
-                toolExecutor: { request in
-                    await executeAgentTool(request, in: conversationID)
-                },
-                onToolExchangesUpdated: { exchanges in
-                    updateToolExchanges(
-                        exchanges,
-                        for: assistantMessageID,
-                        in: conversationID
-                    )
-                },
-                onToolRoundReset: {
-                    resetStreamingRoundDisplay(
-                        for: assistantMessageID,
-                        in: conversationID
-                    )
-                },
-                isReasoningDisplayActive: {
-                    isReasoningDisplayActive(
-                        for: assistantMessageID,
-                        in: conversationID
-                    )
-                },
-                onReasoningToken: { token in
-                    handleReasoningToken(
-                        token,
-                        for: assistantMessageID,
-                        in: conversationID
-                    )
-                },
-                onContentToken: { token in
-                    handleContentToken(
-                        token,
-                        for: assistantMessageID,
-                        in: conversationID
-                    )
-                },
-                onComplete: { contentText, usage in
-                    completeStreamingResponse(
-                        for: assistantMessageID,
+        let sendPreparedRequest = {
+            guard activeGeneration(for: assistantMessageID, in: conversationID) != nil else { return }
+            chatSession.sendStreamingRequest(
+                serviceRequest,
+                using: startResult,
+                handlers: ChatSessionViewModel.StreamingEventHandlers(
+                    toolExecutor: { request in
+                        await executeAgentTool(request, in: conversationID)
+                    },
+                    onToolExchangesUpdated: { exchanges in
+                        updateToolExchanges(exchanges, for: assistantMessageID, in: conversationID)
+                    },
+                    onToolRoundReset: {
+                        resetStreamingRoundDisplay(for: assistantMessageID, in: conversationID)
+                    },
+                    isReasoningDisplayActive: {
+                        isReasoningDisplayActive(for: assistantMessageID, in: conversationID)
+                    },
+                    onReasoningToken: { token in
+                        handleReasoningToken(token, for: assistantMessageID, in: conversationID)
+                    },
+                    onContentToken: { token in
+                        handleContentToken(token, for: assistantMessageID, in: conversationID)
+                    },
+                    onComplete: { contentText, usage in
+                        completeStreamingResponse(
+                            for: assistantMessageID,
+                            in: conversationID,
+                            contentText: contentText,
+                            usage: usage,
+                            configuration: turnContext.configuration
+                        )
+                    },
+                    onError: { error in
+                        failStreamingResponse(error, for: assistantMessageID, in: conversationID)
+                    }
+                )
+            )
+
+            if preparation.shouldGenerateImageContextDescription,
+               let userMessageIDForImageContext {
+                chatSessionPostProcessor.generateImageContextDescriptionIfNeeded(
+                    imageAttachments: serviceRequest.imageAttachments,
+                    baseURL: serviceRequest.baseURL,
+                    apiFormat: serviceRequest.apiFormat,
+                    apiKey: serviceRequest.apiKey,
+                    customHeaders: serviceRequest.customHeaders,
+                    model: serviceRequest.model,
+                    modelParameters: serviceRequest.modelParameters,
+                    anthropicMaxTokens: serviceRequest.anthropicMaxTokens,
+                    reasoningEnabled: serviceRequest.reasoningEnabled,
+                    reasoningEffort: serviceRequest.reasoningEffort
+                ) { description in
+                    saveImageContextDescription(
+                        description,
+                        for: userMessageIDForImageContext,
                         in: conversationID,
-                        contentText: contentText,
-                        usage: usage,
-                        configuration: turnContext.configuration
-                    )
-                },
-                onError: { error in
-                    failStreamingResponse(
-                        error,
-                        for: assistantMessageID,
-                        in: conversationID
+                        matching: serviceRequest.imageAttachments
                     )
                 }
-            )
-        )
-
-        if preparation.shouldGenerateImageContextDescription,
-           let userMessageIDForImageContext {
-            chatSessionPostProcessor.generateImageContextDescriptionIfNeeded(
-                imageAttachments: serviceRequest.imageAttachments,
-                baseURL: serviceRequest.baseURL,
-                apiFormat: serviceRequest.apiFormat,
-                apiKey: serviceRequest.apiKey,
-                customHeaders: serviceRequest.customHeaders,
-                model: serviceRequest.model,
-                modelParameters: serviceRequest.modelParameters,
-                anthropicMaxTokens: serviceRequest.anthropicMaxTokens,
-                reasoningEnabled: serviceRequest.reasoningEnabled,
-                reasoningEffort: serviceRequest.reasoningEffort
-            ) { description in
-                saveImageContextDescription(
-                    description,
-                    for: userMessageIDForImageContext,
-                    in: conversationID,
-                    matching: serviceRequest.imageAttachments
-                )
             }
         }
 
+        let retrievalQuery = userText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !retrievalQuery.isEmpty, !knowledgeBasesForTurn.isEmpty {
+            setKnowledgeRetrievalPlaceholder(
+                true,
+                assistantMessageID: assistantMessageID,
+                conversationID: conversationID
+            )
+            let bases = knowledgeBasesForTurn
+            let availableConfigurations = configurations
+            let task = Task {
+                let result = await knowledgeBaseRetrievalService.retrieve(
+                    query: retrievalQuery,
+                    knowledgeBases: bases,
+                    configurations: availableConfigurations
+                )
+                guard !Task.isCancelled,
+                      activeGeneration(for: assistantMessageID, in: conversationID) != nil else {
+                    return
+                }
+                startResult.service.appendSystemContext(result.promptAppendix)
+                applyKnowledgeRetrievalResult(
+                    result,
+                    assistantMessageID: assistantMessageID,
+                    conversationID: conversationID
+                )
+                knowledgeRetrievalTasks[conversationID] = nil
+                sendPreparedRequest()
+            }
+            knowledgeRetrievalTasks[conversationID] = task
+        } else {
+            sendPreparedRequest()
+        }
+
         return true
+    }
+
+    private func setKnowledgeRetrievalPlaceholder(
+        _ isActive: Bool,
+        assistantMessageID: UUID,
+        conversationID: UUID
+    ) {
+        _ = ConversationPersistenceCoordinator.updateAssistantMessage(
+            assistantMessageID,
+            in: conversationID,
+            selectedConversationID: selectedConversationID,
+            messages: &chatSession.messages,
+            conversations: &conversations,
+            refreshesUpdatedAt: false
+        ) { message in
+            message.content = isActive ? "正在检索知识库…" : ""
+        }
+        if selectedConversationID == conversationID {
+            markdownRenderCache.invalidate(for: assistantMessageID)
+        }
+        persistConversation(conversationID, refreshesUpdatedAt: false)
+    }
+
+    private func applyKnowledgeRetrievalResult(
+        _ result: KnowledgeRetrievalResult,
+        assistantMessageID: UUID,
+        conversationID: UUID
+    ) {
+        _ = ConversationPersistenceCoordinator.updateAssistantMessage(
+            assistantMessageID,
+            in: conversationID,
+            selectedConversationID: selectedConversationID,
+            messages: &chatSession.messages,
+            conversations: &conversations,
+            refreshesUpdatedAt: false
+        ) { message in
+            message.content = ""
+            message.knowledgeCitations = result.sources.map(\.citation)
+        }
+        if selectedConversationID == conversationID {
+            markdownRenderCache.invalidate(for: assistantMessageID)
+        }
+        if !result.warnings.isEmpty {
+            imageSelectionError = result.warnings.joined(separator: "\n")
+        }
+        persistConversation(conversationID, refreshesUpdatedAt: false)
     }
 
     private func activeGeneration(
@@ -1359,6 +1516,8 @@ onOpenPhotoPicker: {
         marksStopped: Bool,
         triggersCompletionHaptic: Bool
     ) {
+        knowledgeRetrievalTasks[conversationID]?.cancel()
+        knowledgeRetrievalTasks[conversationID] = nil
         guard let finishResult = chatSession.finishActiveGeneration(
             for: assistantMessageID,
             in: conversationID,
@@ -1399,10 +1558,21 @@ onOpenPhotoPicker: {
         marksStopped: Bool,
         triggersCompletionHaptic: Bool = false
     ) {
+        let wasRetrievingKnowledge = knowledgeRetrievalTasks[conversationID] != nil
+        knowledgeRetrievalTasks[conversationID]?.cancel()
+        knowledgeRetrievalTasks[conversationID] = nil
         guard let cancellation = chatSession.cancelActiveGeneration(
             in: conversationID,
             visibleConversationID: selectedConversationID
         ) else { return }
+
+        if wasRetrievingKnowledge {
+            setKnowledgeRetrievalPlaceholder(
+                false,
+                assistantMessageID: cancellation.assistantMessageID,
+                conversationID: conversationID
+            )
+        }
 
         flushPendingTokens(
             for: cancellation.assistantMessageID,
@@ -1669,7 +1839,8 @@ onOpenPhotoPicker: {
                 in: sourceConversation,
                 messages: messages,
                 activeSkillIDs: agentCapabilitySelection.activeSkillIDs,
-                activeMCPServerIDs: agentCapabilitySelection.activeMCPServerIDs
+                activeMCPServerIDs: agentCapabilitySelection.activeMCPServerIDs,
+                activeKnowledgeBaseIDs: activeKnowledgeBaseIDs
               ) else {
             return
         }
@@ -1690,6 +1861,7 @@ onOpenPhotoPicker: {
             skillIDs: newConversation.activeSkillIDs,
             mcpServerIDs: newConversation.activeMCPServerIDs
         )
+        restoreKnowledgeBaseSelection(newConversation.activeKnowledgeBaseIDs)
         markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
         inputDraft.clearText()
         resetSpeechInputMergeState()
@@ -1976,13 +2148,28 @@ onOpenPhotoPicker: {
     }
 
     func stopGenerating(triggersCompletionHaptic: Bool = true) {
-        guard let selectedConversationID,
+        guard let selectedConversationID else {
+            detachVisibleGenerationState()
+            return
+        }
+        let wasRetrievingKnowledge = knowledgeRetrievalTasks[selectedConversationID] != nil
+        knowledgeRetrievalTasks[selectedConversationID]?.cancel()
+        knowledgeRetrievalTasks[selectedConversationID] = nil
+        guard
               let cancellation = chatSession.cancelActiveGeneration(
                   in: selectedConversationID,
                   visibleConversationID: selectedConversationID
               ) else {
             detachVisibleGenerationState()
             return
+        }
+
+        if wasRetrievingKnowledge {
+            setKnowledgeRetrievalPlaceholder(
+                false,
+                assistantMessageID: cancellation.assistantMessageID,
+                conversationID: selectedConversationID
+            )
         }
 
         flushPendingTokens(
@@ -2204,6 +2391,7 @@ onOpenPhotoPicker: {
             configurations: &configurations,
             selectedConfigurationID: &selectedConfigurationID
         )
+        knowledgeBaseManager.markStaleProfiles(configurations: configurations)
     }
 
     private func loadSelectedConversation() {
@@ -2226,6 +2414,7 @@ onOpenPhotoPicker: {
                 skillIDs: conversation.activeSkillIDs,
                 mcpServerIDs: conversation.activeMCPServerIDs
             )
+            restoreKnowledgeBaseSelection(conversation.activeKnowledgeBaseIDs)
             markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
             chatScrollController.restoreAfterConversationChange()
             saveSelectedConversationIDIfStored(conversation.id)
@@ -2241,6 +2430,7 @@ onOpenPhotoPicker: {
         guard let conversation = result.conversation else { return }
 
         agentCapabilitySelection.clear()
+        activeKnowledgeBaseIDs.removeAll()
         saveSelectedConversationIDIfStored(conversation.id)
         saveStoredConversations()
     }
@@ -2311,6 +2501,7 @@ onOpenPhotoPicker: {
                 marksIdle: true
             )
             agentCapabilitySelection.clear()
+            activeKnowledgeBaseIDs.removeAll()
             markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
             inputDraft.clearText()
             resetSpeechInputMergeState()
@@ -2363,6 +2554,7 @@ onOpenPhotoPicker: {
             skillIDs: conversation.activeSkillIDs,
             mcpServerIDs: conversation.activeMCPServerIDs
         )
+        restoreKnowledgeBaseSelection(conversation.activeKnowledgeBaseIDs)
         markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
         inputDraft.clearText()
         resetSpeechInputMergeState()
@@ -2423,6 +2615,7 @@ onOpenPhotoPicker: {
             marksIdle: true
         )
         agentCapabilitySelection.clear()
+        activeKnowledgeBaseIDs.removeAll()
         markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
         speechInputController.cancelRecording()
         inputDraft.clearText()
@@ -2501,6 +2694,7 @@ onOpenPhotoPicker: {
             marksIdle: true
         )
         agentCapabilitySelection.clear()
+        activeKnowledgeBaseIDs.removeAll()
         markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
         speechInputController.cancelRecording()
         inputDraft.clearText()
@@ -2594,6 +2788,7 @@ onOpenPhotoPicker: {
                 marksIdle: true
             )
             agentCapabilitySelection.clear()
+            activeKnowledgeBaseIDs.removeAll()
             markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
             speechInputController.cancelRecording()
             inputDraft.clearText()
@@ -2622,6 +2817,7 @@ onOpenPhotoPicker: {
                 skillIDs: nextConversation.activeSkillIDs,
                 mcpServerIDs: nextConversation.activeMCPServerIDs
             )
+            restoreKnowledgeBaseSelection(nextConversation.activeKnowledgeBaseIDs)
             markdownRenderCache.resetChatCaches(for: messages, colorScheme: colorScheme)
             attachmentDraft.clear()
             messageInteraction.activeActionID = nil
@@ -2764,6 +2960,7 @@ onOpenPhotoPicker: {
             messages: messages,
             activeSkillIDs: agentCapabilitySelection.activeSkillIDs,
             activeMCPServerIDs: agentCapabilitySelection.activeMCPServerIDs,
+            activeKnowledgeBaseIDs: activeKnowledgeBaseIDs,
             refreshesUpdatedAt: refreshesUpdatedAt
         )
     }

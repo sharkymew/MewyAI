@@ -153,6 +153,7 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
         let conversationID = UUID()
         let skillID = UUID()
         let mcpServerID = UUID()
+        let knowledgeBaseID = UUID()
         let oldMessages = [
             ChatMessage(id: userMessageID, role: "user", content: "old"),
             ChatMessage(role: "assistant", content: "old answer")
@@ -185,6 +186,7 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
             messages: newMessages,
             activeSkillIDs: [skillID],
             activeMCPServerIDs: [mcpServerID],
+            activeKnowledgeBaseIDs: [knowledgeBaseID],
             refreshesUpdatedAt: true,
             date: refreshedAt
         ))
@@ -192,6 +194,7 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
         XCTAssertEqual(conversations[0].messages, newMessages)
         XCTAssertEqual(conversations[0].activeSkillIDs, [skillID])
         XCTAssertEqual(conversations[0].activeMCPServerIDs, [mcpServerID])
+        XCTAssertEqual(conversations[0].activeKnowledgeBaseIDs, [knowledgeBaseID])
         XCTAssertEqual(conversations[0].updatedAt, refreshedAt)
         XCTAssertEqual(
             conversations[0].messageRevisionGroups[0].revisions[0].messages,
@@ -643,6 +646,7 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
         )
         let skillID = UUID()
         let mcpServerID = UUID()
+        let knowledgeBaseID = UUID()
 
         let fixedDate = Date(timeIntervalSince1970: 100)
         let result = ConversationPersistenceCoordinator.prepareBranchFromMessage(
@@ -651,6 +655,7 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
             messages: messages,
             activeSkillIDs: [skillID],
             activeMCPServerIDs: [mcpServerID],
+            activeKnowledgeBaseIDs: [knowledgeBaseID],
             date: fixedDate
         )
 
@@ -665,6 +670,7 @@ final class ConversationPersistenceCoordinatorTests: XCTestCase {
         XCTAssertEqual(result?.conversation.updatedAt, fixedDate)
         XCTAssertEqual(result?.conversation.activeSkillIDs, [skillID])
         XCTAssertEqual(result?.conversation.activeMCPServerIDs, [mcpServerID])
+        XCTAssertEqual(result?.conversation.activeKnowledgeBaseIDs, [knowledgeBaseID])
         XCTAssertEqual(result?.conversation.branchedFromConversationID, sourceConversationID)
         XCTAssertEqual(result?.conversation.branchedFromMessageID, branchUserID)
         XCTAssertEqual(result?.conversation.branchDividers.count, 2)

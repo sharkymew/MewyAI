@@ -49,6 +49,20 @@ class AIService {
         streamingTask = nil
     }
 
+    func appendSystemContext(_ context: String) {
+        let trimmed = context.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let index = conversationHistory.firstIndex(where: { $0.role == "system" }) {
+            let existing = conversationHistory[index].content.plainText
+            conversationHistory[index] = ChatRequestMessage(
+                role: "system",
+                text: existing + "\n\n" + trimmed
+            )
+        } else {
+            conversationHistory.insert(ChatRequestMessage(role: "system", text: trimmed), at: 0)
+        }
+    }
+
     func resetConversation(
         with messages: [ChatMessage],
         systemPrompt: String = AIConfiguration.defaultSystemPrompt,

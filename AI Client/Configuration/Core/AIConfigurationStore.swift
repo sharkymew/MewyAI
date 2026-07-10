@@ -501,6 +501,23 @@ enum BuiltInAIProvider: String, CaseIterable, Identifiable {
         }
     }
 
+    var defaultEmbeddingConfiguration: AIEmbeddingConfiguration? {
+        switch self {
+        case .anthropicMessages:
+            return nil
+        case .vertexAIExpress:
+            return AIEmbeddingConfiguration(
+                apiFormat: .vertexPredict,
+                baseURL: baseURL
+            )
+        case .openAIChatCompletions, .openAIResponses, .zhipu, .siliconFlow, .openRouter, .minimax, .zAI:
+            return AIEmbeddingConfiguration(
+                apiFormat: .openAICompatible,
+                baseURL: baseURL
+            )
+        }
+    }
+
     func makeConfiguration() -> AIConfiguration {
         AIConfiguration(
             name: displayName,
@@ -508,7 +525,8 @@ enum BuiltInAIProvider: String, CaseIterable, Identifiable {
             endpoint: endpoint,
             apiFormat: apiFormat,
             models: [],
-            selectedModel: ""
+            selectedModel: "",
+            embeddingConfiguration: defaultEmbeddingConfiguration
         )
     }
 }
@@ -539,6 +557,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     var reasoningEnabled: Bool
     var reasoningEffort: ReasoningEffort
     var generatesImageContextDescriptions: Bool
+    var embeddingConfiguration: AIEmbeddingConfiguration?
     var updatedAt: Date
 
     var requestURLString: String {
@@ -593,6 +612,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         reasoningEnabled: Bool = true,
         reasoningEffort: ReasoningEffort = .medium,
         generatesImageContextDescriptions: Bool = true,
+        embeddingConfiguration: AIEmbeddingConfiguration? = nil,
         updatedAt: Date = Date()
     ) {
         self.id = id
@@ -619,6 +639,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         self.reasoningEnabled = reasoningEnabled
         self.reasoningEffort = reasoningEffort
         self.generatesImageContextDescriptions = generatesImageContextDescriptions
+        self.embeddingConfiguration = embeddingConfiguration
         self.updatedAt = updatedAt
     }
 
@@ -638,6 +659,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         case reasoningEnabled
         case reasoningEffort
         case generatesImageContextDescriptions
+        case embeddingConfiguration
         case updatedAt
     }
 
@@ -673,6 +695,10 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
             Bool.self,
             forKey: .generatesImageContextDescriptions
         ) ?? true
+        embeddingConfiguration = try container.decodeIfPresent(
+            AIEmbeddingConfiguration.self,
+            forKey: .embeddingConfiguration
+        )
 
         if container.contains(.models),
            let decodedModels = try? container.decode([AIModelConfiguration].self, forKey: .models) {
@@ -735,6 +761,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         try container.encode(reasoningEnabled, forKey: .reasoningEnabled)
         try container.encode(reasoningEffort, forKey: .reasoningEffort)
         try container.encode(generatesImageContextDescriptions, forKey: .generatesImageContextDescriptions)
+        try container.encodeIfPresent(embeddingConfiguration, forKey: .embeddingConfiguration)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
 

@@ -151,7 +151,42 @@ final class ChatSessionViewModel {
         let hasActiveMCPServers: Bool
         let mcpTools: [AgentToolDefinition]
         let recallTools: [AgentToolDefinition]
+        let knowledgeTools: [AgentToolDefinition]
         let maxActiveConversationGenerations: Int
+
+        init(
+            conversationID: UUID?,
+            userText: String,
+            imageAttachments: [ChatImageAttachment],
+            imageContextDescription: String,
+            fileAttachments: [ChatFileAttachment],
+            contextMessages: [ChatMessage],
+            appendsUserMessage: Bool,
+            existingUserMessageID: UUID?,
+            configuration: AIConfiguration,
+            systemPromptAppendix: String,
+            hasActiveMCPServers: Bool,
+            mcpTools: [AgentToolDefinition],
+            recallTools: [AgentToolDefinition],
+            knowledgeTools: [AgentToolDefinition] = [],
+            maxActiveConversationGenerations: Int
+        ) {
+            self.conversationID = conversationID
+            self.userText = userText
+            self.imageAttachments = imageAttachments
+            self.imageContextDescription = imageContextDescription
+            self.fileAttachments = fileAttachments
+            self.contextMessages = contextMessages
+            self.appendsUserMessage = appendsUserMessage
+            self.existingUserMessageID = existingUserMessageID
+            self.configuration = configuration
+            self.systemPromptAppendix = systemPromptAppendix
+            self.hasActiveMCPServers = hasActiveMCPServers
+            self.mcpTools = mcpTools
+            self.recallTools = recallTools
+            self.knowledgeTools = knowledgeTools
+            self.maxActiveConversationGenerations = maxActiveConversationGenerations
+        }
     }
 
     enum StreamingTurnPreparationFailure: Error, Equatable {
@@ -276,7 +311,7 @@ final class ChatSessionViewModel {
         let reasoningEnabled = configuration.selectedModelSupportsReasoning ? configuration.reasoningEnabled : nil
         let reasoningEffort = reasoningEnabled == true ? configuration.reasoningEffort : nil
         let usesImageAttachments = configuration.selectedModelSupportsImages
-        let agentTools = context.mcpTools + context.recallTools
+        let agentTools = context.mcpTools + context.recallTools + context.knowledgeTools
 
         guard !context.userText.isEmpty || !context.imageAttachments.isEmpty || !context.fileAttachments.isEmpty else {
             return .failure(.emptyMessage)

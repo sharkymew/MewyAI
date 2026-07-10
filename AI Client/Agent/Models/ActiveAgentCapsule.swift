@@ -2,9 +2,10 @@ import Foundation
 import SwiftUI
 
 struct ActiveAgentCapsule: Identifiable {
-    enum Kind {
+    enum Kind: Equatable {
         case skill
         case mcp
+        case knowledgeBase
     }
 
     let id: UUID

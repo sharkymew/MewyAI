@@ -30,6 +30,7 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertEqual(message.reasoningContent, "kept reasoning")
         XCTAssertTrue(message.reasoningChunks.isEmpty)
         XCTAssertTrue(message.toolExchanges.isEmpty)
+        XCTAssertTrue(message.knowledgeCitations.isEmpty)
         XCTAssertFalse(message.isContentCleared)
     }
 
@@ -45,6 +46,36 @@ final class ConversationStoreTests: XCTestCase {
         let conversation = try JSONDecoder().decode(AIConversation.self, from: data)
 
         XCTAssertTrue(conversation.branchDividers.isEmpty)
+        XCTAssertTrue(conversation.activeKnowledgeBaseIDs.isEmpty)
+    }
+
+    func testKnowledgeBaseSelectionAndCitationsRoundTrip() throws {
+        let knowledgeBaseID = UUID()
+        let citation = KnowledgeCitation(
+            knowledgeBaseID: knowledgeBaseID,
+            knowledgeBaseName: "Docs",
+            documentID: UUID(),
+            documentName: "Guide",
+            chunkID: UUID(),
+            chunkIndex: 3,
+            location: "Page 4",
+            excerpt: "excerpt",
+            similarity: 0.82
+        )
+        let conversation = AIConversation(
+            messages: [
+                ChatMessage(role: "assistant", content: "answer", knowledgeCitations: [citation])
+            ],
+            activeKnowledgeBaseIDs: [knowledgeBaseID]
+        )
+
+        let decoded = try JSONDecoder().decode(
+            AIConversation.self,
+            from: JSONEncoder().encode(conversation)
+        )
+
+        XCTAssertEqual(decoded.activeKnowledgeBaseIDs, [knowledgeBaseID])
+        XCTAssertEqual(decoded.messages.first?.knowledgeCitations, [citation])
     }
 
     func testConversationBranchDividersRoundTrip() throws {
@@ -111,6 +142,7 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertEqual(decoded.reasoningContent, "")
         XCTAssertEqual(decoded.reasoningChunks, [])
         XCTAssertEqual(decoded.toolExchanges, [])
+        XCTAssertEqual(decoded.knowledgeCitations, [])
         XCTAssertNil(decoded.usage)
         XCTAssertFalse(decoded.isReasoningExpanded)
     }

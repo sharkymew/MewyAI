@@ -5,14 +5,18 @@ struct ChatInputOptionsMenu<MenuLabel: View>: View {
     let configuration: AIConfiguration
     let agentSkills: [AgentSkill]
     let mcpServers: [MCPServerConfiguration]
+    let knowledgeBases: [KnowledgeBase]
+    let activeKnowledgeBaseIDs: Set<UUID>
     let capabilitySelection: AgentCapabilitySelection
     let onOpenPhotoPicker: () -> Void
     let onOpenCamera: () -> Void
     let onOpenFileImporter: () -> Void
     let onToggleSkill: (UUID) -> Void
     let onToggleMCPServer: (UUID) -> Void
+    let onToggleKnowledgeBase: (UUID) -> Void
     let onManageSkills: () -> Void
     let onManageMCPServers: () -> Void
+    let onManageKnowledgeBases: () -> Void
     let onSetReasoningEnabled: (Bool) -> Void
     let onSelectReasoningEffort: (ReasoningEffort) -> Void
     let label: () -> MenuLabel
@@ -21,6 +25,7 @@ struct ChatInputOptionsMenu<MenuLabel: View>: View {
         Menu {
             attachmentItems
             Divider()
+            knowledgeBaseMenu
             skillMenu
             mcpMenu
             reasoningItems
@@ -87,6 +92,41 @@ struct ChatInputOptionsMenu<MenuLabel: View>: View {
             }
         } label: {
             Label("Agent Skills", systemImage: "wand.and.sparkles")
+        }
+    }
+
+    private var knowledgeBaseMenu: some View {
+        Menu {
+            if knowledgeBases.isEmpty {
+                Text("没有可用知识库")
+            } else {
+                ForEach(knowledgeBases) { knowledgeBase in
+                    Button {
+                        onToggleKnowledgeBase(knowledgeBase.id)
+                    } label: {
+                        let title = knowledgeBase.needsReindex
+                            ? "\(knowledgeBase.name)（需要重建）"
+                            : knowledgeBase.name
+                        if activeKnowledgeBaseIDs.contains(knowledgeBase.id) {
+                            Label(title, systemImage: "checkmark")
+                        } else {
+                            Label(title, systemImage: "cylinder.split.1x2")
+                        }
+                    }
+                    .disabled(
+                        !activeKnowledgeBaseIDs.contains(knowledgeBase.id)
+                            && (knowledgeBase.needsReindex || knowledgeBase.indexedChunkCount == 0)
+                    )
+                }
+            }
+
+            Button {
+                onManageKnowledgeBases()
+            } label: {
+                Label("管理知识库", systemImage: "slider.horizontal.3")
+            }
+        } label: {
+            Label("知识库", systemImage: "cylinder.split.1x2")
         }
     }
 

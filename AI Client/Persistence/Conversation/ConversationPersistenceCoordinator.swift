@@ -143,6 +143,7 @@ enum ConversationPersistenceCoordinator {
         messages: [ChatMessage],
         activeSkillIDs: Set<UUID>,
         activeMCPServerIDs: Set<UUID>,
+        activeKnowledgeBaseIDs: Set<UUID> = [],
         refreshesUpdatedAt: Bool,
         date: Date = Date()
     ) -> Bool {
@@ -154,6 +155,7 @@ enum ConversationPersistenceCoordinator {
         conversations[index].messages = messages
         conversations[index].activeSkillIDs = Array(activeSkillIDs)
         conversations[index].activeMCPServerIDs = Array(activeMCPServerIDs)
+        conversations[index].activeKnowledgeBaseIDs = Array(activeKnowledgeBaseIDs)
         updateActiveMessageRevisionSnapshots(
             conversations: &conversations,
             conversationIndex: index,
@@ -396,6 +398,7 @@ enum ConversationPersistenceCoordinator {
         messages: [ChatMessage],
         activeSkillIDs: Set<UUID>,
         activeMCPServerIDs: Set<UUID>,
+        activeKnowledgeBaseIDs: Set<UUID> = [],
         date: Date = Date()
     ) -> BranchConversationResult? {
         guard let messageIndex = messages.firstIndex(where: { $0.id == messageID }) else {
@@ -423,6 +426,7 @@ enum ConversationPersistenceCoordinator {
             isPinned: false,
             activeSkillIDs: Array(activeSkillIDs),
             activeMCPServerIDs: Array(activeMCPServerIDs),
+            activeKnowledgeBaseIDs: Array(activeKnowledgeBaseIDs),
             branchedFromConversationID: sourceConversation.id,
             branchedFromMessageID: messageID,
             branchDividers: branchDividers

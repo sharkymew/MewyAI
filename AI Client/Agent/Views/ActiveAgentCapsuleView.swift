@@ -52,16 +52,25 @@ struct ActiveAgentCapsuleView: View {
                     )
             }
         }
-        .accessibilityLabel(capsule.kind == .skill
-            ? AppLocalizations.format(
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        switch capsule.kind {
+        case .skill:
+            return AppLocalizations.format(
                 "accessibility.enabledSkill",
                 defaultValue: "Enabled Skill: %@",
                 arguments: [capsule.title]
             )
-            : AppLocalizations.format(
+        case .mcp:
+            return AppLocalizations.format(
                 "accessibility.enabledMCP",
                 defaultValue: "Enabled MCP: %@",
                 arguments: [capsule.title]
-            ))
+            )
+        case .knowledgeBase:
+            return "已启用知识库：\(capsule.title)"
+        }
     }
 }
