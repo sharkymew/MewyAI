@@ -344,8 +344,8 @@ private final class MockStreamingURLProtocol: URLProtocol {
     }
 
     private static let lock = NSLock()
-    private static var responses = [Response]()
-    private static var capturedRequests = [URLRequest]()
+    private nonisolated(unsafe) static var responses = [Response]()
+    private nonisolated(unsafe) static var capturedRequests = [URLRequest]()
 
     static var capturedRequestCount: Int {
         lock.lock()

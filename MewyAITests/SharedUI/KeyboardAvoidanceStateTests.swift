@@ -3,6 +3,7 @@ import UIKit
 import XCTest
 @testable import MewyAI
 
+@MainActor
 final class KeyboardAvoidanceStateTests: XCTestCase {
     func testBottomPaddingSubtractsExistingBottomSafeArea() {
         let padding = KeyboardAvoidanceState.bottomPadding(

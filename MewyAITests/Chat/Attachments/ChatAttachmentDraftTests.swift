@@ -1,6 +1,7 @@
 import XCTest
 @testable import MewyAI
 
+@MainActor
 final class ChatAttachmentDraftTests: XCTestCase {
     func testAppendImagesRejectsUnsupportedModelWithoutMutatingAttachments() {
         var draft = ChatAttachmentDraft()

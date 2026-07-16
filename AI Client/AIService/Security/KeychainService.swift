@@ -5,20 +5,34 @@ nonisolated enum KeychainService {
     private static let apiKeyService = "AIClient.APIKey"
     private static let agentSecretService = "AIClient.AgentSecret"
     private static let headerSecretServicePrefix = "AIClient.HeaderSecret."
-    private static let accessible = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
 
-    static func readAPIKey(for configurationID: UUID) -> String {
-        readSecret(service: apiKeyService, account: configurationID.uuidString)
+    static func readAPIKey(for keyID: UUID) -> String {
+        readAPIKeyResult(for: keyID).value
+    }
+
+    static func readAPIKeyResult(for keyID: UUID) -> AIProviderKeySecretReadResult {
+        readSecretResult(service: apiKeyService, account: keyID.uuidString)
     }
 
     @discardableResult
-    static func saveAPIKey(_ apiKey: String, for configurationID: UUID) -> Bool {
-        saveSecret(apiKey, service: apiKeyService, account: configurationID.uuidString)
+    static func saveAPIKey(_ apiKey: String, for keyID: UUID) -> Bool {
+        saveSecret(apiKey, service: apiKeyService, account: keyID.uuidString)
     }
 
     @discardableResult
-    static func deleteAPIKey(for configurationID: UUID) -> Bool {
-        deleteSecret(service: apiKeyService, account: configurationID.uuidString)
+    static func deleteAPIKey(for keyID: UUID) -> Bool {
+        deleteSecret(service: apiKeyService, account: keyID.uuidString)
+    }
+
+    @discardableResult
+    static func deleteAPIKeys<S: Sequence>(for keyIDs: S) -> Bool where S.Element == UUID {
+        var didDeleteAll = true
+        for keyID in keyIDs {
+            if !deleteAPIKey(for: keyID) {
+                didDeleteAll = false
+            }
+        }
+        return didDeleteAll
     }
 
     static func readAgentSecret(for id: UUID) -> String {
@@ -39,6 +53,43 @@ nonisolated enum KeychainService {
         readSecret(service: headerSecretService(for: configurationID), account: normalizedHeaderName(headerName))
     }
 
+    /// Returns every sensitive custom-header secret for a provider. `nil` means the
+    /// Keychain could not be read, which is different from a provider with no headers.
+    static func headerSecretValues(for configurationID: UUID) -> [String: String]? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: headerSecretService(for: configurationID),
+            kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
+        ]
+
+        var items: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &items)
+        if status == errSecItemNotFound { return [:] }
+        guard status == errSecSuccess else { return nil }
+
+        let dictionaries: [[String: Any]]
+        if let values = items as? [[String: Any]] {
+            dictionaries = values
+        } else if let value = items as? [String: Any] {
+            dictionaries = [value]
+        } else {
+            return nil
+        }
+
+        var secrets = [String: String]()
+        for dictionary in dictionaries {
+            guard let account = dictionary[kSecAttrAccount as String] as? String,
+                  let data = dictionary[kSecValueData as String] as? Data,
+                  let value = String(data: data, encoding: .utf8) else {
+                return nil
+            }
+            secrets[account] = value
+        }
+        return secrets
+    }
+
     @discardableResult
     static func saveHeaderSecret(_ value: String, for configurationID: UUID, headerName: String) -> Bool {
         saveSecret(value, service: headerSecretService(for: configurationID), account: normalizedHeaderName(headerName))
@@ -56,19 +107,43 @@ nonisolated enum KeychainService {
     @discardableResult
     static func deleteHeaderSecrets(for configurationID: UUID, excluding retainedAccounts: Set<String>) -> Bool {
         guard let accounts = headerSecretAccounts(for: configurationID) else { return false }
-        return accounts
-            .filter { !retainedAccounts.contains($0) }
-            .allSatisfy {
-                deleteSecret(service: headerSecretService(for: configurationID), account: $0)
+        var didDeleteAll = true
+        for account in accounts where !retainedAccounts.contains(account) {
+            if !deleteSecret(service: headerSecretService(for: configurationID), account: account) {
+                didDeleteAll = false
             }
+        }
+        return didDeleteAll
     }
 
+    /// Best-effort replacement used only to restore a failed configuration save.
     @discardableResult
-    static func deleteAllSecrets(for configurationID: UUID) -> Bool {
-        deleteAPIKey(for: configurationID) && deleteHeaderSecrets(for: configurationID)
+    static func restoreHeaderSecrets(
+        _ secrets: [String: String],
+        for configurationID: UUID
+    ) -> Bool {
+        var didRestoreAll = true
+        for (headerName, value) in secrets {
+            if !saveHeaderSecret(value, for: configurationID, headerName: headerName) {
+                didRestoreAll = false
+            }
+        }
+        guard didRestoreAll else { return false }
+
+        return deleteHeaderSecrets(
+            for: configurationID,
+            excluding: Set(secrets.keys)
+        )
     }
 
     private static func readSecret(service: String, account: String) -> String {
+        readSecretResult(service: service, account: account).value
+    }
+
+    private static func readSecretResult(
+        service: String,
+        account: String
+    ) -> AIProviderKeySecretReadResult {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -79,13 +154,16 @@ nonisolated enum KeychainService {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound {
+            return .missing
+        }
         guard status == errSecSuccess,
               let data = item as? Data,
               let value = String(data: data, encoding: .utf8) else {
-            return ""
+            return .failure
         }
 
-        return value
+        return .value(value)
     }
 
     private static func readSecret(service: String, account: String, legacyAccount: String) -> String {
@@ -111,14 +189,14 @@ nonisolated enum KeychainService {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: accessible
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
 
         let status = SecItemAdd(attributes as CFDictionary, nil)
         if status == errSecDuplicateItem {
             let updateStatus = SecItemUpdate(query as CFDictionary, [
                 kSecValueData as String: data,
-                kSecAttrAccessible as String: accessible
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
             ] as CFDictionary)
             return updateStatus == errSecSuccess
         }

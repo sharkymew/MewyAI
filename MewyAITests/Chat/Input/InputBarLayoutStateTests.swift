@@ -1,6 +1,7 @@
 import XCTest
 @testable import MewyAI
 
+@MainActor
 final class InputBarLayoutStateTests: XCTestCase {
     func testUsesFallbackHeightBeforeMeasurement() {
         let state = InputBarLayoutState()

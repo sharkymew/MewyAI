@@ -107,8 +107,8 @@ private final class StreamReaderMockURLProtocol: URLProtocol {
     }
 
     private static let lock = NSLock()
-    private static var response: Response?
-    private static var capturedRequests = [URLRequest]()
+    private nonisolated(unsafe) static var response: Response?
+    private nonisolated(unsafe) static var capturedRequests = [URLRequest]()
 
     static var capturedRequestCount: Int {
         lock.lock()

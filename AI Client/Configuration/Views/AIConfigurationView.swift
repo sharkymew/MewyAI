@@ -7,8 +7,9 @@ struct AIConfigurationView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var configurations = AIConfigurationStore.loadConfigurations()
     @State private var selectedConfigurationID = AIConfigurationStore.loadSelectedConfigurationID()
-    @State private var showAPIKey = false
     @State private var showCustomHeaders = false
+    @State private var isProviderKeyManagementPresented = false
+    @State private var providerKeyStateVersion = 0
     @State private var newModelName = ""
     @State private var modelFetchMessage: String?
     @State private var isFetchingModels = false
@@ -40,7 +41,6 @@ struct AIConfigurationView: View {
         case name
         case baseURL
         case endpoint
-        case apiKey
         case customHeaders
         case modelAlias(String)
         case newModel
@@ -192,6 +192,13 @@ struct AIConfigurationView: View {
                     refreshNotificationAuthorizationStatus()
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .aiProviderKeyStateDidChange)) { notification in
+                guard let changedConfigurationID = notification.userInfo?["configurationID"] as? UUID,
+                      configurations.contains(where: { $0.id == changedConfigurationID }) else {
+                    return
+                }
+                providerKeyStateVersion &+= 1
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") {
@@ -212,6 +219,13 @@ struct AIConfigurationView: View {
             }
             .sheet(isPresented: $showMemorySettings) {
                 ChatMemorySettingsView()
+            }
+            .sheet(isPresented: $isProviderKeyManagementPresented) {
+                if let configuration = selectedConfiguration {
+                    AIProviderKeyManagementView(configuration: configuration) { updatedConfiguration in
+                        saveManagedAPIKeys(updatedConfiguration)
+                    }
+                }
             }
             .confirmationDialog(
                 "删除本配置下的所有模型？",
@@ -317,23 +331,51 @@ struct AIConfigurationView: View {
     
     private var authSection: some View {
         Section {
-            if showAPIKey {
-                TextField("API Key", text: selectedAPIKeyBinding)
-                    .focused($focusedField, equals: .apiKey)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-            } else {
-                SecureField("API Key", text: selectedAPIKeyBinding)
-                    .focused($focusedField, equals: .apiKey)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+            let _ = providerKeyStateVersion
+            LabeledContent(AppLocalizations.string(
+                "providerKey.auth.current",
+                defaultValue: "Current Key"
+            )) {
+                Text(selectedConfiguration?.currentAPIKeyName ?? AppLocalizations.string(
+                    "providerKey.auth.noKey",
+                    defaultValue: "No API Key"
+                ))
+                .foregroundStyle(selectedConfiguration?.currentAPIKeyName == nil ? .secondary : .primary)
             }
-            
-            Toggle("显示 API Key", isOn: $showAPIKey)
+
+            LabeledContent(AppLocalizations.string(
+                "providerKey.auth.count",
+                defaultValue: "API Keys"
+            )) {
+                Text(AppLocalizations.format(
+                    "providerKey.auth.countValue",
+                    defaultValue: "%d keys",
+                    arguments: [selectedConfiguration?.apiKeyCount ?? 0]
+                ))
+            }
+
+            Button {
+                hideKeyboard()
+                isProviderKeyManagementPresented = true
+            } label: {
+                Label(
+                    AppLocalizations.string(
+                        "providerKey.auth.manage",
+                        defaultValue: "Manage API Keys"
+                    ),
+                    systemImage: "key.horizontal"
+                )
+            }
         } header: {
             Text("认证")
         } footer: {
-            Text(authFooterText)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(authFooterText)
+                Text(AppLocalizations.string(
+                    "providerKey.auth.autoSwitch",
+                    defaultValue: "Authentication failures and rate limits automatically switch to another available key."
+                ))
+            }
         }
     }
     
@@ -925,17 +967,6 @@ struct AIConfigurationView: View {
         )
     }
 
-    private var selectedAPIKeyBinding: Binding<String> {
-        Binding(
-            get: { selectedConfiguration?.apiKey ?? "" },
-            set: { newValue in
-                updateSelectedConfiguration(persists: false) { configuration in
-                    configuration.apiKey = newValue
-                }
-            }
-        )
-    }
-    
     private var selectedCustomHeadersBinding: Binding<String> {
         binding(\.customHeaders)
     }
@@ -1185,9 +1216,30 @@ struct AIConfigurationView: View {
                 "configuration.saveFailed",
                 defaultValue: "Failed to save configuration. Check Keychain or local storage permissions."
             )
-        if let selectedConfigurationID {
+        if didSave, let selectedConfigurationID {
             AIConfigurationStore.saveSelectedConfigurationID(selectedConfigurationID)
         }
+    }
+
+    private func saveManagedAPIKeys(_ updatedConfiguration: AIConfiguration) -> Bool {
+        guard let index = configurations.firstIndex(where: { $0.id == updatedConfiguration.id }) else {
+            return false
+        }
+
+        var updatedConfigurations = configurations
+        updatedConfigurations[index] = updatedConfiguration
+        updatedConfigurations[index].updatedAt = Date()
+        guard AIConfigurationStore.saveConfigurations(updatedConfigurations) else {
+            saveErrorMessage = AppLocalizations.string(
+                "configuration.saveFailed",
+                defaultValue: "Failed to save configuration. Check Keychain or local storage permissions."
+            )
+            return false
+        }
+
+        configurations = updatedConfigurations
+        saveErrorMessage = nil
+        return true
     }
 
     private func hideKeyboard() {
@@ -1272,10 +1324,22 @@ struct AIConfigurationView: View {
     private func deleteCurrentConfiguration() {
         guard configurations.count > 1,
               let selectedIndex else { return }
-        let removedConfiguration = configurations.remove(at: selectedIndex)
-        KeychainService.deleteAllSecrets(for: removedConfiguration.id)
-        selectedConfigurationID = configurations[0].id
-        saveCurrentState()
+
+        var updatedConfigurations = configurations
+        updatedConfigurations.remove(at: selectedIndex)
+        let updatedSelectionID = updatedConfigurations[0].id
+        guard AIConfigurationStore.saveConfigurations(updatedConfigurations) else {
+            saveErrorMessage = AppLocalizations.string(
+                "configuration.saveFailed",
+                defaultValue: "Failed to save configuration. Check Keychain or local storage permissions."
+            )
+            return
+        }
+
+        configurations = updatedConfigurations
+        selectedConfigurationID = updatedSelectionID
+        AIConfigurationStore.saveSelectedConfigurationID(updatedSelectionID)
+        saveErrorMessage = nil
     }
     
     private func addModel() {
@@ -1508,7 +1572,7 @@ struct AIConfigurationView: View {
         aiService.fetchModels(
             baseURL: configuration.requestURLString,
             apiFormat: configuration.apiFormat,
-            apiKey: configuration.apiKey,
+            credentialSet: configuration.credentialSet(),
             customHeaders: configuration.customHeaders
         ) { result in
             isFetchingModels = false
@@ -1567,10 +1631,8 @@ struct AIConfigurationView: View {
             do {
                 let models = try await EmbeddingModelDiscoveryService.discover(
                     embeddingConfiguration: embedding,
-                    credentials: EmbeddingCredentials(
-                        apiKey: provider.apiKey,
-                        customHeaders: provider.customHeaders
-                    )
+                    credentialSet: provider.credentialSet(),
+                    customHeaders: provider.customHeaders
                 )
                 updateSelectedConfiguration { configuration in
                     guard var currentEmbedding = configuration.embeddingConfiguration else { return }

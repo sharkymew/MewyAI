@@ -266,7 +266,7 @@ struct ChatMemorySettingsView: View {
             userInstruction: instruction,
             baseURL: requestContext.baseURL,
             apiFormat: requestContext.apiFormat,
-            apiKey: requestContext.apiKey,
+            credentialSet: requestContext.credentialSet,
             customHeaders: requestContext.customHeaders,
             model: requestContext.model,
             modelParameters: requestContext.modelParameters,
@@ -359,7 +359,7 @@ struct ChatMemorySettingsView: View {
         return .success(MemoryRequestContext(
             baseURL: baseURL,
             apiFormat: configuration.apiFormat,
-            apiKey: configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            credentialSet: configuration.credentialSet(),
             customHeaders: configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines),
             model: model,
             modelParameters: configuration.selectedModelConfiguration,
@@ -420,7 +420,7 @@ struct ChatMemorySettingsView: View {
 private struct MemoryRequestContext {
     let baseURL: String
     let apiFormat: AIAPIFormat
-    let apiKey: String
+    let credentialSet: AIProviderCredentialSet
     let customHeaders: String
     let model: String
     let modelParameters: AIModelConfiguration?

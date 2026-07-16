@@ -99,10 +99,6 @@ actor KnowledgeBaseIndexer {
             throw KnowledgeDocumentProcessingError.unreadable(extracted.name)
         }
 
-        let credentials = EmbeddingCredentials(
-            apiKey: provider.apiKey,
-            customHeaders: provider.customHeaders
-        )
         do {
             var vectors = [[Float]]()
             vectors.reserveCapacity(chunks.count)
@@ -120,7 +116,8 @@ actor KnowledgeBaseIndexer {
                     batch.map(\.text),
                     purpose: .document(title: extracted.name),
                     profile: updatedBase.profile,
-                    credentials: credentials
+                    credentialSet: provider.credentialSet(),
+                    customHeaders: provider.customHeaders
                 ))
             }
 
@@ -179,11 +176,6 @@ actor KnowledgeBaseIndexer {
         updatedBase.profile = profile
         updatedBase.needsReindex = true
         var failures = [String]()
-        let credentials = EmbeddingCredentials(
-            apiKey: provider.apiKey,
-            customHeaders: provider.customHeaders
-        )
-
         let documentIndices = updatedBase.documents.indices.filter { index in
             documentID == nil || updatedBase.documents[index].id == documentID
         }
@@ -216,7 +208,8 @@ actor KnowledgeBaseIndexer {
                         Array(document.chunks[batchStart..<batchEnd]).map(\.text),
                         purpose: .document(title: document.name),
                         profile: profile,
-                        credentials: credentials
+                        credentialSet: provider.credentialSet(),
+                        customHeaders: provider.customHeaders
                     ))
                 }
                 guard vectors.count == document.chunks.count,
@@ -303,10 +296,8 @@ actor KnowledgeBaseRetrievalService {
                     [trimmedQuery],
                     purpose: .query,
                     profile: first.profile,
-                    credentials: EmbeddingCredentials(
-                        apiKey: provider.apiKey,
-                        customHeaders: provider.customHeaders
-                    )
+                    credentialSet: provider.credentialSet(),
+                    customHeaders: provider.customHeaders
                 )[0]
                 for base in bases {
                     let results = searchLocally(

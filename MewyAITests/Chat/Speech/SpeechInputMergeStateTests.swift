@@ -1,6 +1,7 @@
 import XCTest
 @testable import MewyAI
 
+@MainActor
 final class SpeechInputMergeStateTests: XCTestCase {
     func testMergedTextTrimsSpeechAndAddsSeparatorWhenNeeded() {
         XCTAssertEqual(

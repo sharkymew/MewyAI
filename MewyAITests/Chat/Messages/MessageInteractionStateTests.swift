@@ -1,6 +1,7 @@
 import XCTest
 @testable import MewyAI
 
+@MainActor
 final class MessageInteractionStateTests: XCTestCase {
     func testDefaultsAreInactive() {
         let state = MessageInteractionState()

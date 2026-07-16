@@ -25,45 +25,45 @@ nonisolated struct AIStreamedResponse {
     }
 }
 
+nonisolated enum AIStreamResponseReadResult {
+    case response(AIStreamedResponse)
+    case httpFailure(AIProviderHTTPFailure)
+    case failed
+}
+
 nonisolated enum AIStreamResponseReader {
     private static let visibleReasoningCallbackFlushInterval: TimeInterval = 0.016
     private static let hiddenReasoningCallbackFlushInterval: TimeInterval = 0.50
     private static let contentCallbackFlushInterval: TimeInterval = 0.016
     private static let reasoningVisibilityCheckInterval: TimeInterval = 0.05
 
-    static func read(
+    static func readResult(
         session: URLSession,
         request: URLRequest,
         apiFormat: AIAPIFormat,
         redactionValues: [String],
         maxContentCharacters: Int,
         maxReasoningCharacters: Int,
-        isReasoningDisplayActive: @escaping @MainActor () -> Bool,
-        onReasoningToken: @escaping (String) -> Void,
-        onContentToken: @escaping (String) -> Void,
-        onError: @escaping (String) -> Void,
-        errorMessage: @escaping (Int?, String, URLRequest?, [String]) -> String,
-        sanitizedErrorBody: @escaping (String, [String]) -> String
-    ) async -> AIStreamedResponse? {
+        isReasoningDisplayActive: @escaping @MainActor @Sendable () -> Bool,
+        onReasoningToken: @escaping @MainActor @Sendable (String) -> Void,
+        onContentToken: @escaping @MainActor @Sendable (String) -> Void,
+        onError: @escaping @MainActor @Sendable (String) -> Void,
+        errorMessage: @escaping @Sendable (Int?, String, URLRequest?, [String]) -> String,
+        sanitizedErrorBody: @escaping @Sendable (String, [String]) -> String
+    ) async -> AIStreamResponseReadResult {
         do {
             let (bytes, response) = try await session.bytes(for: request)
 
             if let httpResponse = response as? HTTPURLResponse,
                !(200...299).contains(httpResponse.statusCode) {
                 let errorBody = await collectErrorBody(
-                    from: bytes,
-                    redacting: redactionValues,
-                    sanitizedErrorBody: sanitizedErrorBody
+                    from: bytes
                 )
-                await MainActor.run {
-                    onError(errorMessage(
-                        httpResponse.statusCode,
-                        errorBody,
-                        request,
-                        redactionValues
-                    ))
-                }
-                return nil
+                return .httpFailure(AIProviderHTTPFailure(
+                    statusCode: httpResponse.statusCode,
+                    responseBody: errorBody,
+                    apiFormat: apiFormat
+                ))
             }
 
             var state = StreamReadState()
@@ -132,7 +132,7 @@ nonisolated enum AIStreamResponseReader {
 
             for try await line in bytes.lines {
                 if Task.isCancelled {
-                    return nil
+                    return .failed
                 }
 
                 guard line.hasPrefix("data: ") else { continue }
@@ -151,7 +151,7 @@ nonisolated enum AIStreamResponseReader {
                     await MainActor.run {
                         onError(sanitizedMessage)
                     }
-                    return nil
+                    return .failed
                 }
 
                 if let eventUsage = streamResult.usage {
@@ -167,7 +167,7 @@ nonisolated enum AIStreamResponseReader {
 
                 if streamResult.isDone {
                     await flushTokenCallbacks(force: true)
-                    return state.response()
+                    return .response(state.response())
                 }
 
                 let reasoningToken = streamResult.reasoningToken
@@ -182,7 +182,7 @@ nonisolated enum AIStreamResponseReader {
                                 defaultValue: "Reasoning content is too long. Receiving has stopped."
                             ))
                         }
-                        return nil
+                        return .failed
                     }
                     state.fullReasoningChunks.append(reasoningToken)
                     state.pendingReasoningCallbackChunks.append(reasoningToken)
@@ -197,7 +197,7 @@ nonisolated enum AIStreamResponseReader {
                                 defaultValue: "Response content is too long. Receiving has stopped."
                             ))
                         }
-                        return nil
+                        return .failed
                     }
                     state.fullContentChunks.append(contentToken)
                     state.pendingContentCallbackChunks.append(contentToken)
@@ -209,10 +209,10 @@ nonisolated enum AIStreamResponseReader {
             }
 
             await flushTokenCallbacks(force: true)
-            return state.response()
+            return .response(state.response())
         } catch {
             if Task.isCancelled {
-                return nil
+                return .failed
             }
 
             await MainActor.run {
@@ -226,15 +226,60 @@ nonisolated enum AIStreamResponseReader {
                     arguments: [sanitizedMessage]
                 ))
             }
+            return .failed
+        }
+    }
+
+    static func read(
+        session: URLSession,
+        request: URLRequest,
+        apiFormat: AIAPIFormat,
+        redactionValues: [String],
+        maxContentCharacters: Int,
+        maxReasoningCharacters: Int,
+        isReasoningDisplayActive: @escaping @MainActor @Sendable () -> Bool,
+        onReasoningToken: @escaping @MainActor @Sendable (String) -> Void,
+        onContentToken: @escaping @MainActor @Sendable (String) -> Void,
+        onError: @escaping @MainActor @Sendable (String) -> Void,
+        errorMessage: @escaping @Sendable (Int?, String, URLRequest?, [String]) -> String,
+        sanitizedErrorBody: @escaping @Sendable (String, [String]) -> String
+    ) async -> AIStreamedResponse? {
+        let result = await readResult(
+            session: session,
+            request: request,
+            apiFormat: apiFormat,
+            redactionValues: redactionValues,
+            maxContentCharacters: maxContentCharacters,
+            maxReasoningCharacters: maxReasoningCharacters,
+            isReasoningDisplayActive: isReasoningDisplayActive,
+            onReasoningToken: onReasoningToken,
+            onContentToken: onContentToken,
+            onError: onError,
+            errorMessage: errorMessage,
+            sanitizedErrorBody: sanitizedErrorBody
+        )
+
+        switch result {
+        case .response(let response):
+            return response
+        case .httpFailure(let failure):
+            await MainActor.run {
+                onError(errorMessage(
+                    failure.statusCode,
+                    sanitizedErrorBody(failure.responseBody, redactionValues),
+                    request,
+                    redactionValues
+                ))
+            }
+            return nil
+        case .failed:
             return nil
         }
     }
 
     private static func collectErrorBody(
         from bytes: URLSession.AsyncBytes,
-        maxCharacters: Int = 4_000,
-        redacting sensitiveValues: [String],
-        sanitizedErrorBody: (String, [String]) -> String
+        maxCharacters: Int = 4_000
     ) async -> String {
         var body = ""
 
@@ -245,7 +290,7 @@ nonisolated enum AIStreamResponseReader {
                 }
                 body += line
                 if body.count >= maxCharacters {
-                    return sanitizedErrorBody(String(body.prefix(maxCharacters)), sensitiveValues)
+                    return String(body.prefix(maxCharacters))
                 }
             }
         } catch {
@@ -258,7 +303,7 @@ nonisolated enum AIStreamResponseReader {
 
         return body.isEmpty
             ? AppLocalizations.string("aiService.diagnostics.noResponseBody", defaultValue: "No response body")
-            : sanitizedErrorBody(body, sensitiveValues)
+            : body
     }
 
     private struct StreamReadState {

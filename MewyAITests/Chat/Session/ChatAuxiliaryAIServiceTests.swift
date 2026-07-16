@@ -175,6 +175,176 @@ final class ChatAuxiliaryAIServiceTests: XCTestCase {
         XCTAssertEqual(MockAuxiliaryURLProtocol.capturedRequestCount, 1)
     }
 
+    func testAuxiliaryRequestRotatesCredentialsAfterRateLimitAndRedactsStoredFailure() async throws {
+        let configurationID = UUID()
+        let firstKey = AIProviderAPIKey(name: "Key 1", value: "first-auxiliary-secret")
+        let fallbackKey = AIProviderAPIKey(name: "Key 2", value: "fallback-auxiliary-secret")
+        let credentialSet = AIProviderCredentialSet(
+            configurationID: configurationID,
+            currentKeyID: firstKey.id,
+            apiKeys: [firstKey, fallbackKey]
+        )
+        AIProviderKeyStateStore.shared.removeState(for: configurationID)
+        AIProviderKeyStateStore.shared.reconcile(
+            configurationID: configurationID,
+            availableKeyIDs: [firstKey.id, fallbackKey.id]
+        )
+        defer { AIProviderKeyStateStore.shared.removeState(for: configurationID) }
+
+        MockAuxiliaryURLProtocol.setResponses([
+            .json(#"{"error":"first-auxiliary-secret is rate limited"}"#, statusCode: 429),
+            .json(#"{"choices":[{"message":{"content":"Fallback Title"}}]}"#)
+        ])
+
+        let service = ChatAuxiliaryAIService(session: makeMockSession())
+        let completed = expectation(description: "title generated with fallback credential")
+        var title: String?
+
+        service.generateConversationTitle(
+            messages: [
+                ChatMessage(role: "user", content: "Discuss auxiliary retries"),
+                ChatMessage(role: "assistant", content: "Acknowledged.")
+            ],
+            baseURL: AIAPIFormat.openAIChatCompletions.defaultBaseURL,
+            apiFormat: .openAIChatCompletions,
+            credentialSet: credentialSet,
+            customHeaders: "",
+            model: "gpt-test",
+            modelParameters: nil,
+            anthropicMaxTokens: 4096,
+            reasoningEnabled: nil,
+            reasoningEffort: nil
+        ) { generatedTitle in
+            title = generatedTitle
+            completed.fulfill()
+        }
+
+        await fulfillment(of: [completed], timeout: 5)
+
+        XCTAssertEqual(title, "Fallback Title")
+        let requests = MockAuxiliaryURLProtocol.allCapturedRequests
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer first-auxiliary-secret")
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer fallback-auxiliary-secret")
+        XCTAssertEqual(
+            AIProviderKeyStateStore.shared.currentKeyID(
+                for: configurationID,
+                availableKeyIDs: [firstKey.id, fallbackKey.id]
+            ),
+            fallbackKey.id
+        )
+        let failure = try XCTUnwrap(AIProviderKeyStateStore.shared.state(for: configurationID).failures[firstKey.id])
+        XCTAssertEqual(failure.category, .rateLimited)
+        XCTAssertFalse(failure.summary.contains(firstKey.value))
+        XCTAssertFalse(failure.summary.contains(fallbackKey.value))
+        XCTAssertTrue(failure.summary.contains("[REDACTED]"))
+    }
+
+    func testAuxiliaryRequestDoesNotRetryNonCredentialHTTPFailure() async throws {
+        let firstKey = AIProviderAPIKey(name: "Key 1", value: "first-auxiliary-secret")
+        let fallbackKey = AIProviderAPIKey(name: "Key 2", value: "fallback-auxiliary-secret")
+        let credentialSet = AIProviderCredentialSet(
+            configurationID: UUID(),
+            currentKeyID: firstKey.id,
+            apiKeys: [firstKey, fallbackKey]
+        )
+        MockAuxiliaryURLProtocol.setResponses([
+            .json(#"{"error":"server unavailable"}"#, statusCode: 500),
+            .json(#"{"choices":[{"message":{"content":"Should not be requested"}}]}"#)
+        ])
+
+        let service = ChatAuxiliaryAIService(session: makeMockSession())
+        let completed = expectation(description: "memory extraction completed without retry")
+        var operations: [ChatMemoryOperation]?
+
+        service.extractMemoryUpdates(
+            memoryEntries: [],
+            userText: "Remember a preference",
+            assistantText: "I will remember it.",
+            baseURL: AIAPIFormat.openAIChatCompletions.defaultBaseURL,
+            apiFormat: .openAIChatCompletions,
+            credentialSet: credentialSet,
+            customHeaders: "",
+            model: "gpt-test",
+            modelParameters: nil,
+            anthropicMaxTokens: 4096,
+            reasoningEnabled: nil,
+            reasoningEffort: nil
+        ) { extractedOperations in
+            operations = extractedOperations
+            completed.fulfill()
+        }
+
+        await fulfillment(of: [completed], timeout: 5)
+
+        XCTAssertNil(operations)
+        XCTAssertEqual(MockAuxiliaryURLProtocol.capturedRequestCount, 1)
+        XCTAssertEqual(
+            MockAuxiliaryURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"),
+            "Bearer first-auxiliary-secret"
+        )
+    }
+
+    func testAuxiliaryRequestRotatesOnStructuredVertexCredentialFailure() async throws {
+        let configurationID = UUID()
+        let firstKey = AIProviderAPIKey(name: "Key 1", value: "first-vertex-secret")
+        let fallbackKey = AIProviderAPIKey(name: "Key 2", value: "fallback-vertex-secret")
+        let credentialSet = AIProviderCredentialSet(
+            configurationID: configurationID,
+            currentKeyID: firstKey.id,
+            apiKeys: [firstKey, fallbackKey]
+        )
+        AIProviderKeyStateStore.shared.removeState(for: configurationID)
+        AIProviderKeyStateStore.shared.reconcile(
+            configurationID: configurationID,
+            availableKeyIDs: [firstKey.id, fallbackKey.id]
+        )
+        defer { AIProviderKeyStateStore.shared.removeState(for: configurationID) }
+
+        MockAuxiliaryURLProtocol.setResponses([
+            .json(#"{"error":{"status":"API_KEY_INVALID"}}"#, statusCode: 400),
+            .json(#"{"candidates":[{"content":{"parts":[{"text":"Vertex Title"}]}}]}"#)
+        ])
+
+        let service = ChatAuxiliaryAIService(session: makeMockSession())
+        let completed = expectation(description: "vertex title generated with fallback credential")
+        var title: String?
+
+        service.generateConversationTitle(
+            messages: [
+                ChatMessage(role: "user", content: "Discuss Vertex credentials"),
+                ChatMessage(role: "assistant", content: "Acknowledged.")
+            ],
+            baseURL: "https://example.com/v1/publishers/google/models/{model}:generateContent",
+            apiFormat: .vertexAIExpress,
+            credentialSet: credentialSet,
+            customHeaders: "",
+            model: "gemini-test",
+            modelParameters: nil,
+            anthropicMaxTokens: 4096,
+            reasoningEnabled: nil,
+            reasoningEffort: nil
+        ) { generatedTitle in
+            title = generatedTitle
+            completed.fulfill()
+        }
+
+        await fulfillment(of: [completed], timeout: 5)
+
+        XCTAssertEqual(title, "Vertex Title")
+        let requests = MockAuxiliaryURLProtocol.allCapturedRequests
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(URLComponents(url: try XCTUnwrap(requests[0].url), resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "key" })?.value, firstKey.value)
+        XCTAssertEqual(URLComponents(url: try XCTUnwrap(requests[1].url), resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "key" })?.value, fallbackKey.value)
+        XCTAssertEqual(
+            AIProviderKeyStateStore.shared.currentKeyID(
+                for: configurationID,
+                availableKeyIDs: [firstKey.id, fallbackKey.id]
+            ),
+            fallbackKey.id
+        )
+    }
+
     private func makeMockSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockAuxiliaryURLProtocol.self]
@@ -204,9 +374,9 @@ private final class MockAuxiliaryURLProtocol: URLProtocol {
     }
 
     private static let lock = NSLock()
-    private static var responses = [Response]()
-    private static var capturedRequests = [URLRequest]()
-    private static var capturedRequestBodies = [Data?]()
+    private nonisolated(unsafe) static var responses = [Response]()
+    private nonisolated(unsafe) static var capturedRequests = [URLRequest]()
+    private nonisolated(unsafe) static var capturedRequestBodies = [Data?]()
 
     static var capturedRequestCount: Int {
         lock.lock()
@@ -218,6 +388,12 @@ private final class MockAuxiliaryURLProtocol: URLProtocol {
         lock.lock()
         defer { lock.unlock() }
         return capturedRequests.last
+    }
+
+    static var allCapturedRequests: [URLRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturedRequests
     }
 
     static var lastRequestBody: Data? {

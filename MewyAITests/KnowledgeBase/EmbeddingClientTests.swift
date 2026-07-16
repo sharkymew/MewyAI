@@ -247,9 +247,9 @@ private final class EmbeddingMockURLProtocol: URLProtocol {
     }
 
     private static let lock = NSLock()
-    private static var responses = [Response]()
-    private static var requests = [URLRequest]()
-    private static var requestBodies = [Data?]()
+    private nonisolated(unsafe) static var responses = [Response]()
+    private nonisolated(unsafe) static var requests = [URLRequest]()
+    private nonisolated(unsafe) static var requestBodies = [Data?]()
     private var workItem: DispatchWorkItem?
 
     static var capturedRequestCount: Int {

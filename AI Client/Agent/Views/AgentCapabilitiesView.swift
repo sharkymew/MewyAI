@@ -524,7 +524,7 @@ private struct SkillCreatorSheet: View {
             systemPrompt: AgentCapabilityStore.builtInSkillCreator.content,
             usesImageAttachments: false
         )
-        aiService.sendMessage(
+        aiService.sendMessageResult(
             message: """
             Create an AI Client text-only SKILL.md with these requirements.
             name: \(normalizedName)
@@ -534,7 +534,7 @@ private struct SkillCreatorSheet: View {
             """,
             baseURL: baseURL,
             apiFormat: configuration.apiFormat,
-            apiKey: configuration.apiKey,
+            credentialSet: configuration.credentialSet(),
             customHeaders: configuration.customHeaders,
             model: model,
             modelParameters: configuration.selectedModelConfiguration,
@@ -542,8 +542,15 @@ private struct SkillCreatorSheet: View {
             reasoningEnabled: nil,
             reasoningEffort: nil,
             usesImageAttachments: false
-        ) { response in
+        ) { result in
             isGenerating = false
+            let response: String
+            switch result {
+            case .success(let text):
+                response = text
+            case .failure(let error):
+                response = error.localizedDescription
+            }
             if (try? AgentCapabilityStore.parseSkillMarkdown(response)) != nil {
                 generatedMarkdown = response.trimmingCharacters(in: .whitespacesAndNewlines)
                 statusMessage = AppLocalizations.string(

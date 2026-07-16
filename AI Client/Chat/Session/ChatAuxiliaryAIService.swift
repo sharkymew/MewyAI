@@ -32,6 +32,34 @@ final class ChatAuxiliaryAIService {
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
     ) {
+        generateConversationTitle(
+            messages: messages,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            completion: completion
+        )
+    }
+
+    func generateConversationTitle(
+        messages: [ChatMessage],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (String?) -> Void
+    ) {
         let transcript = messages
             .filter { !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .prefix(4)
@@ -58,7 +86,7 @@ final class ChatAuxiliaryAIService {
             messages: titleMessages,
             baseURL: baseURL,
             apiFormat: apiFormat,
-            apiKey: apiKey,
+            credentialSet: credentialSet,
             customHeaders: customHeaders,
             model: model,
             modelParameters: modelParameters,
@@ -87,6 +115,38 @@ final class ChatAuxiliaryAIService {
         reasoningEffort: ReasoningEffort?,
         completion: @escaping ([ChatMemoryOperation]?) -> Void
     ) {
+        extractMemoryUpdates(
+            memoryEntries: memoryEntries,
+            userText: userText,
+            assistantText: assistantText,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            completion: completion
+        )
+    }
+
+    func extractMemoryUpdates(
+        memoryEntries: [ChatMemoryEntry],
+        userText: String,
+        assistantText: String,
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping ([ChatMemoryOperation]?) -> Void
+    ) {
         sendAuxiliaryMemoryRequest(
             systemPrompt: Self.memoryExtractionSystemPrompt,
             userPrompt: ChatMemoryStore.extractionUserPrompt(
@@ -96,7 +156,7 @@ final class ChatAuxiliaryAIService {
             ),
             baseURL: baseURL,
             apiFormat: apiFormat,
-            apiKey: apiKey,
+            credentialSet: credentialSet,
             customHeaders: customHeaders,
             model: model,
             modelParameters: modelParameters,
@@ -126,6 +186,34 @@ final class ChatAuxiliaryAIService {
         reasoningEffort: ReasoningEffort?,
         completion: @escaping ([ChatMemorySummarySection]?) -> Void
     ) {
+        generateMemorySummary(
+            memoryEntries: memoryEntries,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            completion: completion
+        )
+    }
+
+    func generateMemorySummary(
+        memoryEntries: [ChatMemoryEntry],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping ([ChatMemorySummarySection]?) -> Void
+    ) {
         guard !memoryEntries.isEmpty else {
             completion([])
             return
@@ -136,7 +224,7 @@ final class ChatAuxiliaryAIService {
             userPrompt: ChatMemoryStore.summaryUserPrompt(entries: memoryEntries),
             baseURL: baseURL,
             apiFormat: apiFormat,
-            apiKey: apiKey,
+            credentialSet: credentialSet,
             customHeaders: customHeaders,
             model: model,
             modelParameters: modelParameters,
@@ -168,6 +256,38 @@ final class ChatAuxiliaryAIService {
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (ChatMemoryHistoryBatchSummary?) -> Void
     ) {
+        summarizeMemoryHistoryBatch(
+            memoryEntries: memoryEntries,
+            batch: batch,
+            batchCount: batchCount,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            completion: completion
+        )
+    }
+
+    func summarizeMemoryHistoryBatch(
+        memoryEntries: [ChatMemoryEntry],
+        batch: ChatMemoryHistoryBatch,
+        batchCount: Int,
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (ChatMemoryHistoryBatchSummary?) -> Void
+    ) {
         sendAuxiliaryMemoryRequest(
             systemPrompt: Self.memoryHistoryBatchSummarySystemPrompt,
             userPrompt: ChatMemoryHistorySummaryPrompt.batchUserPrompt(
@@ -177,7 +297,7 @@ final class ChatAuxiliaryAIService {
             ),
             baseURL: baseURL,
             apiFormat: apiFormat,
-            apiKey: apiKey,
+            credentialSet: credentialSet,
             customHeaders: customHeaders,
             model: model,
             modelParameters: modelParameters,
@@ -209,6 +329,36 @@ final class ChatAuxiliaryAIService {
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (ChatMemoryHistorySummaryResult?) -> Void
     ) {
+        mergeMemoryHistorySummaries(
+            memoryEntries: memoryEntries,
+            batchSummaries: batchSummaries,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            completion: completion
+        )
+    }
+
+    func mergeMemoryHistorySummaries(
+        memoryEntries: [ChatMemoryEntry],
+        batchSummaries: [ChatMemoryHistoryBatchSummary],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (ChatMemoryHistorySummaryResult?) -> Void
+    ) {
         guard !batchSummaries.isEmpty else {
             completion(ChatMemoryHistorySummaryResult(sections: [], operations: []))
             return
@@ -222,7 +372,7 @@ final class ChatAuxiliaryAIService {
             ),
             baseURL: baseURL,
             apiFormat: apiFormat,
-            apiKey: apiKey,
+            credentialSet: credentialSet,
             customHeaders: customHeaders,
             model: model,
             modelParameters: modelParameters,
@@ -253,6 +403,36 @@ final class ChatAuxiliaryAIService {
         reasoningEffort: ReasoningEffort?,
         completion: @escaping ([ChatMemoryOperation]?) -> Void
     ) {
+        proposeMemoryManagementOperations(
+            memoryEntries: memoryEntries,
+            userInstruction: userInstruction,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            completion: completion
+        )
+    }
+
+    func proposeMemoryManagementOperations(
+        memoryEntries: [ChatMemoryEntry],
+        userInstruction: String,
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping ([ChatMemoryOperation]?) -> Void
+    ) {
         let trimmedInstruction = userInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstruction.isEmpty else {
             completion([])
@@ -267,7 +447,7 @@ final class ChatAuxiliaryAIService {
             ),
             baseURL: baseURL,
             apiFormat: apiFormat,
-            apiKey: apiKey,
+            credentialSet: credentialSet,
             customHeaders: customHeaders,
             model: model,
             modelParameters: modelParameters,
@@ -289,6 +469,34 @@ final class ChatAuxiliaryAIService {
         baseURL: String,
         apiFormat: AIAPIFormat,
         apiKey: String,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (String?) -> Void
+    ) {
+        generateImageContextDescription(
+            imageAttachments: imageAttachments,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            completion: completion
+        )
+    }
+
+    func generateImageContextDescription(
+        imageAttachments: [ChatImageAttachment],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
         customHeaders: String,
         model: String,
         modelParameters: AIModelConfiguration?,
@@ -325,7 +533,7 @@ final class ChatAuxiliaryAIService {
             messages: descriptionMessages,
             baseURL: baseURL,
             apiFormat: apiFormat,
-            apiKey: apiKey,
+            credentialSet: credentialSet,
             customHeaders: customHeaders,
             model: model,
             modelParameters: modelParameters,
@@ -342,7 +550,7 @@ final class ChatAuxiliaryAIService {
         userPrompt: String,
         baseURL: String,
         apiFormat: AIAPIFormat,
-        apiKey: String,
+        credentialSet: AIProviderCredentialSet,
         customHeaders: String,
         model: String,
         modelParameters: AIModelConfiguration?,
@@ -360,7 +568,7 @@ final class ChatAuxiliaryAIService {
             messages: messages,
             baseURL: baseURL,
             apiFormat: apiFormat,
-            apiKey: apiKey,
+            credentialSet: credentialSet,
             customHeaders: customHeaders,
             model: model,
             modelParameters: modelParameters,
@@ -375,7 +583,7 @@ final class ChatAuxiliaryAIService {
         messages: [ChatRequestMessage],
         baseURL: String,
         apiFormat: AIAPIFormat,
-        apiKey: String,
+        credentialSet: AIProviderCredentialSet,
         customHeaders: String,
         model: String,
         modelParameters: AIModelConfiguration?,
@@ -384,20 +592,6 @@ final class ChatAuxiliaryAIService {
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
     ) {
-        let url: URL
-        do {
-            url = try AIProviderRequestFactory.requestURL(
-                from: baseURL,
-                apiFormat: apiFormat,
-                model: model,
-                apiKey: apiKey,
-                isStreaming: false
-            )
-        } catch {
-            completion(nil)
-            return
-        }
-
         let jsonData: Data
         do {
             jsonData = try AIRequestBodyBuilder.requestBodyData(
@@ -415,31 +609,57 @@ final class ChatAuxiliaryAIService {
             return
         }
 
-        var request = AIProviderRequestFactory.makeRequest(
-            url: url,
-            apiFormat: apiFormat,
-            model: model,
-            apiKey: apiKey,
-            customHeaders: customHeaders,
-            acceptsEventStream: false
-        )
-        request.httpBody = jsonData
-
         Task {
             do {
-                let (data, response) = try await boundedResponseData(for: request)
-                let statusCode = (response as? HTTPURLResponse)?.statusCode
-                DispatchQueue.main.async {
-                    guard let statusCode,
-                          (200...299).contains(statusCode),
-                          let responseText = AIProviderRequestFactory.decodedResponseText(
-                            from: data,
-                            apiFormat: apiFormat
-                          ) else {
-                        completion(nil)
-                        return
+                let responseText = try await AIProviderFailoverExecutor().execute(
+                    credentialSet: credentialSet,
+                    customHeaders: customHeaders
+                ) { credential in
+                    let url = try AIProviderRequestFactory.requestURL(
+                        from: baseURL,
+                        apiFormat: apiFormat,
+                        model: model,
+                        apiKey: credential.secret,
+                        isStreaming: false
+                    )
+                    var request = AIProviderRequestFactory.makeRequest(
+                        url: url,
+                        apiFormat: apiFormat,
+                        model: model,
+                        apiKey: credential.secret,
+                        customHeaders: customHeaders,
+                        acceptsEventStream: false
+                    )
+                    request.httpBody = jsonData
+
+                    let (data, response) = try await self.boundedResponseData(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw AIServiceError.requestFailed(AppLocalizations.string(
+                            "aiService.error.invalidResponse",
+                            defaultValue: "The server returned an invalid response."
+                        ))
                     }
 
+                    guard (200...299).contains(httpResponse.statusCode) else {
+                        throw AIProviderHTTPFailure(
+                            statusCode: httpResponse.statusCode,
+                            responseBody: String(data: data, encoding: .utf8) ?? "",
+                            apiFormat: apiFormat
+                        )
+                    }
+
+                    guard let responseText = AIProviderRequestFactory.decodedResponseText(
+                        from: data,
+                        apiFormat: apiFormat
+                    ) else {
+                        throw AIServiceError.decodingFailed(AppLocalizations.string(
+                            "aiService.error.decodingFailedShort",
+                            defaultValue: "The response could not be parsed."
+                        ))
+                    }
+                    return responseText
+                }
+                DispatchQueue.main.async {
                     completion(responseText)
                 }
             } catch {

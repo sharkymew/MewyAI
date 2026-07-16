@@ -14,8 +14,8 @@ final class StreamingOutputHaptics: ObservableObject {
     private var deliveredContinuationImpactCount = 0
     private static let minimumImpactInterval: TimeInterval = 0.09
     private static let continuationImpactInterval: Duration = .milliseconds(90)
-    private static let longOutputUTF16PerAdditionalImpact = 900
-    private static let maximumContinuationImpactCount = 8
+    private nonisolated static let longOutputUTF16PerAdditionalImpact = 900
+    private nonisolated static let maximumContinuationImpactCount = 8
 
     deinit {
         refreshContinuationTask?.cancel()

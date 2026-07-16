@@ -115,7 +115,7 @@ final class ChatSessionViewModel {
         let fileAttachments: [ChatFileAttachment]
         let baseURL: String
         let apiFormat: AIAPIFormat
-        let apiKey: String
+        let credentialSet: AIProviderCredentialSet
         let customHeaders: String
         let model: String
         let modelParameters: AIModelConfiguration?
@@ -127,14 +127,14 @@ final class ChatSessionViewModel {
     }
 
     struct StreamingEventHandlers {
-        let toolExecutor: ((AgentToolCallRequest) async -> AgentToolCallResult)?
-        let onToolExchangesUpdated: ([ChatToolExchange]) -> Void
-        let onToolRoundReset: () -> Void
-        let isReasoningDisplayActive: @MainActor () -> Bool
-        let onReasoningToken: (String) -> Void
-        let onContentToken: (String) -> Void
-        let onComplete: (_ contentText: String, _ usage: ChatUsage?) -> Void
-        let onError: (String) -> Void
+        let toolExecutor: (@MainActor (AgentToolCallRequest) async -> AgentToolCallResult)?
+        let onToolExchangesUpdated: @MainActor @Sendable ([ChatToolExchange]) -> Void
+        let onToolRoundReset: @MainActor @Sendable () -> Void
+        let isReasoningDisplayActive: @MainActor @Sendable () -> Bool
+        let onReasoningToken: @MainActor @Sendable (String) -> Void
+        let onContentToken: @MainActor @Sendable (String) -> Void
+        let onComplete: @MainActor @Sendable (_ contentText: String, _ usage: ChatUsage?) -> Void
+        let onError: @MainActor @Sendable (String) -> Void
     }
 
     struct StreamingTurnPreparationContext {
@@ -303,7 +303,7 @@ final class ChatSessionViewModel {
         let configuration = context.configuration
         let trimmedBaseURL = configuration.requestURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         let apiFormat = configuration.apiFormat
-        let trimmedAPIKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let credentialSet = configuration.credentialSet()
         let trimmedCustomHeaders = configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelParameters = configuration.selectedModelConfiguration
@@ -389,7 +389,7 @@ final class ChatSessionViewModel {
             fileAttachments: context.fileAttachments,
             baseURL: trimmedBaseURL,
             apiFormat: apiFormat,
-            apiKey: trimmedAPIKey,
+            credentialSet: credentialSet,
             customHeaders: trimmedCustomHeaders,
             model: model,
             modelParameters: modelParameters,
@@ -424,7 +424,7 @@ final class ChatSessionViewModel {
             fileAttachments: request.fileAttachments,
             baseURL: request.baseURL,
             apiFormat: request.apiFormat,
-            apiKey: request.apiKey,
+            credentialSet: request.credentialSet,
             customHeaders: request.customHeaders,
             model: request.model,
             modelParameters: request.modelParameters,

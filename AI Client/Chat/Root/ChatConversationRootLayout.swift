@@ -6,6 +6,7 @@ struct ChatConversationRootLayout<MainContent: View, SidebarToggle: View, Expand
 
     let conversations: [AIConversation]
     let conversationForSearch: (AIConversation) -> AIConversation
+    let searchConversationIDs: (String) -> Set<UUID>?
     let selectedConversationID: UUID?
     let transitionDuration: Double
     let isExpandedInputPresented: Bool
@@ -63,6 +64,7 @@ struct ChatConversationRootLayout<MainContent: View, SidebarToggle: View, Expand
                 ConversationSidebarView(
                     conversations: conversations,
                     conversationForSearch: conversationForSearch,
+                    searchConversationIDs: searchConversationIDs,
                     selectedConversationID: selectedConversationID,
                     topSafeAreaInset: geometry.safeAreaInsets.top,
                     onSelect: { id in

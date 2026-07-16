@@ -36,6 +36,26 @@ nonisolated enum EmbeddingClientError: LocalizedError, Equatable {
     }
 }
 
+nonisolated private enum EmbeddingCredentialFailureMode: Equatable, Sendable {
+    case legacy
+    case singleKey
+    case multipleKeys
+}
+
+nonisolated private func providerAPIFormat(for embeddingAPIFormat: EmbeddingAPIFormat) -> AIAPIFormat {
+    switch embeddingAPIFormat {
+    case .openAICompatible:
+        return .openAIChatCompletions
+    case .geminiEmbedContent, .vertexPredict:
+        // Both Google embedding APIs use the same structured credential-error signals.
+        return .vertexAIExpress
+    }
+}
+
+nonisolated private func boundedResponseBody(from data: Data) -> String {
+    String(decoding: data.prefix(64 * 1024), as: UTF8.self)
+}
+
 actor EmbeddingClient {
     private let session: URLSession
 
@@ -49,6 +69,57 @@ actor EmbeddingClient {
         profile: EmbeddingProfileSnapshot,
         credentials: EmbeddingCredentials
     ) async throws -> [[Float]] {
+        try await embed(
+            texts,
+            purpose: purpose,
+            profile: profile,
+            credentials: credentials,
+            credentialFailureMode: .legacy
+        )
+    }
+
+    func embed(
+        _ texts: [String],
+        purpose: EmbeddingPurpose,
+        profile: EmbeddingProfileSnapshot,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String
+    ) async throws -> [[Float]] {
+        let configuredKeyCount = credentialSet.credentials.filter { $0.keyID != nil }.count
+        let credentialFailureMode: EmbeddingCredentialFailureMode
+        switch configuredKeyCount {
+        case 0:
+            credentialFailureMode = .legacy
+        case 1:
+            credentialFailureMode = .singleKey
+        default:
+            credentialFailureMode = .multipleKeys
+        }
+
+        return try await AIProviderFailoverExecutor().execute(
+            credentialSet: credentialSet,
+            customHeaders: customHeaders
+        ) { credential in
+            try await self.embed(
+                texts,
+                purpose: purpose,
+                profile: profile,
+                credentials: EmbeddingCredentials(
+                    apiKey: credential.secret,
+                    customHeaders: customHeaders
+                ),
+                credentialFailureMode: credentialFailureMode
+            )
+        }
+    }
+
+    private func embed(
+        _ texts: [String],
+        purpose: EmbeddingPurpose,
+        profile: EmbeddingProfileSnapshot,
+        credentials: EmbeddingCredentials,
+        credentialFailureMode: EmbeddingCredentialFailureMode
+    ) async throws -> [[Float]] {
         let preparedTexts = texts.map { prepare($0, purpose: purpose, profile: profile) }
         guard !preparedTexts.isEmpty, preparedTexts.allSatisfy({ !$0.isEmpty }) else {
             throw EmbeddingClientError.emptyInput
@@ -60,20 +131,23 @@ actor EmbeddingClient {
             vectors = try await requestOpenAICompatible(
                 texts: preparedTexts,
                 profile: profile,
-                credentials: credentials
+                credentials: credentials,
+                credentialFailureMode: credentialFailureMode
             )
         case .geminiEmbedContent:
             vectors = try await requestGemini(
                 texts: preparedTexts,
                 purpose: purpose,
                 profile: profile,
-                credentials: credentials
+                credentials: credentials,
+                credentialFailureMode: credentialFailureMode
             )
         case .vertexPredict:
             vectors = try await requestVertex(
                 texts: preparedTexts,
                 profile: profile,
-                credentials: credentials
+                credentials: credentials,
+                credentialFailureMode: credentialFailureMode
             )
         }
 
@@ -97,7 +171,8 @@ actor EmbeddingClient {
     private func requestOpenAICompatible(
         texts: [String],
         profile: EmbeddingProfileSnapshot,
-        credentials: EmbeddingCredentials
+        credentials: EmbeddingCredentials,
+        credentialFailureMode: EmbeddingCredentialFailureMode
     ) async throws -> [[Float]] {
         var body: [String: Any] = [
             "model": profile.model,
@@ -113,7 +188,9 @@ actor EmbeddingClient {
                 credentials: credentials,
                 body: body,
                 placesKeyInQuery: false
-            )
+            ),
+            apiFormat: profile.apiFormat,
+            credentialFailureMode: credentialFailureMode
         )
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let items = root["data"] as? [[String: Any]] else {
@@ -129,7 +206,8 @@ actor EmbeddingClient {
         texts: [String],
         purpose: EmbeddingPurpose,
         profile: EmbeddingProfileSnapshot,
-        credentials: EmbeddingCredentials
+        credentials: EmbeddingCredentials,
+        credentialFailureMode: EmbeddingCredentialFailureMode
     ) async throws -> [[Float]] {
         if texts.count > 1, profile.endpoint.contains(":embedContent") {
             var batchProfile = profile
@@ -149,7 +227,9 @@ actor EmbeddingClient {
                     body: body,
                     placesKeyInQuery: false,
                     apiKeyHeader: "x-goog-api-key"
-                )
+                ),
+                apiFormat: profile.apiFormat,
+                credentialFailureMode: credentialFailureMode
             )
             guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let embeddings = root["embeddings"] as? [[String: Any]] else {
@@ -169,7 +249,9 @@ actor EmbeddingClient {
                     body: geminiRequestBody(text: text, purpose: purpose, profile: profile),
                     placesKeyInQuery: false,
                     apiKeyHeader: "x-goog-api-key"
-                )
+                ),
+                apiFormat: profile.apiFormat,
+                credentialFailureMode: credentialFailureMode
             )
             guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let embedding = root["embedding"] as? [String: Any] else {
@@ -206,7 +288,8 @@ actor EmbeddingClient {
     private func requestVertex(
         texts: [String],
         profile: EmbeddingProfileSnapshot,
-        credentials: EmbeddingCredentials
+        credentials: EmbeddingCredentials,
+        credentialFailureMode: EmbeddingCredentialFailureMode
     ) async throws -> [[Float]] {
         var parameters: [String: Any] = ["autoTruncate": false]
         if let outputDimensions = profile.outputDimensions {
@@ -222,7 +305,9 @@ actor EmbeddingClient {
                 credentials: credentials,
                 body: body,
                 placesKeyInQuery: true
-            )
+            ),
+            apiFormat: profile.apiFormat,
+            credentialFailureMode: credentialFailureMode
         )
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let predictions = root["predictions"] as? [[String: Any]] else {
@@ -275,7 +360,11 @@ actor EmbeddingClient {
         return request
     }
 
-    private func perform(request: URLRequest) async throws -> Data {
+    private func perform(
+        request: URLRequest,
+        apiFormat: EmbeddingAPIFormat,
+        credentialFailureMode: EmbeddingCredentialFailureMode
+    ) async throws -> Data {
         var attempt = 0
         while true {
             try Task.checkCancellation()
@@ -290,8 +379,28 @@ actor EmbeddingClient {
                 return data
             }
 
+            let providerFailure = AIProviderHTTPFailure(
+                statusCode: httpResponse.statusCode,
+                responseBody: boundedResponseBody(from: data),
+                apiFormat: providerAPIFormat(for: apiFormat)
+            )
+            if providerFailure.isCredentialFailure {
+                switch credentialFailureMode {
+                case .multipleKeys:
+                    throw providerFailure
+                case .singleKey where httpResponse.statusCode != 429:
+                    throw providerFailure
+                case .legacy, .singleKey:
+                    break
+                }
+            }
+
             let shouldRetry = httpResponse.statusCode == 429 || (500...599).contains(httpResponse.statusCode)
             guard shouldRetry, attempt < 2 else {
+                if providerFailure.isCredentialFailure,
+                   credentialFailureMode == .singleKey {
+                    throw providerFailure
+                }
                 throw EmbeddingClientError.requestFailed(httpResponse.statusCode)
             }
             attempt += 1
@@ -357,6 +466,42 @@ enum EmbeddingModelDiscoveryService {
         credentials: EmbeddingCredentials,
         session: URLSession = AIService.makeSecureSession()
     ) async throws -> [AIEmbeddingModelConfiguration] {
+        try await discover(
+            embeddingConfiguration: embeddingConfiguration,
+            credentials: credentials,
+            reportsCredentialFailure: false,
+            session: session
+        )
+    }
+
+    static func discover(
+        embeddingConfiguration: AIEmbeddingConfiguration,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        session: URLSession = AIService.makeSecureSession()
+    ) async throws -> [AIEmbeddingModelConfiguration] {
+        try await AIProviderFailoverExecutor().execute(
+            credentialSet: credentialSet,
+            customHeaders: customHeaders
+        ) { credential in
+            try await discover(
+                embeddingConfiguration: embeddingConfiguration,
+                credentials: EmbeddingCredentials(
+                    apiKey: credential.secret,
+                    customHeaders: customHeaders
+                ),
+                reportsCredentialFailure: true,
+                session: session
+            )
+        }
+    }
+
+    private static func discover(
+        embeddingConfiguration: AIEmbeddingConfiguration,
+        credentials: EmbeddingCredentials,
+        reportsCredentialFailure: Bool,
+        session: URLSession
+    ) async throws -> [AIEmbeddingModelConfiguration] {
         let url = try modelsURL(for: embeddingConfiguration)
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -373,9 +518,18 @@ enum EmbeddingModelDiscoveryService {
         }
 
         let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode) else {
-            throw EmbeddingClientError.requestFailed((response as? HTTPURLResponse)?.statusCode ?? 0)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw EmbeddingClientError.requestFailed(0)
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            if reportsCredentialFailure {
+                throw AIProviderHTTPFailure(
+                    statusCode: httpResponse.statusCode,
+                    responseBody: boundedResponseBody(from: data),
+                    apiFormat: providerAPIFormat(for: embeddingConfiguration.apiFormat)
+                )
+            }
+            throw EmbeddingClientError.requestFailed(httpResponse.statusCode)
         }
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw EmbeddingClientError.invalidResponse
@@ -427,7 +581,8 @@ enum EmbeddingModelDiscoveryService {
             ],
             purpose: .query,
             profile: profile,
-            credentials: EmbeddingCredentials(apiKey: provider.apiKey, customHeaders: provider.customHeaders)
+            credentialSet: provider.credentialSet(),
+            customHeaders: provider.customHeaders
         )
         guard vectors.count == 2, let dimensions = vectors.first?.count else {
             throw EmbeddingClientError.invalidResponse

@@ -168,6 +168,12 @@ nonisolated enum CustomHeaderSecurity {
         }
     }
 
+    static func containsSensitiveHeader(_ headers: String) -> Bool {
+        parsedHeaders(from: headers).contains { header in
+            isSensitiveHeaderName(header.name) && !header.value.isEmpty
+        }
+    }
+
     private static func normalizedHeaderName(_ name: String) -> String {
         name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
@@ -540,6 +546,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     }
 
     static let defaultAnthropicMaxTokens = 4096
+    static let currentCredentialSchemaVersion = 1
 
     var id: UUID
     var name: String
@@ -547,7 +554,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     var endpoint: String
     var apiFormat: AIAPIFormat
     var anthropicMaxTokens: Int
-    var apiKey: String
+    var credentialSchemaVersion: Int
+    var apiKeys: [AIProviderAPIKey]
     var customHeaders: String
     var systemPrompt: String
     var promptPresets: [AIPromptPreset]
@@ -559,6 +567,62 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
     var generatesImageContextDescriptions: Bool
     var embeddingConfiguration: AIEmbeddingConfiguration?
     var updatedAt: Date
+
+    nonisolated var apiKey: String {
+        get {
+            guard let currentAPIKeyID else { return "" }
+            return apiKeys.first(where: { $0.id == currentAPIKeyID })?.value ?? ""
+        }
+        set {
+            let trimmedValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let currentAPIKeyID,
+               let index = apiKeys.firstIndex(where: { $0.id == currentAPIKeyID }) {
+                if trimmedValue.isEmpty {
+                    apiKeys.remove(at: index)
+                } else {
+                    apiKeys[index].value = trimmedValue
+                }
+                return
+            }
+
+            guard !trimmedValue.isEmpty else { return }
+            let keyID = apiKeys.isEmpty ? id : UUID()
+            let key = AIProviderAPIKey(
+                id: keyID,
+                name: Self.defaultAPIKeyName(index: apiKeys.count + 1),
+                value: trimmedValue
+            )
+            apiKeys.append(key)
+        }
+    }
+
+    nonisolated var currentAPIKeyID: UUID? {
+        AIProviderKeyStateStore.shared.currentKeyID(
+            for: id,
+            availableKeyIDs: apiKeys.map(\.id)
+        )
+    }
+
+    var currentAPIKeyName: String? {
+        guard let currentAPIKeyID else { return nil }
+        return apiKeys.first(where: { $0.id == currentAPIKeyID })?.name
+    }
+
+    var apiKeyCount: Int {
+        apiKeys.count
+    }
+
+    func credentialSet(
+        stateStore: AIProviderKeyStateStore = .shared
+    ) -> AIProviderCredentialSet {
+        let availableKeyIDs = apiKeys.map(\.id)
+        let currentKeyID = stateStore.currentKeyID(for: id, availableKeyIDs: availableKeyIDs)
+        return AIProviderCredentialSet(
+            configurationID: id,
+            currentKeyID: currentKeyID,
+            apiKeys: apiKeys
+        )
+    }
 
     var requestURLString: String {
         Self.join(baseURL: baseURL, endpoint: endpoint)
@@ -603,6 +667,7 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         apiFormat: AIAPIFormat = .openAIChatCompletions,
         anthropicMaxTokens: Int = AIConfiguration.defaultAnthropicMaxTokens,
         apiKey: String = "",
+        apiKeys: [AIProviderAPIKey]? = nil,
         customHeaders: String = "",
         systemPrompt: String = AIConfiguration.defaultSystemPrompt,
         promptPresets: [AIPromptPreset]? = nil,
@@ -621,10 +686,15 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         self.endpoint = endpoint
         self.apiFormat = apiFormat
         self.anthropicMaxTokens = max(1, anthropicMaxTokens)
-        self.apiKey = apiKey
-        if !apiKey.isEmpty {
-            KeychainService.saveAPIKey(apiKey, for: id)
-        }
+        self.credentialSchemaVersion = Self.currentCredentialSchemaVersion
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.apiKeys = apiKeys ?? (trimmedAPIKey.isEmpty
+            ? []
+            : [AIProviderAPIKey(
+                id: id,
+                name: Self.defaultAPIKeyName(index: 1),
+                value: trimmedAPIKey
+            )])
         self.customHeaders = customHeaders
         let promptSelection = Self.normalizedPromptSelection(
             promptPresets: promptPresets,
@@ -650,6 +720,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         case endpoint
         case apiFormat
         case anthropicMaxTokens
+        case credentialSchemaVersion
+        case apiKeys
         case customHeaders
         case systemPrompt
         case promptPresets
@@ -719,13 +791,39 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
             models.insert(AIModelConfiguration(name: selectedModel), at: 0)
         }
 
-        apiKey = KeychainService.readAPIKey(for: id)
-        if apiKey.isEmpty,
-           let legacyContainer = try? decoder.container(keyedBy: LegacyCodingKeys.self),
-           let legacyAPIKey = try? legacyContainer.decodeIfPresent(String.self, forKey: .apiKey),
-           !legacyAPIKey.isEmpty {
-            apiKey = legacyAPIKey
-            KeychainService.saveAPIKey(legacyAPIKey, for: id)
+        let secretStorage = decoder.userInfo[.aiProviderKeySecretStorage] as? any AIProviderKeySecretStoring
+            ?? KeychainAIProviderKeySecretStorage()
+        let storedCredentialSchemaVersion = try container.decodeIfPresent(
+            Int.self,
+            forKey: .credentialSchemaVersion
+        ) ?? 0
+        let decodedAPIKeys = try container.decodeIfPresent([AIProviderAPIKey].self, forKey: .apiKeys)
+        let usesKeyedCredentialSchema = storedCredentialSchemaVersion >= Self.currentCredentialSchemaVersion
+            && decodedAPIKeys != nil
+        credentialSchemaVersion = Self.currentCredentialSchemaVersion
+
+        if usesKeyedCredentialSchema, let decodedAPIKeys {
+            apiKeys = decodedAPIKeys.map { key in
+                var key = key
+                key.value = secretStorage.readAPIKey(for: key.id).value
+                return key
+            }
+        } else {
+            let legacyAPIKey = (try? decoder.container(keyedBy: LegacyCodingKeys.self))
+                .flatMap { try? $0.decodeIfPresent(String.self, forKey: .apiKey) }
+                ?? ""
+            let legacyReadResult = secretStorage.readAPIKey(for: id)
+            let resolvedLegacyKey = legacyReadResult.value.isEmpty
+                ? legacyAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                : legacyReadResult.value
+
+            apiKeys = resolvedLegacyKey.isEmpty
+                ? []
+                : [AIProviderAPIKey(
+                    id: id,
+                    name: Self.defaultAPIKeyName(index: 1),
+                    value: resolvedLegacyKey
+                )]
         }
         customHeaders = CustomHeaderSecurity.resolvedHeaders(customHeaders, configurationID: id)
 
@@ -749,6 +847,8 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         try container.encode(endpoint, forKey: .endpoint)
         try container.encode(apiFormat, forKey: .apiFormat)
         try container.encode(anthropicMaxTokens, forKey: .anthropicMaxTokens)
+        try container.encode(credentialSchemaVersion, forKey: .credentialSchemaVersion)
+        try container.encode(apiKeys, forKey: .apiKeys)
         try container.encode(
             CustomHeaderSecurity.encodedHeaders(customHeaders),
             forKey: .customHeaders
@@ -765,16 +865,99 @@ struct AIConfiguration: Identifiable, Codable, Equatable {
         try container.encode(updatedAt, forKey: .updatedAt)
     }
 
-    func persistSecureFields() -> Bool {
-        let didPersistAPIKey = KeychainService.saveAPIKey(
-            apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
-            for: id
-        )
-        let didPersistHeaders = CustomHeaderSecurity.persistSensitiveHeaders(
+    func persistSecureFields(
+        secretStorage: any AIProviderKeySecretStoring = KeychainAIProviderKeySecretStorage(),
+        persistsSensitiveHeaders: Bool = true
+    ) -> Bool {
+        let didPersistAPIKeys = apiKeys.allSatisfy { key in
+            let value = key.trimmedValue
+            return value.isEmpty || secretStorage.saveAPIKey(value, for: key.id)
+        }
+        let didPersistHeaders = !persistsSensitiveHeaders || CustomHeaderSecurity.persistSensitiveHeaders(
             customHeaders,
             configurationID: id
         )
-        return didPersistAPIKey && didPersistHeaders
+        return didPersistAPIKeys && didPersistHeaders
+    }
+
+    mutating func addAPIKey(
+        name: String,
+        value: String
+    ) throws {
+        let normalizedName = try validatedAPIKeyName(name)
+        let normalizedValue = try validatedAPIKeyValue(value)
+        let key = AIProviderAPIKey(
+            name: normalizedName,
+            value: normalizedValue
+        )
+        apiKeys.append(key)
+    }
+
+    mutating func updateAPIKey(
+        id keyID: UUID,
+        name: String,
+        value: String
+    ) throws {
+        guard let index = apiKeys.firstIndex(where: { $0.id == keyID }) else {
+            throw AIProviderAPIKeyValidationError.keyNotFound
+        }
+        let normalizedName = try validatedAPIKeyName(name, excluding: keyID)
+        let normalizedValue = try validatedAPIKeyValue(value)
+        apiKeys[index].name = normalizedName
+        apiKeys[index].value = normalizedValue
+    }
+
+    @discardableResult
+    nonisolated mutating func removeAPIKey(id keyID: UUID) -> AIProviderAPIKey? {
+        guard let index = apiKeys.firstIndex(where: { $0.id == keyID }) else { return nil }
+        return apiKeys.remove(at: index)
+    }
+
+    nonisolated func followingAPIKeyID(afterRemoving keyID: UUID) -> UUID? {
+        guard let index = apiKeys.firstIndex(where: { $0.id == keyID }),
+              apiKeys.count > 1 else {
+            return nil
+        }
+        return apiKeys.indices.contains(index + 1)
+            ? apiKeys[index + 1].id
+            : apiKeys.first?.id
+    }
+
+    private func validatedAPIKeyName(
+        _ name: String,
+        excluding excludedKeyID: UUID? = nil
+    ) throws -> String {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedName.isEmpty else {
+            throw AIProviderAPIKeyValidationError.emptyName
+        }
+        let containsDuplicate = apiKeys.contains { key in
+            guard key.id != excludedKeyID else { return false }
+            return key.name.compare(
+                normalizedName,
+                options: [.caseInsensitive, .diacriticInsensitive]
+            ) == .orderedSame
+        }
+        guard !containsDuplicate else {
+            throw AIProviderAPIKeyValidationError.duplicateName
+        }
+        return normalizedName
+    }
+
+    private func validatedAPIKeyValue(_ value: String) throws -> String {
+        let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedValue.isEmpty else {
+            throw AIProviderAPIKeyValidationError.emptySecret
+        }
+        return normalizedValue
+    }
+
+    nonisolated static func defaultAPIKeyName(index: Int) -> String {
+        AppLocalizations.format(
+            "providerKey.defaultName",
+            defaultValue: "Key %d",
+            arguments: [max(1, index)]
+        )
     }
 
     static func join(baseURL: String, endpoint: String) -> String {
@@ -833,6 +1016,12 @@ enum AIConfigurationStore {
            saveConfigurations(configurations) {
             removeLegacySecretDefaults()
         }
+        for configuration in configurations {
+            AIProviderKeyStateStore.shared.reconcile(
+                configurationID: configuration.id,
+                availableKeyIDs: configuration.apiKeys.map(\.id)
+            )
+        }
         return configurations
     }
 
@@ -868,10 +1057,47 @@ enum AIConfigurationStore {
     }
 
     @discardableResult
-    static func saveConfigurations(_ configurations: [AIConfiguration]) -> Bool {
-        guard configurations.allSatisfy({ $0.persistSecureFields() }) else { return false }
-        guard let data = try? JSONEncoder().encode(configurations) else { return false }
-        UserDefaults.standard.set(data, forKey: configurationsKey)
+    static func saveConfigurations(
+        _ configurations: [AIConfiguration],
+        secretStorage: any AIProviderKeySecretStoring = KeychainAIProviderKeySecretStorage(),
+        defaults: UserDefaults = .standard,
+        stateStore: AIProviderKeyStateStore = .shared
+    ) -> Bool {
+        let previousCredentials = storedConfigurationCredentials(defaults: defaults)
+        guard let data = try? JSONEncoder().encode(configurations),
+              let secureFieldsSnapshot = SecureFieldsSnapshot.capture(
+                  previousCredentials: previousCredentials,
+                  configurations: configurations,
+                  secretStorage: secretStorage
+              ) else {
+            return false
+        }
+        let headerConfigurationIDs = configurationIDsWithSensitiveHeaders(
+            previousCredentials: previousCredentials,
+            configurations: configurations
+        )
+
+        guard configurations.allSatisfy({
+            $0.persistSecureFields(
+                secretStorage: secretStorage,
+                persistsSensitiveHeaders: headerConfigurationIDs.contains($0.id)
+            )
+        }),
+              deleteRemovedCredentials(
+                  previousCredentials: previousCredentials,
+                  configurations: configurations,
+                  secretStorage: secretStorage
+              ) else {
+            _ = secureFieldsSnapshot.restore(secretStorage: secretStorage)
+            return false
+        }
+
+        defaults.set(data, forKey: configurationsKey)
+        finalizeCredentialState(
+            previousCredentials: previousCredentials,
+            configurations: configurations,
+            stateStore: stateStore
+        )
         return true
     }
 
@@ -997,13 +1223,198 @@ enum AIConfigurationStore {
             let hasLegacyAPIKey = configuration.apiKey?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty == false
-            return hasLegacyAPIKey
+            let needsCredentialMigration = (configuration.credentialSchemaVersion ?? 0)
+                < AIConfiguration.currentCredentialSchemaVersion
+            return needsCredentialMigration
+                || hasLegacyAPIKey
                 || CustomHeaderSecurity.containsPersistableSensitiveHeader(configuration.customHeaders ?? "")
+        }
+    }
+
+    private static func storedConfigurationCredentials(
+        defaults: UserDefaults = .standard
+    ) -> [StoredConfigurationCredentials] {
+        guard let data = defaults.data(forKey: configurationsKey),
+              let credentials = try? JSONDecoder().decode([StoredConfigurationCredentials].self, from: data) else {
+            return []
+        }
+        return credentials
+    }
+
+    private static func deleteRemovedCredentials(
+        previousCredentials: [StoredConfigurationCredentials],
+        configurations: [AIConfiguration],
+        secretStorage: any AIProviderKeySecretStoring
+    ) -> Bool {
+        let currentConfigurationsByID = Dictionary(
+            configurations.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var didDeleteAll = true
+
+        for previous in previousCredentials {
+            guard let configurationID = previous.id else { continue }
+            guard let currentConfiguration = currentConfigurationsByID[configurationID] else {
+                for keyID in previous.keyIDs {
+                    if !secretStorage.deleteAPIKey(for: keyID) {
+                        didDeleteAll = false
+                    }
+                }
+                if previous.hasSensitiveHeaders,
+                   !KeychainService.deleteHeaderSecrets(for: configurationID) {
+                    didDeleteAll = false
+                }
+                continue
+            }
+
+            let currentKeyIDs = Set(currentConfiguration.apiKeys.map(\.id))
+            let removedKeyIDs = previous.keyIDs.subtracting(currentKeyIDs)
+            for keyID in removedKeyIDs {
+                if !secretStorage.deleteAPIKey(for: keyID) {
+                    didDeleteAll = false
+                }
+            }
+        }
+
+        return didDeleteAll
+    }
+
+    private static func configurationIDsWithSensitiveHeaders(
+        previousCredentials: [StoredConfigurationCredentials],
+        configurations: [AIConfiguration]
+    ) -> Set<UUID> {
+        var configurationIDs = Set(
+            configurations
+                .filter { CustomHeaderSecurity.containsSensitiveHeader($0.customHeaders) }
+                .map(\.id)
+        )
+        for credentials in previousCredentials where credentials.hasSensitiveHeaders {
+            if let configurationID = credentials.id {
+                configurationIDs.insert(configurationID)
+            }
+        }
+        return configurationIDs
+    }
+
+    private static func finalizeCredentialState(
+        previousCredentials: [StoredConfigurationCredentials],
+        configurations: [AIConfiguration],
+        stateStore: AIProviderKeyStateStore
+    ) {
+        let currentConfigurationsByID = Dictionary(
+            configurations.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        for previous in previousCredentials {
+            guard let configurationID = previous.id else { continue }
+            guard let currentConfiguration = currentConfigurationsByID[configurationID] else {
+                stateStore.removeState(for: configurationID)
+                continue
+            }
+
+            let currentKeyIDs = Set(currentConfiguration.apiKeys.map(\.id))
+            stateStore.removeKeys(previous.keyIDs.subtracting(currentKeyIDs), for: configurationID)
+        }
+
+        for configuration in configurations {
+            stateStore.reconcile(
+                configurationID: configuration.id,
+                availableKeyIDs: configuration.apiKeys.map(\.id)
+            )
+        }
+    }
+
+    private struct SecureFieldsSnapshot {
+        let apiKeyResults: [UUID: AIProviderKeySecretReadResult]
+        let headerSecrets: [UUID: [String: String]]
+
+        static func capture(
+            previousCredentials: [StoredConfigurationCredentials],
+            configurations: [AIConfiguration],
+            secretStorage: any AIProviderKeySecretStoring
+        ) -> SecureFieldsSnapshot? {
+            var keyIDs = Set(configurations.flatMap { $0.apiKeys.map(\.id) })
+            for credentials in previousCredentials {
+                keyIDs.formUnion(credentials.keyIDs)
+            }
+
+            var apiKeyResults = [UUID: AIProviderKeySecretReadResult]()
+            for keyID in keyIDs {
+                let result = secretStorage.readAPIKey(for: keyID)
+                guard result != .failure else { return nil }
+                apiKeyResults[keyID] = result
+            }
+
+            let configurationIDs = AIConfigurationStore.configurationIDsWithSensitiveHeaders(
+                previousCredentials: previousCredentials,
+                configurations: configurations
+            )
+            var headerSecrets = [UUID: [String: String]]()
+            for configurationID in configurationIDs {
+                guard let values = KeychainService.headerSecretValues(for: configurationID) else {
+                    return nil
+                }
+                headerSecrets[configurationID] = values
+            }
+
+            return SecureFieldsSnapshot(
+                apiKeyResults: apiKeyResults,
+                headerSecrets: headerSecrets
+            )
+        }
+
+        @discardableResult
+        func restore(secretStorage: any AIProviderKeySecretStoring) -> Bool {
+            var didRestoreAll = true
+            for (keyID, result) in apiKeyResults {
+                let didRestore: Bool
+                switch result {
+                case .value(let value):
+                    didRestore = secretStorage.saveAPIKey(value, for: keyID)
+                case .missing:
+                    didRestore = secretStorage.deleteAPIKey(for: keyID)
+                case .failure:
+                    didRestore = false
+                }
+                if !didRestore {
+                    didRestoreAll = false
+                }
+            }
+
+            for (configurationID, secrets) in headerSecrets {
+                if !KeychainService.restoreHeaderSecrets(secrets, for: configurationID) {
+                    didRestoreAll = false
+                }
+            }
+            return didRestoreAll
         }
     }
 
     private struct StoredConfigurationSecrets: Decodable {
         let apiKey: String?
         let customHeaders: String?
+        let credentialSchemaVersion: Int?
+    }
+
+    private struct StoredConfigurationCredentials: Decodable {
+        struct StoredAPIKey: Decodable {
+            let id: UUID?
+        }
+
+        let id: UUID?
+        let apiKeys: [StoredAPIKey]?
+        let customHeaders: String?
+
+        var hasSensitiveHeaders: Bool {
+            CustomHeaderSecurity.containsSensitiveHeader(customHeaders ?? "")
+        }
+
+        var keyIDs: Set<UUID> {
+            if let apiKeys {
+                return Set(apiKeys.compactMap(\.id))
+            }
+            return id.map { [$0] } ?? []
+        }
     }
 }

@@ -220,6 +220,10 @@ struct ContentView: View {
         return ConversationStore.loadConversation(id: conversation.id) ?? conversation
     }
 
+    private func searchConversationIDs(_ query: String) -> Set<UUID>? {
+        ConversationStore.searchConversationIDs(query: query)
+    }
+
     private func fullyLoadedStoredConversations() -> [AIConversation] {
         storedConversations.map { fullConversationIfNeeded($0) }
     }
@@ -351,6 +355,7 @@ struct ContentView: View {
             isSidebarVisible: $showConversationSidebar,
             conversations: storedConversations,
             conversationForSearch: conversationForSearch,
+            searchConversationIDs: searchConversationIDs,
             selectedConversationID: selectedConversationID,
             transitionDuration: sidebarTransitionDuration,
             isExpandedInputPresented: isExpandedInputPresented,
@@ -475,6 +480,9 @@ struct ContentView: View {
             )
         ) { notification in
             mergeExternalConversation(notification.object as? AIConversation)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .aiProviderKeyStateDidChange)) { _ in
+            reloadConfigurations()
         }
     }
 
@@ -1126,7 +1134,7 @@ struct ContentView: View {
                     imageAttachments: serviceRequest.imageAttachments,
                     baseURL: serviceRequest.baseURL,
                     apiFormat: serviceRequest.apiFormat,
-                    apiKey: serviceRequest.apiKey,
+                    credentialSet: serviceRequest.credentialSet,
                     customHeaders: serviceRequest.customHeaders,
                     model: serviceRequest.model,
                     modelParameters: serviceRequest.modelParameters,

@@ -228,7 +228,7 @@ final class ChatSessionViewModelTests: XCTestCase {
         XCTAssertEqual(preparation.startResult.generation.conversationID, conversationID)
         XCTAssertEqual(preparation.serviceRequest.message, "hello")
         XCTAssertEqual(preparation.serviceRequest.baseURL, "https://api.example.com/chat/completions")
-        XCTAssertEqual(preparation.serviceRequest.apiKey, "test-key")
+        XCTAssertEqual(preparation.serviceRequest.credentialSet.credentials.first?.secret, "test-key")
         XCTAssertEqual(preparation.serviceRequest.customHeaders, "X-Test: value")
         XCTAssertEqual(preparation.serviceRequest.model, "model-a")
         XCTAssertEqual(preparation.serviceRequest.modelParameters?.maxOutputTokens, 222)

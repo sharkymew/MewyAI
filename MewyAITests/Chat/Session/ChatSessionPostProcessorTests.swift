@@ -20,10 +20,11 @@ final class ChatSessionPostProcessorTests: XCTestCase {
         )
         let completed = expectation(description: "title callback")
         var generatedTitle: (UUID, String)?
+        let configuration = makeConfiguration(apiKey: "postprocessor-key")
 
         XCTAssertTrue(processor.generateTitleIfNeeded(
             for: conversation,
-            configuration: makeConfiguration(),
+            configuration: configuration,
             privateConversationID: nil
         ) { conversationID, title in
             generatedTitle = (conversationID, title)
@@ -33,6 +34,8 @@ final class ChatSessionPostProcessorTests: XCTestCase {
         await fulfillment(of: [completed], timeout: 5)
 
         XCTAssertEqual(auxiliaryService.titleRequests.count, 1)
+        XCTAssertEqual(auxiliaryService.credentialSets.count, 1)
+        XCTAssertEqual(auxiliaryService.credentialSets[0].credentials.map(\.secret), ["postprocessor-key"])
         XCTAssertEqual(auxiliaryService.titleRequests[0].model, "model-a")
         XCTAssertEqual(generatedTitle?.0, conversationID)
         XCTAssertEqual(generatedTitle?.1, "Refactor Plan")
@@ -472,12 +475,16 @@ final class ChatSessionPostProcessorTests: XCTestCase {
         XCTAssertTrue(auxiliaryService.imageDescriptionRequests.isEmpty)
     }
 
-    private func makeConfiguration(selectedModel: String = "model-a") -> AIConfiguration {
+    private func makeConfiguration(
+        selectedModel: String = "model-a",
+        apiKey: String = ""
+    ) -> AIConfiguration {
         AIConfiguration(
             baseURL: "https://example.com",
             endpoint: "chat/completions",
             apiFormat: .openAIChatCompletions,
             anthropicMaxTokens: 1234,
+            apiKey: apiKey,
             customHeaders: "X-Test: 1",
             models: [
                 AIModelConfiguration(name: "model-a", supportsReasoning: true)
@@ -536,6 +543,7 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
     var imageDescriptionRequests = [ImageDescriptionRequest]()
     var historyBatchRequests = [HistoryBatchRequest]()
     var historyMergeRequests = [HistoryMergeRequest]()
+    var credentialSets = [AIProviderCredentialSet]()
     private var pendingMemoryCompletion: (([ChatMemoryOperation]?) -> Void)?
     private var pendingHistoryBatchCompletion: ((ChatMemoryHistoryBatchSummary?) -> Void)?
     private var pendingHistoryMergeCompletion: ((ChatMemoryHistorySummaryResult?) -> Void)?
@@ -563,6 +571,30 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
         completion(nextTitle)
     }
 
+    func generateConversationTitle(
+        messages: [ChatMessage],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (String?) -> Void
+    ) {
+        credentialSets.append(credentialSet)
+        titleRequests.append(TitleRequest(
+            messages: messages,
+            baseURL: baseURL,
+            model: model,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort
+        ))
+        completion(nextTitle)
+    }
+
     func extractMemoryUpdates(
         memoryEntries: [ChatMemoryEntry],
         userText: String,
@@ -578,6 +610,31 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
         reasoningEffort: ReasoningEffort?,
         completion: @escaping ([ChatMemoryOperation]?) -> Void
     ) {
+        memoryRequests.append(MemoryRequest(
+            memoryEntries: memoryEntries,
+            userText: userText,
+            assistantText: assistantText,
+            model: model
+        ))
+        pendingMemoryCompletion = completion
+    }
+
+    func extractMemoryUpdates(
+        memoryEntries: [ChatMemoryEntry],
+        userText: String,
+        assistantText: String,
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping ([ChatMemoryOperation]?) -> Void
+    ) {
+        credentialSets.append(credentialSet)
         memoryRequests.append(MemoryRequest(
             memoryEntries: memoryEntries,
             userText: userText,
@@ -618,6 +675,32 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
         onHistoryBatchRequest?()
     }
 
+    func summarizeMemoryHistoryBatch(
+        memoryEntries: [ChatMemoryEntry],
+        batch: ChatMemoryHistoryBatch,
+        batchCount: Int,
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (ChatMemoryHistoryBatchSummary?) -> Void
+    ) {
+        credentialSets.append(credentialSet)
+        historyBatchRequests.append(HistoryBatchRequest(
+            memoryEntries: memoryEntries,
+            batch: batch,
+            batchCount: batchCount,
+            model: model
+        ))
+        pendingHistoryBatchCompletion = completion
+        onHistoryBatchRequest?()
+    }
+
     func completeHistoryBatch(with summary: ChatMemoryHistoryBatchSummary?) {
         let completion = pendingHistoryBatchCompletion
         pendingHistoryBatchCompletion = nil
@@ -647,6 +730,30 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
         onHistoryMergeRequest?()
     }
 
+    func mergeMemoryHistorySummaries(
+        memoryEntries: [ChatMemoryEntry],
+        batchSummaries: [ChatMemoryHistoryBatchSummary],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (ChatMemoryHistorySummaryResult?) -> Void
+    ) {
+        credentialSets.append(credentialSet)
+        historyMergeRequests.append(HistoryMergeRequest(
+            memoryEntries: memoryEntries,
+            batchSummaries: batchSummaries,
+            model: model
+        ))
+        pendingHistoryMergeCompletion = completion
+        onHistoryMergeRequest?()
+    }
+
     func completeHistoryMerge(with result: ChatMemoryHistorySummaryResult?) {
         let completion = pendingHistoryMergeCompletion
         pendingHistoryMergeCompletion = nil
@@ -666,6 +773,30 @@ private final class FakePostProcessorAuxiliaryAIService: ChatSessionAuxiliaryAIS
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
     ) {
+        imageDescriptionRequests.append(ImageDescriptionRequest(
+            imageAttachments: imageAttachments,
+            baseURL: baseURL,
+            model: model,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort
+        ))
+        completion(nextImageDescription)
+    }
+
+    func generateImageContextDescription(
+        imageAttachments: [ChatImageAttachment],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (String?) -> Void
+    ) {
+        credentialSets.append(credentialSet)
         imageDescriptionRequests.append(ImageDescriptionRequest(
             imageAttachments: imageAttachments,
             baseURL: baseURL,

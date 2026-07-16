@@ -203,6 +203,22 @@ class AIService {
         customHeaders: String,
         completion: @escaping (Result<[AIModelConfiguration], AIServiceError>) -> Void
     ) {
+        fetchModels(
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            completion: completion
+        )
+    }
+
+    func fetchModels(
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        completion: @escaping (Result<[AIModelConfiguration], AIServiceError>) -> Void
+    ) {
         guard apiFormat != .vertexAIExpress else {
             completion(.failure(.requestFailed(AppLocalizations.string(
                 "aiService.models.vertexFetchUnsupported",
@@ -222,46 +238,47 @@ class AIService {
             return
         }
 
-        var request = makeRequest(
-            url: url,
-            apiFormat: apiFormat,
-            apiKey: apiKey,
-            customHeaders: customHeaders,
-            acceptsEventStream: false
-        )
-        request.httpMethod = "GET"
-        request.httpBody = nil
-        let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
-
         Task {
             do {
-                let (data, response) = try await boundedResponseData(for: request)
-                let statusCode = (response as? HTTPURLResponse)?.statusCode
-                let responseText = Self.responseText(from: data, redacting: redactionValues)
+                let models = try await AIProviderFailoverExecutor().execute(
+                    credentialSet: credentialSet,
+                    customHeaders: customHeaders
+                ) { credential in
+                    var request = self.makeRequest(
+                        url: url,
+                        apiFormat: apiFormat,
+                        apiKey: credential.secret,
+                        customHeaders: customHeaders,
+                        acceptsEventStream: false
+                    )
+                    request.httpMethod = "GET"
+                    request.httpBody = nil
 
-                guard let statusCode, (200...299).contains(statusCode) else {
-                    DispatchQueue.main.async {
-                        completion(.failure(.requestFailed(Self.errorMessage(
-                            statusCode: statusCode,
-                            body: responseText,
-                            request: request,
-                            redacting: redactionValues
-                        ))))
+                    let (data, response) = try await self.boundedResponseData(for: request)
+                    guard let statusCode = (response as? HTTPURLResponse)?.statusCode,
+                          (200...299).contains(statusCode) else {
+                        throw AIProviderHTTPFailure(
+                            statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0,
+                            responseBody: Self.rawResponseText(from: data),
+                            apiFormat: apiFormat
+                        )
                     }
-                    return
-                }
 
-                DispatchQueue.main.async {
+                    let responseText = AIProviderFailureSanitizer.summary(
+                        from: Self.rawResponseText(from: data),
+                        credentials: credentialSet.credentials,
+                        customHeaders: customHeaders,
+                        maximumLength: Self.maxErrorBodyCharacters
+                    )
                     guard let decoded = try? JSONDecoder().decode(ModelListResponse.self, from: data) else {
-                        completion(.failure(.decodingFailed(AppLocalizations.format(
+                        throw AIServiceError.decodingFailed(AppLocalizations.format(
                             "aiService.models.decodingFailed",
                             defaultValue: "Failed to parse model list\n\n%@",
                             arguments: [responseText]
-                        ))))
-                        return
+                        ))
                     }
 
-                    let models = decoded.data
+                    return decoded.data
                         .filter { !$0.id.isEmpty }
                         .filter { Self.isTextChatModel($0.id) }
                         .map { item in
@@ -273,23 +290,14 @@ class AIService {
                             )
                         }
                         .sorted { $0.name < $1.name }
-                    completion(.success(models))
                 }
-            } catch BoundedResponseDataError.responseTooLarge {
-                DispatchQueue.main.async {
-                    completion(.failure(.requestFailed(AppLocalizations.string(
-                        "aiService.models.responseTooLarge",
-                        defaultValue: "The model list response is too large and was rejected."
-                    ))))
-                }
+                completion(.success(models))
             } catch {
-                DispatchQueue.main.async {
-                    completion(.failure(.requestFailed(AppLocalizations.format(
-                        "aiService.models.requestFailed",
-                        defaultValue: "Model list request failed: %@",
-                        arguments: [error.localizedDescription]
-                    ))))
-                }
+                completion(.failure(Self.serviceError(
+                    from: error,
+                    credentialSet: credentialSet,
+                    customHeaders: customHeaders
+                )))
             }
         }
     }
@@ -501,22 +509,42 @@ class AIService {
         usesImageAttachments: Bool = true,
         completion: @escaping (Result<String, AIServiceError>) -> Void
     ) {
-        let url: URL
-        do {
-            url = try requestURL(
-                from: baseURL,
-                apiFormat: apiFormat,
-                model: model,
-                apiKey: apiKey,
-                isStreaming: false
-            )
-        } catch let error as AIServiceError {
-            completion(.failure(error))
-            return
-        } catch {
-            completion(.failure(.invalidBaseURL))
-            return
-        }
+        sendMessageResult(
+            message: message,
+            imageAttachments: imageAttachments,
+            imageContextDescription: imageContextDescription,
+            fileAttachments: fileAttachments,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            usesImageAttachments: usesImageAttachments,
+            completion: completion
+        )
+    }
+
+    func sendMessageResult(
+        message: String,
+        imageAttachments: [ChatImageAttachment] = [],
+        imageContextDescription: String = "",
+        fileAttachments: [ChatFileAttachment] = [],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        usesImageAttachments: Bool = true,
+        completion: @escaping (Result<String, AIServiceError>) -> Void
+    ) {
 
         conversationHistory.append(
             ChatRequestMessage(
@@ -543,62 +571,65 @@ class AIService {
             return
         }
 
-        var request = makeRequest(
-            url: url,
-            apiFormat: apiFormat,
-            model: model,
-            apiKey: apiKey,
-            customHeaders: customHeaders,
-            acceptsEventStream: false
-        )
-        request.httpBody = jsonData
-        let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
-
         Task {
             do {
-                let (data, response) = try await boundedResponseData(for: request)
-                let statusCode = (response as? HTTPURLResponse)?.statusCode
-                let responseText = Self.responseText(from: data, redacting: redactionValues)
+                let decodedText = try await AIProviderFailoverExecutor().execute(
+                    credentialSet: credentialSet,
+                    customHeaders: customHeaders
+                ) { credential in
+                    let url = try self.requestURL(
+                        from: baseURL,
+                        apiFormat: apiFormat,
+                        model: model,
+                        apiKey: credential.secret,
+                        isStreaming: false
+                    )
+                    var request = self.makeRequest(
+                        url: url,
+                        apiFormat: apiFormat,
+                        model: model,
+                        apiKey: credential.secret,
+                        customHeaders: customHeaders,
+                        acceptsEventStream: false
+                    )
+                    request.httpBody = jsonData
 
-                guard let statusCode, (200...299).contains(statusCode) else {
-                    DispatchQueue.main.async {
-                        completion(.failure(.requestFailed(Self.errorMessage(
-                            statusCode: statusCode,
-                            body: responseText,
-                            request: request,
-                            redacting: redactionValues
-                        ))))
+                    let (data, response) = try await self.boundedResponseData(for: request)
+                    guard let statusCode = (response as? HTTPURLResponse)?.statusCode,
+                          (200...299).contains(statusCode) else {
+                        throw AIProviderHTTPFailure(
+                            statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0,
+                            responseBody: Self.rawResponseText(from: data),
+                            apiFormat: apiFormat
+                        )
                     }
-                    return
-                }
 
-                DispatchQueue.main.async {
-                    if let decodedText = Self.decodedResponseText(from: data, apiFormat: apiFormat) {
-                        let text = decodedText.isEmpty
-                            ? AppLocalizations.string("chat.emptyAssistantReply", defaultValue: "No reply")
-                            : decodedText
-                        self.conversationHistory.append(ChatRequestMessage(role: "assistant", text: text))
-                        completion(.success(text))
-                    } else {
-                        completion(.failure(.decodingFailed(AppLocalizations.format(
+                    let responseText = AIProviderFailureSanitizer.summary(
+                        from: Self.rawResponseText(from: data),
+                        credentials: credentialSet.credentials,
+                        customHeaders: customHeaders,
+                        maximumLength: Self.maxErrorBodyCharacters
+                    )
+                    guard let decodedText = Self.decodedResponseText(from: data, apiFormat: apiFormat) else {
+                        throw AIServiceError.decodingFailed(AppLocalizations.format(
                             "aiService.error.decodingFailed",
                             defaultValue: "Parsing failed\n\n%@",
                             arguments: [responseText]
-                        ))))
+                        ))
                     }
+                    return decodedText
                 }
-            } catch BoundedResponseDataError.responseTooLarge {
-                DispatchQueue.main.async {
-                    completion(.failure(.responseTooLarge))
-                }
+                let text = decodedText.isEmpty
+                    ? AppLocalizations.string("chat.emptyAssistantReply", defaultValue: "No reply")
+                    : decodedText
+                self.conversationHistory.append(ChatRequestMessage(role: "assistant", text: text))
+                completion(.success(text))
             } catch {
-                DispatchQueue.main.async {
-                    completion(.failure(.requestFailed(AppLocalizations.format(
-                        "aiService.error.requestFailed",
-                        defaultValue: "Request failed: %@",
-                        arguments: [error.localizedDescription]
-                    ))))
-                }
+                completion(.failure(Self.serviceError(
+                    from: error,
+                    credentialSet: credentialSet,
+                    customHeaders: customHeaders
+                )))
             }
         }
     }
@@ -641,6 +672,44 @@ class AIService {
         }
     }
 
+    func sendMessageAsync(
+        message: String,
+        imageAttachments: [ChatImageAttachment] = [],
+        imageContextDescription: String = "",
+        fileAttachments: [ChatFileAttachment] = [],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        usesImageAttachments: Bool = true
+    ) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            sendMessageResult(
+                message: message,
+                imageAttachments: imageAttachments,
+                imageContextDescription: imageContextDescription,
+                fileAttachments: fileAttachments,
+                baseURL: baseURL,
+                apiFormat: apiFormat,
+                credentialSet: credentialSet,
+                customHeaders: customHeaders,
+                model: model,
+                modelParameters: modelParameters,
+                anthropicMaxTokens: anthropicMaxTokens,
+                reasoningEnabled: reasoningEnabled,
+                reasoningEffort: reasoningEffort,
+                usesImageAttachments: usesImageAttachments
+            ) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
     func sendStreamingMessage(
         message: String,
         imageAttachments: [ChatImageAttachment],
@@ -657,14 +726,66 @@ class AIService {
         reasoningEffort: ReasoningEffort?,
         usesImageAttachments: Bool,
         agentTools: [AgentToolDefinition] = [],
-        toolExecutor: ((AgentToolCallRequest) async -> AgentToolCallResult)? = nil,
-        onToolExchangesUpdated: @escaping ([ChatToolExchange]) -> Void = { _ in },
-        onToolRoundReset: @escaping () -> Void = {},
-        isReasoningDisplayActive: @escaping @MainActor () -> Bool,
-        onReasoningToken: @escaping (String) -> Void,
-        onContentToken: @escaping (String) -> Void,
-        onComplete: @escaping (_ contentText: String, _ usage: ChatUsage?) -> Void,
-        onError: @escaping (String) -> Void
+        toolExecutor: (@MainActor (AgentToolCallRequest) async -> AgentToolCallResult)? = nil,
+        onToolExchangesUpdated: @escaping @MainActor @Sendable ([ChatToolExchange]) -> Void = { _ in },
+        onToolRoundReset: @escaping @MainActor @Sendable () -> Void = {},
+        isReasoningDisplayActive: @escaping @MainActor @Sendable () -> Bool,
+        onReasoningToken: @escaping @MainActor @Sendable (String) -> Void,
+        onContentToken: @escaping @MainActor @Sendable (String) -> Void,
+        onComplete: @escaping @MainActor @Sendable (_ contentText: String, _ usage: ChatUsage?) -> Void,
+        onError: @escaping @MainActor @Sendable (String) -> Void
+    ) {
+        sendStreamingMessage(
+            message: message,
+            imageAttachments: imageAttachments,
+            imageContextDescription: imageContextDescription,
+            fileAttachments: fileAttachments,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            usesImageAttachments: usesImageAttachments,
+            agentTools: agentTools,
+            toolExecutor: toolExecutor,
+            onToolExchangesUpdated: onToolExchangesUpdated,
+            onToolRoundReset: onToolRoundReset,
+            isReasoningDisplayActive: isReasoningDisplayActive,
+            onReasoningToken: onReasoningToken,
+            onContentToken: onContentToken,
+            onComplete: onComplete,
+            onError: onError
+        )
+    }
+
+    func sendStreamingMessage(
+        message: String,
+        imageAttachments: [ChatImageAttachment],
+        imageContextDescription: String,
+        fileAttachments: [ChatFileAttachment],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        usesImageAttachments: Bool,
+        agentTools: [AgentToolDefinition] = [],
+        toolExecutor: (@MainActor (AgentToolCallRequest) async -> AgentToolCallResult)? = nil,
+        onToolExchangesUpdated: @escaping @MainActor @Sendable ([ChatToolExchange]) -> Void = { _ in },
+        onToolRoundReset: @escaping @MainActor @Sendable () -> Void = {},
+        isReasoningDisplayActive: @escaping @MainActor @Sendable () -> Bool,
+        onReasoningToken: @escaping @MainActor @Sendable (String) -> Void,
+        onContentToken: @escaping @MainActor @Sendable (String) -> Void,
+        onComplete: @escaping @MainActor @Sendable (_ contentText: String, _ usage: ChatUsage?) -> Void,
+        onError: @escaping @MainActor @Sendable (String) -> Void
     ) {
         cancelStreaming()
 
@@ -676,7 +797,7 @@ class AIService {
                 fileAttachments: fileAttachments,
                 baseURL: baseURL,
                 apiFormat: apiFormat,
-                apiKey: apiKey,
+                credentialSet: credentialSet,
                 customHeaders: customHeaders,
                 model: model,
                 modelParameters: modelParameters,
@@ -694,23 +815,6 @@ class AIService {
                 onComplete: onComplete,
                 onError: onError
             )
-            return
-        }
-
-        let url: URL
-        do {
-            url = try requestURL(
-                from: baseURL,
-                apiFormat: apiFormat,
-                model: model,
-                apiKey: apiKey,
-                isStreaming: true
-            )
-        } catch let error as AIServiceError {
-            onError(error.localizedDescription)
-            return
-        } catch {
-            onError(AppLocalizations.string("aiService.error.invalidBaseURL", defaultValue: "Invalid Base URL"))
             return
         }
 
@@ -739,16 +843,10 @@ class AIService {
             return
         }
 
-        var request = makeRequest(
-            url: url,
-            apiFormat: apiFormat,
-            model: model,
-            apiKey: apiKey,
-            customHeaders: customHeaders,
-            acceptsEventStream: true
+        let redactionValues = Self.redactionValues(
+            credentialSet: credentialSet,
+            customHeaders: customHeaders
         )
-        request.httpBody = jsonData
-        let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
         let preservesReasoningContext = Self.usesDeepSeekReasoningContext(
             apiFormat: apiFormat,
             baseURL: baseURL,
@@ -756,28 +854,67 @@ class AIService {
         )
 
         streamingTask = Task {
-            guard let streamedResponse = await streamResponse(
-                request: request,
-                apiFormat: apiFormat,
-                redactionValues: redactionValues,
-                isReasoningDisplayActive: isReasoningDisplayActive,
-                onReasoningToken: onReasoningToken,
-                onContentToken: onContentToken,
-                onError: onError
-            ) else {
-                streamingTask = nil
-                return
-            }
+            do {
+                let response = try await AIProviderFailoverExecutor().execute(
+                    credentialSet: credentialSet,
+                    customHeaders: customHeaders
+                ) { credential async throws -> AIStreamedResponse? in
+                    let url = try self.requestURL(
+                        from: baseURL,
+                        apiFormat: apiFormat,
+                        model: model,
+                        apiKey: credential.secret,
+                        isStreaming: true
+                    )
+                    var request = self.makeRequest(
+                        url: url,
+                        apiFormat: apiFormat,
+                        model: model,
+                        apiKey: credential.secret,
+                        customHeaders: customHeaders,
+                        acceptsEventStream: true
+                    )
+                    request.httpBody = jsonData
 
-            conversationHistory.append(ChatRequestMessage(
-                role: "assistant",
-                text: streamedResponse.content,
-                reasoningContent: preservesReasoningContext ? streamedResponse.reasoningContent : "",
-                toolCalls: []
-            ))
+                    switch await self.streamResponseResult(
+                        request: request,
+                        apiFormat: apiFormat,
+                        redactionValues: redactionValues,
+                        isReasoningDisplayActive: isReasoningDisplayActive,
+                        onReasoningToken: onReasoningToken,
+                        onContentToken: onContentToken,
+                        onError: onError
+                    ) {
+                    case .response(let response):
+                        return response
+                    case .httpFailure(let failure):
+                        throw failure
+                    case .failed:
+                        return nil
+                    }
+                }
 
-            await MainActor.run {
-                onComplete(streamedResponse.content, streamedResponse.usage)
+                guard let streamedResponse = response else {
+                    streamingTask = nil
+                    return
+                }
+                conversationHistory.append(ChatRequestMessage(
+                    role: "assistant",
+                    text: streamedResponse.content,
+                    reasoningContent: preservesReasoningContext ? streamedResponse.reasoningContent : "",
+                    toolCalls: []
+                ))
+                await MainActor.run {
+                    onComplete(streamedResponse.content, streamedResponse.usage)
+                }
+            } catch {
+                await MainActor.run {
+                    onError(Self.serviceError(
+                        from: error,
+                        credentialSet: credentialSet,
+                        customHeaders: customHeaders
+                    ).localizedDescription)
+                }
             }
 
             streamingTask = nil
@@ -788,12 +925,46 @@ class AIService {
         request: URLRequest,
         apiFormat: AIAPIFormat,
         redactionValues: [String],
-        isReasoningDisplayActive: @escaping @MainActor () -> Bool,
-        onReasoningToken: @escaping (String) -> Void,
-        onContentToken: @escaping (String) -> Void,
-        onError: @escaping (String) -> Void
+        isReasoningDisplayActive: @escaping @MainActor @Sendable () -> Bool,
+        onReasoningToken: @escaping @MainActor @Sendable (String) -> Void,
+        onContentToken: @escaping @MainActor @Sendable (String) -> Void,
+        onError: @escaping @MainActor @Sendable (String) -> Void
     ) async -> AIStreamedResponse? {
         await AIStreamResponseReader.read(
+            session: session,
+            request: request,
+            apiFormat: apiFormat,
+            redactionValues: redactionValues,
+            maxContentCharacters: Self.maxStreamingContentCharacters,
+            maxReasoningCharacters: Self.maxStreamingReasoningCharacters,
+            isReasoningDisplayActive: isReasoningDisplayActive,
+            onReasoningToken: onReasoningToken,
+            onContentToken: onContentToken,
+            onError: onError,
+            errorMessage: { statusCode, body, request, redactionValues in
+                Self.errorMessage(
+                    statusCode: statusCode,
+                    body: body,
+                    request: request,
+                    redacting: redactionValues
+                )
+            },
+            sanitizedErrorBody: { body, redactionValues in
+                Self.sanitizedErrorBody(body, redacting: redactionValues)
+            }
+        )
+    }
+
+    private nonisolated func streamResponseResult(
+        request: URLRequest,
+        apiFormat: AIAPIFormat,
+        redactionValues: [String],
+        isReasoningDisplayActive: @escaping @MainActor @Sendable () -> Bool,
+        onReasoningToken: @escaping @MainActor @Sendable (String) -> Void,
+        onContentToken: @escaping @MainActor @Sendable (String) -> Void,
+        onError: @escaping @MainActor @Sendable (String) -> Void
+    ) async -> AIStreamResponseReadResult {
+        await AIStreamResponseReader.readResult(
             session: session,
             request: request,
             apiFormat: apiFormat,
@@ -825,7 +996,7 @@ class AIService {
         fileAttachments: [ChatFileAttachment],
         baseURL: String,
         apiFormat: AIAPIFormat,
-        apiKey: String,
+        credentialSet: AIProviderCredentialSet,
         customHeaders: String,
         model: String,
         modelParameters: AIModelConfiguration?,
@@ -834,37 +1005,20 @@ class AIService {
         reasoningEffort: ReasoningEffort?,
         usesImageAttachments: Bool,
         agentTools: [AgentToolDefinition],
-        toolExecutor: @escaping (AgentToolCallRequest) async -> AgentToolCallResult,
-        onToolExchangesUpdated: @escaping ([ChatToolExchange]) -> Void,
-        onToolRoundReset: @escaping () -> Void,
-        isReasoningDisplayActive: @escaping @MainActor () -> Bool,
-        onReasoningToken: @escaping (String) -> Void,
-        onContentToken: @escaping (String) -> Void,
-        onComplete: @escaping (_ contentText: String, _ usage: ChatUsage?) -> Void,
-        onError: @escaping (String) -> Void
+        toolExecutor: @escaping @MainActor (AgentToolCallRequest) async -> AgentToolCallResult,
+        onToolExchangesUpdated: @escaping @MainActor @Sendable ([ChatToolExchange]) -> Void,
+        onToolRoundReset: @escaping @MainActor @Sendable () -> Void,
+        isReasoningDisplayActive: @escaping @MainActor @Sendable () -> Bool,
+        onReasoningToken: @escaping @MainActor @Sendable (String) -> Void,
+        onContentToken: @escaping @MainActor @Sendable (String) -> Void,
+        onComplete: @escaping @MainActor @Sendable (_ contentText: String, _ usage: ChatUsage?) -> Void,
+        onError: @escaping @MainActor @Sendable (String) -> Void
     ) {
         guard apiFormat != .vertexAIExpress else {
             onError(AppLocalizations.string(
                 "aiService.tools.vertexUnsupported",
                 defaultValue: "Vertex Express does not support tool calls yet."
             ))
-            return
-        }
-
-        let streamURL: URL
-        do {
-            streamURL = try requestURL(
-                from: baseURL,
-                apiFormat: apiFormat,
-                model: model,
-                apiKey: apiKey,
-                isStreaming: true
-            )
-        } catch let error as AIServiceError {
-            onError(error.localizedDescription)
-            return
-        } catch {
-            onError(AppLocalizations.string("aiService.error.invalidBaseURL", defaultValue: "Invalid Base URL"))
             return
         }
 
@@ -883,7 +1037,10 @@ class AIService {
             agentTools.map { ($0.functionName, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let redactionValues = Self.redactionValues(apiKey: apiKey, customHeaders: customHeaders)
+        let redactionValues = Self.redactionValues(
+            credentialSet: credentialSet,
+            customHeaders: customHeaders
+        )
         let preservesReasoningContext = Self.usesDeepSeekReasoningContext(
             apiFormat: apiFormat,
             baseURL: baseURL,
@@ -899,6 +1056,47 @@ class AIService {
             func accumulateUsage(_ usage: ChatUsage?) {
                 guard let usage else { return }
                 accumulatedUsage = accumulatedUsage?.adding(usage) ?? usage
+            }
+
+            @MainActor
+            func streamModelRequest(_ requestBody: Data) async throws -> AIStreamedResponse? {
+                try await AIProviderFailoverExecutor().execute(
+                    credentialSet: credentialSet,
+                    customHeaders: customHeaders
+                ) { credential async throws -> AIStreamedResponse? in
+                    let url = try self.requestURL(
+                        from: baseURL,
+                        apiFormat: apiFormat,
+                        model: model,
+                        apiKey: credential.secret,
+                        isStreaming: true
+                    )
+                    var request = self.makeRequest(
+                        url: url,
+                        apiFormat: apiFormat,
+                        model: model,
+                        apiKey: credential.secret,
+                        customHeaders: customHeaders,
+                        acceptsEventStream: true
+                    )
+                    request.httpBody = requestBody
+                    switch await self.streamResponseResult(
+                        request: request,
+                        apiFormat: apiFormat,
+                        redactionValues: redactionValues,
+                        isReasoningDisplayActive: isReasoningDisplayActive,
+                        onReasoningToken: onReasoningToken,
+                        onContentToken: onContentToken,
+                        onError: onError
+                    ) {
+                    case .response(let response):
+                        return response
+                    case .httpFailure(let failure):
+                        throw failure
+                    case .failed:
+                        return nil
+                    }
+                }
             }
 
             @MainActor
@@ -923,29 +1121,26 @@ class AIService {
                     return
                 }
 
-                var finalRequest = makeRequest(
-                    url: streamURL,
-                    apiFormat: apiFormat,
-                    model: model,
-                    apiKey: apiKey,
-                    customHeaders: customHeaders,
-                    acceptsEventStream: true
-                )
-                finalRequest.httpBody = finalJSONData
-
                 await MainActor.run {
                     onToolExchangesUpdated(exchanges)
                 }
 
-                guard let streamedResponse = await streamResponse(
-                    request: finalRequest,
-                    apiFormat: apiFormat,
-                    redactionValues: redactionValues,
-                    isReasoningDisplayActive: isReasoningDisplayActive,
-                    onReasoningToken: onReasoningToken,
-                    onContentToken: onContentToken,
-                    onError: onError
-                ) else {
+                let response: AIStreamedResponse?
+                do {
+                    response = try await streamModelRequest(finalJSONData)
+                } catch {
+                    await MainActor.run {
+                        onError(Self.serviceError(
+                            from: error,
+                            credentialSet: credentialSet,
+                            customHeaders: customHeaders
+                        ).localizedDescription)
+                    }
+                    streamingTask = nil
+                    return
+                }
+
+                guard let streamedResponse = response else {
                     streamingTask = nil
                     return
                 }
@@ -987,28 +1182,25 @@ class AIService {
                     return
                 }
 
-                var request = makeRequest(
-                    url: streamURL,
-                    apiFormat: apiFormat,
-                    model: model,
-                    apiKey: apiKey,
-                    customHeaders: customHeaders,
-                    acceptsEventStream: true
-                )
-                request.httpBody = jsonData
-
                 // Tool rounds stream like plain responses: content and
                 // reasoning reach the UI live while tool-call fragments
                 // accumulate. A round without tool calls IS the final answer.
-                guard let modelResponse = await streamResponse(
-                    request: request,
-                    apiFormat: apiFormat,
-                    redactionValues: redactionValues,
-                    isReasoningDisplayActive: isReasoningDisplayActive,
-                    onReasoningToken: onReasoningToken,
-                    onContentToken: onContentToken,
-                    onError: onError
-                ) else {
+                let response: AIStreamedResponse?
+                do {
+                    response = try await streamModelRequest(jsonData)
+                } catch {
+                    await MainActor.run {
+                        onError(Self.serviceError(
+                            from: error,
+                            credentialSet: credentialSet,
+                            customHeaders: customHeaders
+                        ).localizedDescription)
+                    }
+                    streamingTask = nil
+                    return
+                }
+
+                guard let modelResponse = response else {
                     streamingTask = nil
                     return
                 }
@@ -1309,6 +1501,67 @@ class AIService {
                 defaultValue: "The response body is not UTF-8 text"
             )
         return sanitizedErrorBody(String(text.prefix(maxErrorBodyCharacters)), redacting: sensitiveValues)
+    }
+
+    private nonisolated static func rawResponseText(from data: Data?) -> String {
+        guard let data, !data.isEmpty else {
+            return AppLocalizations.string("aiService.diagnostics.noResponseBody", defaultValue: "No response body")
+        }
+        guard data.count <= maxResponseByteCount else {
+            return AppLocalizations.string(
+                "aiService.diagnostics.responseHiddenTooLarge",
+                defaultValue: "The response body exceeds the safety limit and was hidden."
+            )
+        }
+        return String(data: data, encoding: .utf8)
+            ?? AppLocalizations.string(
+                "aiService.diagnostics.responseNotUTF8",
+                defaultValue: "The response body is not UTF-8 text"
+            )
+    }
+
+    private nonisolated static func redactionValues(
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String
+    ) -> [String] {
+        Array(Set(
+            credentialSet.credentials.map(\.secret)
+                + CustomHeaderSecurity.sensitiveHeaderValues(from: customHeaders)
+        )).filter { !$0.isEmpty }
+    }
+
+    private nonisolated static func serviceError(
+        from error: Error,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String
+    ) -> AIServiceError {
+        if let error = error as? AIServiceError {
+            return error
+        }
+        if error is BoundedResponseDataError {
+            return .responseTooLarge
+        }
+        let redactionValues = redactionValues(
+            credentialSet: credentialSet,
+            customHeaders: customHeaders
+        )
+        if let failure = error as? AIProviderHTTPFailure {
+            let body = AIProviderFailureSanitizer.summary(
+                from: failure.responseBody,
+                credentials: credentialSet.credentials,
+                customHeaders: customHeaders
+            )
+            return .requestFailed(errorMessage(
+                statusCode: failure.statusCode,
+                body: body,
+                redacting: redactionValues
+            ))
+        }
+        return .requestFailed(AppLocalizations.format(
+            "aiService.error.requestFailed",
+            defaultValue: "Request failed: %@",
+            arguments: [sanitizedErrorBody(error.localizedDescription, redacting: redactionValues)]
+        ))
     }
 
     private nonisolated static func errorMessage(

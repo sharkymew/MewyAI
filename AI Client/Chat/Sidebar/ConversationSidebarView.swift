@@ -55,6 +55,7 @@ struct ConversationSidebarView: View {
 
     let conversations: [AIConversation]
     let conversationForSearch: (AIConversation) -> AIConversation
+    let searchConversationIDs: (String) -> Set<UUID>?
     let selectedConversationID: UUID?
     let topSafeAreaInset: CGFloat
     let onSelect: (UUID) -> Void
@@ -156,9 +157,13 @@ struct ConversationSidebarView: View {
         let queryTerms = ConversationSearchFilter.queryTerms(from: searchText)
         let isSearching = !queryTerms.isEmpty
         let sortedConversations = sortedConversations()
+        let matchingIDs = isSearching ? searchConversationIDs(searchText) : nil
         let visibleConversations = isSearching
             ? sortedConversations.filter {
-                ConversationSearchFilter.matches(conversationForSearch($0), queryTerms: queryTerms)
+                if let matchingIDs {
+                    return matchingIDs.contains($0.id)
+                }
+                return ConversationSearchFilter.matches(conversationForSearch($0), queryTerms: queryTerms)
             }
             : sortedConversations
         let pinnedConversations = visibleConversations.filter(\.isPinned)

@@ -76,6 +76,81 @@ protocol ChatSessionAuxiliaryAIServicing: AnyObject {
         reasoningEffort: ReasoningEffort?,
         completion: @escaping (String?) -> Void
     )
+
+    func generateConversationTitle(
+        messages: [ChatMessage],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (String?) -> Void
+    )
+
+    func extractMemoryUpdates(
+        memoryEntries: [ChatMemoryEntry],
+        userText: String,
+        assistantText: String,
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping ([ChatMemoryOperation]?) -> Void
+    )
+
+    func summarizeMemoryHistoryBatch(
+        memoryEntries: [ChatMemoryEntry],
+        batch: ChatMemoryHistoryBatch,
+        batchCount: Int,
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (ChatMemoryHistoryBatchSummary?) -> Void
+    )
+
+    func mergeMemoryHistorySummaries(
+        memoryEntries: [ChatMemoryEntry],
+        batchSummaries: [ChatMemoryHistoryBatchSummary],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (ChatMemoryHistorySummaryResult?) -> Void
+    )
+
+    func generateImageContextDescription(
+        imageAttachments: [ChatImageAttachment],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        completion: @escaping (String?) -> Void
+    )
 }
 
 extension ChatAuxiliaryAIService: ChatSessionAuxiliaryAIServicing {}
@@ -118,9 +193,9 @@ struct PersistentChatMemoryHistorySummaryStore: ChatMemoryHistorySummaryStoring 
 
 nonisolated final class ChatSessionPostProcessor {
     private struct AuxiliaryRequestConfiguration {
+        private let configuration: AIConfiguration
         let baseURL: String
         let apiFormat: AIAPIFormat
-        let apiKey: String
         let customHeaders: String
         let model: String
         let modelParameters: AIModelConfiguration?
@@ -129,13 +204,18 @@ nonisolated final class ChatSessionPostProcessor {
         let reasoningEffort: ReasoningEffort?
 
         @MainActor
+        var credentialSet: AIProviderCredentialSet {
+            configuration.credentialSet()
+        }
+
+        @MainActor
         init?(configuration: AIConfiguration) {
             let model = configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !model.isEmpty else { return nil }
 
+            self.configuration = configuration
             baseURL = configuration.requestURLString.trimmingCharacters(in: .whitespacesAndNewlines)
             apiFormat = configuration.apiFormat
-            apiKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
             customHeaders = configuration.customHeaders.trimmingCharacters(in: .whitespacesAndNewlines)
             self.model = model
             modelParameters = configuration.selectedModelConfiguration
@@ -205,13 +285,43 @@ nonisolated final class ChatSessionPostProcessor {
         reasoningEffort: ReasoningEffort?,
         onDescriptionGenerated: @escaping @MainActor (String) -> Void
     ) -> Bool {
+        return generateImageContextDescriptionIfNeeded(
+            imageAttachments: imageAttachments,
+            baseURL: baseURL,
+            apiFormat: apiFormat,
+            credentialSet: .legacy(apiKey: apiKey),
+            customHeaders: customHeaders,
+            model: model,
+            modelParameters: modelParameters,
+            anthropicMaxTokens: anthropicMaxTokens,
+            reasoningEnabled: reasoningEnabled,
+            reasoningEffort: reasoningEffort,
+            onDescriptionGenerated: onDescriptionGenerated
+        )
+    }
+
+    @discardableResult
+    @MainActor
+    func generateImageContextDescriptionIfNeeded(
+        imageAttachments: [ChatImageAttachment],
+        baseURL: String,
+        apiFormat: AIAPIFormat,
+        credentialSet: AIProviderCredentialSet,
+        customHeaders: String,
+        model: String,
+        modelParameters: AIModelConfiguration?,
+        anthropicMaxTokens: Int,
+        reasoningEnabled: Bool?,
+        reasoningEffort: ReasoningEffort?,
+        onDescriptionGenerated: @escaping @MainActor (String) -> Void
+    ) -> Bool {
         guard !imageAttachments.isEmpty else { return false }
 
         auxiliaryAIService.generateImageContextDescription(
             imageAttachments: imageAttachments,
             baseURL: baseURL,
             apiFormat: apiFormat,
-            apiKey: apiKey,
+            credentialSet: credentialSet,
             customHeaders: customHeaders,
             model: model,
             modelParameters: modelParameters,
@@ -345,7 +455,7 @@ nonisolated final class ChatSessionPostProcessor {
             messages: conversation.messages,
             baseURL: requestConfiguration.baseURL,
             apiFormat: requestConfiguration.apiFormat,
-            apiKey: requestConfiguration.apiKey,
+            credentialSet: requestConfiguration.credentialSet,
             customHeaders: requestConfiguration.customHeaders,
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
@@ -394,7 +504,7 @@ nonisolated final class ChatSessionPostProcessor {
             assistantText: extractionSource.assistantText,
             baseURL: requestConfiguration.baseURL,
             apiFormat: requestConfiguration.apiFormat,
-            apiKey: requestConfiguration.apiKey,
+            credentialSet: requestConfiguration.credentialSet,
             customHeaders: requestConfiguration.customHeaders,
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
@@ -566,7 +676,7 @@ nonisolated final class ChatSessionPostProcessor {
             batchCount: workItem.batches.count,
             baseURL: requestConfiguration.baseURL,
             apiFormat: requestConfiguration.apiFormat,
-            apiKey: requestConfiguration.apiKey,
+            credentialSet: requestConfiguration.credentialSet,
             customHeaders: requestConfiguration.customHeaders,
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
@@ -621,7 +731,7 @@ nonisolated final class ChatSessionPostProcessor {
             batchSummaries: nextSnapshot.allBatchSummaries,
             baseURL: requestConfiguration.baseURL,
             apiFormat: requestConfiguration.apiFormat,
-            apiKey: requestConfiguration.apiKey,
+            credentialSet: requestConfiguration.credentialSet,
             customHeaders: requestConfiguration.customHeaders,
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
@@ -676,7 +786,7 @@ nonisolated final class ChatSessionPostProcessor {
             batchCount: batches.count,
             baseURL: requestConfiguration.baseURL,
             apiFormat: requestConfiguration.apiFormat,
-            apiKey: requestConfiguration.apiKey,
+            credentialSet: requestConfiguration.credentialSet,
             customHeaders: requestConfiguration.customHeaders,
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,
@@ -733,7 +843,7 @@ nonisolated final class ChatSessionPostProcessor {
             batchSummaries: nextSnapshot.allBatchSummaries,
             baseURL: requestConfiguration.baseURL,
             apiFormat: requestConfiguration.apiFormat,
-            apiKey: requestConfiguration.apiKey,
+            credentialSet: requestConfiguration.credentialSet,
             customHeaders: requestConfiguration.customHeaders,
             model: requestConfiguration.model,
             modelParameters: requestConfiguration.modelParameters,

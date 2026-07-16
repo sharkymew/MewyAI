@@ -81,7 +81,10 @@ enum MewyAIIntentRunner {
     }
 
     static func validate(_ configuration: AIConfiguration) throws {
-        guard !configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let hasCustomCredential = !CustomHeaderSecurity.sensitiveHeaderValues(
+            from: configuration.customHeaders
+        ).isEmpty
+        guard configuration.credentialSet().hasAPIKeys || hasCustomCredential else {
             throw Failure.missingAPIKey
         }
         guard !configuration.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -104,7 +107,7 @@ enum MewyAIIntentRunner {
             message: message,
             baseURL: configuration.requestURLString,
             apiFormat: configuration.apiFormat,
-            apiKey: configuration.apiKey,
+            credentialSet: configuration.credentialSet(),
             customHeaders: configuration.customHeaders,
             model: configuration.selectedModel,
             modelParameters: configuration.selectedModelConfiguration,
@@ -173,11 +176,11 @@ enum MewyAIIntentRunner {
 // MARK: - SendMessageIntent
 
 struct SendMessageIntent: AppIntent {
-    static var title: LocalizedStringResource = "Send Message to AI"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Send Message to AI"
+    static let description = IntentDescription(
         "Sends a message to AI using the current (or named) configuration and returns the AI's reply."
     )
-    static var openAppWhenRun: Bool = false
+    static let openAppWhenRun = false
 
     @Parameter(title: "Message")
     var message: String
@@ -207,11 +210,11 @@ struct SendMessageIntent: AppIntent {
 // MARK: - SummarizeTextIntent
 
 struct SummarizeTextIntent: AppIntent {
-    static var title: LocalizedStringResource = "Summarize Text"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Summarize Text"
+    static let description = IntentDescription(
         "Summarizes the provided long text using the current AI configuration."
     )
-    static var openAppWhenRun: Bool = false
+    static let openAppWhenRun = false
 
     @Parameter(title: "Text to Summarize")
     var text: String
@@ -249,11 +252,11 @@ struct SummarizeTextIntent: AppIntent {
 // MARK: - AskAboutClipboardIntent
 
 struct AskAboutClipboardIntent: AppIntent {
-    static var title: LocalizedStringResource = "Ask AI About Clipboard"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Ask AI About Clipboard"
+    static let description = IntentDescription(
         "Asks the AI a question about the current contents of the system clipboard."
     )
-    static var openAppWhenRun: Bool = false
+    static let openAppWhenRun = false
 
     @Parameter(title: "Question")
     var question: String
@@ -299,11 +302,11 @@ struct AskAboutClipboardIntent: AppIntent {
 // MARK: - ContinueConversationIntent
 
 struct ContinueConversationIntent: AppIntent {
-    static var title: LocalizedStringResource = "Continue Conversation"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Continue Conversation"
+    static let description = IntentDescription(
         "Sends a new message in an existing AI conversation and returns the AI's reply."
     )
-    static var openAppWhenRun: Bool = false
+    static let openAppWhenRun = false
 
     @Parameter(title: "Conversation ID")
     var conversationID: String
