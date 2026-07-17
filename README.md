@@ -110,6 +110,11 @@ Apple Developer Team ID. [`Secrets.example.xcconfig`](Secrets.example.xcconfig)
 shows invalid signing placeholders for reference; it is not loaded by the
 project automatically.
 
+Before redistributing a build, replace the deliberately invalid
+`support@example.invalid` address in
+`AI Client/App/Onboarding/OnboardingConsentView.swift` with a monitored public
+support address.
+
 ## Add your API key
 
 No provider key is required at build time:

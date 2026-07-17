@@ -63,6 +63,10 @@ keys or generated content you no longer want stored. Removing the app normally
 removes its container files, but Keychain item lifecycle is controlled by iOS;
 delete provider configurations/keys explicitly when that distinction matters.
 
+The public source uses `support@example.invalid` as a deliberately invalid
+contact placeholder. Distributors must replace it with a monitored public
+support address before shipping a build.
+
 Deleting local data does not delete content already sent to a provider. Use the
 provider's account tools and retention controls for remote copies.
 
