@@ -1,4 +1,42 @@
-*.xcuserstate
+# macOS
 .DS_Store
+
+# Xcode user and build state
 DerivedData/
+build/
+.build/
 xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+*.ipa
+
+# Swift Package Manager local state
+.swiftpm/
+
+# Local signing and credentials
+.env
+.env.*
+!.env.example
+Secrets.xcconfig
+LocalSigning.xcconfig
+Config.plist
+*.mobileprovision
+*.p12
+*.p8
+*.cer
+*.key
+
+# Local databases, logs, and traces
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.trace
+
+# Local agent/editor state
+.claude/
+.codex/
