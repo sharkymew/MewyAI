@@ -1,0 +1,147 @@
+name: Unsigned iOS Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "AI Client/**"
+      - "MewyAITests/**"
+      - "AI Client.xcodeproj/**"
+      - ".github/workflows/unsigned-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    env:
+      DERIVED_DATA: ${{ runner.temp }}/MewyAIDerivedData
+      SOURCE_PACKAGES: ${{ runner.temp }}/MewyAISourcePackages
+      DIST_DIR: ${{ runner.temp }}/MewyAIDistribution
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build unsigned app
+        run: |
+          set -euo pipefail
+
+          xcodebuild \
+            -project 'AI Client.xcodeproj' \
+            -scheme 'AI Client' \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package unsigned IPA
+        id: package
+        run: |
+          set -euo pipefail
+
+          products_dir="$DERIVED_DATA/Build/Products/Release-iphoneos"
+          app_path="$(find "$products_dir" -maxdepth 1 -type d -name '*.app' -print -quit)"
+
+          if [[ -z "$app_path" ]]; then
+            echo "::error::No .app bundle was found in $products_dir"
+            exit 1
+          fi
+
+          info_plist="$app_path/Info.plist"
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")"
+          build_number="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist")"
+
+          safe_value_pattern='^[0-9A-Za-z]+([._-][0-9A-Za-z]+)*$'
+          if [[ ! "$version" =~ $safe_value_pattern ]]; then
+            echo "::error::Unsupported MARKETING_VERSION: $version"
+            exit 1
+          fi
+          if [[ ! "$build_number" =~ $safe_value_pattern ]]; then
+            echo "::error::Unsupported CURRENT_PROJECT_VERSION: $build_number"
+            exit 1
+          fi
+
+          if codesign --verify "$app_path" >/dev/null 2>&1; then
+            echo "::error::The app is signed, but this workflow must publish an unsigned IPA"
+            exit 1
+          fi
+
+          tag="v${version}-build.${build_number}"
+          release_title="MewyAI ${version} (${build_number})"
+          ipa_name="MewyAI-${version}-build.${build_number}-unsigned.ipa"
+          ipa_path="$DIST_DIR/$ipa_name"
+
+          mkdir -p "$DIST_DIR/Payload"
+          ditto "$app_path" "$DIST_DIR/Payload/$(basename "$app_path")"
+          (
+            cd "$DIST_DIR"
+            ditto -c -k --keepParent Payload "$ipa_name"
+          )
+
+          unzip -t "$ipa_path"
+
+          {
+            echo "version=$version"
+            echo "build_number=$build_number"
+            echo "tag=$tag"
+            echo "release_title=$release_title"
+            echo "ipa_path=$ipa_path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Ensure version and build are unique
+        env:
+          TAG: ${{ steps.package.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if ! matching_tag="$(git ls-remote --tags origin "refs/tags/$TAG")"; then
+            echo "::error::Could not check existing release tags"
+            exit 1
+          fi
+
+          if [[ -n "$matching_tag" ]]; then
+            echo "::error::Release tag $TAG already exists. Increase CURRENT_PROJECT_VERSION before publishing another build of this version."
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.package.outputs.version }}
+          BUILD_NUMBER: ${{ steps.package.outputs.build_number }}
+          TAG: ${{ steps.package.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.package.outputs.release_title }}
+          IPA_PATH: ${{ steps.package.outputs.ipa_path }}
+        run: |
+          set -euo pipefail
+
+          release_notes="$(printf '%s\n' \
+            '## 构建信息' \
+            '' \
+            "- 版本号：$VERSION" \
+            "- 构建号：$BUILD_NUMBER" \
+            "- Commit：[$GITHUB_SHA](https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)" \
+            '' \
+            '> [!IMPORTANT]' \
+            '> 此 IPA 未签名，不能直接安装到普通 iOS 设备；请先使用自己的证书重新签名。' \
+            '')"
+
+          gh release create "$TAG" "$IPA_PATH" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes "$release_notes" \
+            --generate-notes \
+            --latest
