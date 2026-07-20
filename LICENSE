@@ -1,30 +1,113 @@
 Copyright (c) 2026 SharkyMew
 
-All rights not expressly granted under this license are reserved.
+All rights not expressly granted under this License are reserved.
 
-Permission is granted to obtain and view the source code and to run an
-unmodified local copy of the Software solely for non-commercial personal
-evaluation or individual educational study.
+1. Definitions
 
-Temporary configuration changes strictly necessary to build or run the
-Software locally, including the insertion of personal credentials or API keys,
-are permitted, provided that such changes are not distributed and the Software
-is not used for production, commercial, hosted, or public-facing purposes.
+“Software” means the source code, documentation, assets, configuration files,
+and other materials contained in this repository for which the copyright
+holder has authority to grant rights. Third-party materials are excluded from
+this definition and remain subject to their respective licenses.
+
+2. Limited License
+
+Subject to the terms of this License, permission is granted to a natural person,
+acting solely in an individual capacity, to:
+
+(a) obtain and view the source code;
+
+(b) make copies strictly necessary to obtain, build, and run the Software
+locally; and
+
+(c) build and run a local copy of the Software solely for non-commercial
+personal evaluation, individual educational study, or individual security
+review.
+
+This permission does not extend to use on behalf of, or for the benefit of, any
+company, organization, institution, government body, or other legal entity.
+
+3. Permitted Configuration
+
+Limited configuration changes strictly necessary to build or run the Software
+locally are permitted, including the insertion of personal credentials or API
+keys, selection of a local development team, modification of signing settings,
+or adjustment of local endpoint configuration.
+
+Such configuration changes will not be considered modifications for purposes
+of this License, provided that:
+
+(a) the changes and resulting builds are not distributed, published, shared,
+or made available to any other person;
+
+(b) the Software is not used for production, commercial, organizational,
+hosted, server-side, or public-facing purposes; and
+
+(c) credentials, API keys, secrets, or other sensitive information are not
+committed to or published in the repository.
+
+4. Restrictions
 
 Except for the limited rights expressly granted above, no permission is granted
-to modify, reproduce, distribute, sublicense, sell, publish, host, deploy,
-publicly perform, publicly display, create derivative works from, or otherwise
-use the Software or any substantial portion of it without prior written
-permission from the copyright holder, except to the extent that such
-restrictions are prohibited by applicable law.
+to:
 
-Third-party components included with or referenced by this project remain
-subject to their respective licenses. See THIRD_PARTY_NOTICES.md.
+(a) modify, adapt, translate, or create derivative works from the Software;
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+(b) reproduce the Software except as strictly necessary to exercise the rights
+granted under Section 2;
+
+(c) distribute, redistribute, sublicense, sell, rent, lease, transfer, publish,
+mirror, or otherwise make the Software or any substantial portion of it
+available to another person;
+
+(d) host, deploy, operate, or provide the Software as a service;
+
+(e) use the Software for any commercial, professional, production,
+organizational, institutional, or public-facing purpose; or
+
+(f) remove, obscure, or alter any copyright, license, attribution, or
+proprietary notice.
+
+Any use not expressly permitted by this License requires prior written
+permission from the copyright holder, except to the extent that a restriction
+is prohibited by applicable law.
+
+5. Source-Code Hosting Platforms
+
+If the Software is made publicly available through a source-code hosting
+platform, rights provided solely by that platform’s terms, including any
+platform-provided right to view or fork a public repository, remain governed by
+the platform’s terms.
+
+Such platform-provided rights do not grant permission to modify, use,
+distribute, publish outside the platform, deploy, host, sublicense, sell, or
+otherwise exploit the Software beyond the limited rights expressly granted by
+this License.
+
+6. Third-Party Materials
+
+Third-party components included with, incorporated into, or referenced by the
+Software remain subject exclusively to their respective licenses and notices.
+This License applies only to material for which the copyright holder has
+authority to grant rights.
+
+See THIRD_PARTY_NOTICES.md for additional information.
+
+7. Termination
+
+The rights granted under this License terminate automatically and immediately
+upon any violation of its terms. Upon termination, the recipient must cease all
+use of the Software and delete all copies in the recipient’s possession or
+control, except where retention is required by applicable law.
+
+8. Disclaimer of Warranty
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NONINFRINGEMENT. TO THE MAXIMUM
-EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
-LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
-CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OF OR OTHER DEALINGS IN THE SOFTWARE.
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NONINFRINGEMENT.
+
+9. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OF OR OTHER DEALINGS IN THE SOFTWARE.
