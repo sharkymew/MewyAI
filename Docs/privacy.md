@@ -64,8 +64,9 @@ removes its container files, but Keychain item lifecycle is controlled by iOS;
 delete provider configurations/keys explicitly when that distinction matters.
 
 The public source uses `support@example.invalid` as a deliberately invalid
-contact placeholder. Distributors must replace it with a monitored public
-support address before shipping a build.
+contact placeholder. It is intended only for local builds and personal
+evaluation within the scope of `LICENSE`; the license does not grant permission
+to redistribute compiled builds.
 
 Deleting local data does not delete content already sent to a provider. Use the
 provider's account tools and retention controls for remote copies.

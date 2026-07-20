@@ -1,31 +1,34 @@
-# Contributing
+# Issue reporting
 
-MewyAI is a source-available, all-rights-reserved maintenance project. Public
-access grants only the limited evaluation permission stated in `LICENSE`; it
-does not grant permission to redistribute or create derivative works.
+MewyAI is a source-available proprietary maintenance project, not open-source
+software. Public access grants only the limited evaluation permission stated in
+`LICENSE`; it does not grant permission to redistribute, make other
+modifications, or create derivative works.
 
-## Issues
+## Issues and suggestions
 
-Concise, reproducible bug reports and documentation corrections are welcome.
+Concise, reproducible bug reports, documentation corrections, and feature
+suggestions are welcome as issues.
 Before opening an issue:
 
 1. Check the latest `main` branch and existing issues.
-2. Remove API keys, custom headers, personal conversations, local paths, and
-   signing information.
+2. Remove API keys, custom headers, personal conversations, local paths,
+   signing information, personal data, device identifiers, and other sensitive
+   information.
 3. Include the affected commit, environment, reproduction steps, and expected
    behavior.
 
 Use the private process in `SECURITY.md` for vulnerabilities.
 
-## Code contributions
+## External code changes
 
-Pull requests are not accepted by default. Discuss a proposed code contribution
-with the maintainer before doing substantial work. Any permission to contribute
-or incorporate code must be agreed separately in writing; the repository's
-public visibility is not such permission.
+External pull requests containing code changes are not accepted unless the
+copyright holder gives prior written permission. Submitting an issue,
+suggestion, or vulnerability report does not grant permission to modify,
+distribute, fork, or create derivative works from the project.
 
-If a contribution is requested, keep it focused, preserve authorship, add
-relevant tests, and verify at minimum:
+If a code contribution is separately authorized in writing, keep it focused,
+preserve authorship, add relevant tests, and verify at minimum:
 
 ```sh
 git diff --check

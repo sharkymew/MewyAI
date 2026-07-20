@@ -1,8 +1,9 @@
 # Third-party notices
 
-MewyAI is all rights reserved, but it includes or depends on components under
-their own licenses. Those licenses apply only to the respective third-party
-components and are not replaced by the MewyAI license.
+MewyAI is distributed under a source-available proprietary license and is not
+open-source software. It includes or depends on components under their own
+licenses. Those licenses apply only to the respective third-party components
+and are not replaced by the MewyAI license.
 
 Versions below are taken from the pinned Swift Package Manager resolution in
 the public repository.
