@@ -5,6 +5,8 @@
 
   <p>A native BYOK AI client for iPhone and iPad.</p>
 
+  <p><a href="README.zh-CN.md">简体中文</a></p>
+
   <p>
     <img src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white" alt="Swift 6.0">
     <img src="https://img.shields.io/badge/iOS-17.0%2B-000000?logo=apple&logoColor=white" alt="iOS 17.0 or later">
