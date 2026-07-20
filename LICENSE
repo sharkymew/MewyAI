@@ -1,18 +1,30 @@
 Copyright (c) 2026 SharkyMew
 
-All rights reserved.
+All rights not expressly granted under this license are reserved.
 
-Permission is granted only to obtain, view, and run an unmodified local copy for
-personal or educational evaluation. No permission is granted to modify,
-distribute, sublicense, sell, or otherwise use the software or substantial
-portions of it without prior written permission from the copyright holder,
-except where such permission is required by applicable law.
+Permission is granted to obtain and view the source code and to run an
+unmodified local copy of the Software solely for non-commercial personal
+evaluation or individual educational study.
+
+Temporary configuration changes strictly necessary to build or run the
+Software locally, including the insertion of personal credentials or API keys,
+are permitted, provided that such changes are not distributed and the Software
+is not used for production, commercial, hosted, or public-facing purposes.
+
+Except for the limited rights expressly granted above, no permission is granted
+to modify, reproduce, distribute, sublicense, sell, publish, host, deploy,
+publicly perform, publicly display, create derivative works from, or otherwise
+use the Software or any substantial portion of it without prior written
+permission from the copyright holder, except to the extent that such
+restrictions are prohibited by applicable law.
 
 Third-party components included with or referenced by this project remain
 subject to their respective licenses. See THIRD_PARTY_NOTICES.md.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING
-FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OF THE SOFTWARE.
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NONINFRINGEMENT. TO THE MAXIMUM
+EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OF OR OTHER DEALINGS IN THE SOFTWARE.
