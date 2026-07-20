@@ -20,11 +20,6 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
 
-    env:
-      DERIVED_DATA: ${{ runner.temp }}/MewyAIDerivedData
-      SOURCE_PACKAGES: ${{ runner.temp }}/MewyAISourcePackages
-      DIST_DIR: ${{ runner.temp }}/MewyAIDistribution
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,13 +31,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          derived_data="$RUNNER_TEMP/MewyAIDerivedData"
+          source_packages="$RUNNER_TEMP/MewyAISourcePackages"
+
           xcodebuild \
             -project 'AI Client.xcodeproj' \
             -scheme 'AI Client' \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath "$DERIVED_DATA" \
-            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            -derivedDataPath "$derived_data" \
+            -clonedSourcePackagesDirPath "$source_packages" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
@@ -52,7 +50,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          products_dir="$DERIVED_DATA/Build/Products/Release-iphoneos"
+          derived_data="$RUNNER_TEMP/MewyAIDerivedData"
+          dist_dir="$RUNNER_TEMP/MewyAIDistribution"
+          products_dir="$derived_data/Build/Products/Release-iphoneos"
           app_path="$(find "$products_dir" -maxdepth 1 -type d -name '*.app' -print -quit)"
 
           if [[ -z "$app_path" ]]; then
@@ -82,12 +82,12 @@ jobs:
           tag="v${version}-build.${build_number}"
           release_title="MewyAI ${version} (${build_number})"
           ipa_name="MewyAI-${version}-build.${build_number}-unsigned.ipa"
-          ipa_path="$DIST_DIR/$ipa_name"
+          ipa_path="$dist_dir/$ipa_name"
 
-          mkdir -p "$DIST_DIR/Payload"
-          ditto "$app_path" "$DIST_DIR/Payload/$(basename "$app_path")"
+          mkdir -p "$dist_dir/Payload"
+          ditto "$app_path" "$dist_dir/Payload/$(basename "$app_path")"
           (
-            cd "$DIST_DIR"
+            cd "$dist_dir"
             ditto -c -k --keepParent Payload "$ipa_name"
           )
 
