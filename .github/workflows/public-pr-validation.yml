@@ -1,0 +1,48 @@
+name: Public Pull Request Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build unsigned app
+        run: |
+          set -euo pipefail
+
+          derived_data="$RUNNER_TEMP/MewyAIPRDerivedData"
+          source_packages="$RUNNER_TEMP/MewyAIPRSourcePackages"
+
+          xcodebuild \
+            -project 'AI Client.xcodeproj' \
+            -scheme 'AI Client' \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$derived_data" \
+            -clonedSourcePackagesDirPath "$source_packages" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
